@@ -1,0 +1,6 @@
+{
+  "name": "KapsApp",
+  "description": "Yerel ağ üzerinde çalışan anlık sohbet uygulaması",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
