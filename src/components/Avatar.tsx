@@ -22,8 +22,8 @@ export default function Avatar({ url, name, color, size = 10, className = "" }: 
 
   let initials = "?";
   if (name) {
-    const parts = name.trim().split(" ");
-    if (parts.length > 1) {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length > 1 && parts[0].length > 0 && parts[1].length > 0) {
       initials = (parts[0][0] + parts[1][0]).toUpperCase();
     } else {
       initials = name.substring(0, 2).toUpperCase();

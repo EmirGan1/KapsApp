@@ -8,6 +8,10 @@ import multer from "multer";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
+import { createClient } from "@libsql/client";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Ensure uploads dir
 if (!fs.existsSync("uploads")) {
@@ -23,38 +27,101 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// JSON Database Logic
-const DB_FILE = "lan-social.json";
-const defaultDb = {
-  users: [] as any[],
-  friends: [] as any[],
-  posts: [] as any[],
-  likes: [] as any[],
-  comments: [] as any[],
-  stories: [] as any[],
-  messages: [] as any[],
-  global_messages: [] as any[],
-  groups: [] as any[],
-  group_messages: [] as any[],
-  notifications: [] as any[]
-};
-let db = defaultDb;
-if (fs.existsSync(DB_FILE)) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-    db = { ...defaultDb, ...parsed };
-    if (!db.notifications) db.notifications = [];
-  } catch (e) {
-    db = defaultDb;
-  }
+const client = createClient({
+  url: process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "file:local.db",
+  authToken: process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN,
+});
+
+async function initDb() {
+  await client.execute(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password TEXT,
+    avatar TEXT,
+    color TEXT,
+    token TEXT,
+    last_seen TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS friends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user1 INTEGER,
+    user2 INTEGER,
+    status INTEGER
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    image TEXT,
+    caption TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS likes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER,
+    user_id INTEGER
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER,
+    user_id INTEGER,
+    content TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS stories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    image TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender INTEGER,
+    receiver INTEGER,
+    type TEXT,
+    content TEXT,
+    reply_to INTEGER,
+    reactions TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS global_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender INTEGER,
+    type TEXT,
+    content TEXT,
+    reply_to INTEGER,
+    reactions TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    creator INTEGER,
+    members TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS group_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER,
+    sender INTEGER,
+    type TEXT,
+    content TEXT,
+    reply_to INTEGER,
+    reactions TEXT,
+    created_at TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    type TEXT,
+    content TEXT,
+    read INTEGER DEFAULT 0,
+    created_at TEXT
+  )`);
 }
-const saveDb = () => fs.writeFileSync(DB_FILE, JSON.stringify(db));
-const getNextId = (table: string) => {
-  const arr = db[table as keyof typeof db] || [];
-  return arr.length ? Math.max(...arr.map((x: any) => x.id || 0)) + 1 : 1;
-};
 
 async function startServer() {
+  await initDb();
+  
   const app = express();
   const PORT = 3000;
   
@@ -69,59 +136,92 @@ async function startServer() {
 
   // REST API Routes
   app.post("/api/register", async (req, res) => {
-    const { username, password } = req.body;
-    if (db.users.find(u => u.username === username)) {
-      return res.status(400).json({ error: "Kullanıcı adı alınmış olabilir." });
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ error: "Eksik bilgi." });
+      }
+      
+      const existing = await client.execute({
+        sql: "SELECT id FROM users WHERE username = ?",
+        args: [username]
+      });
+      if (existing.rows.length > 0) {
+        return res.status(400).json({ error: "Kullanıcı adı alınmış olabilir." });
+      }
+      
+      const hash = await bcrypt.hash(password, 10);
+      const token = crypto.randomUUID();
+      
+      let initials = "?";
+      const parts = username.trim().split(/\s+/);
+      if (parts.length > 1 && parts[0].length > 0 && parts[1].length > 0) {
+        initials = (parts[0][0] + parts[1][0]).toUpperCase();
+      } else {
+        initials = username.substring(0, 2).toUpperCase();
+      }
+
+      const allUsers = await client.execute("SELECT username, color FROM users");
+      const usedColors = new Set(
+        allUsers.rows.filter(u => {
+          let uInit = "?";
+          if (u.username) {
+            const p = (u.username as string).trim().split(/\s+/);
+            if (p.length > 1 && p[0].length > 0 && p[1].length > 0) uInit = (p[0][0] + p[1][0]).toUpperCase();
+            else uInit = (u.username as string).substring(0, 2).toUpperCase();
+          }
+          return uInit === initials;
+        }).map(u => u.color)
+      );
+
+      const colors = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-yellow-500", "bg-purple-500", "bg-pink-500", "bg-indigo-500", "bg-teal-500"];
+      const availableColors = colors.filter(c => !usedColors.has(c));
+      const randomColor = availableColors.length > 0 
+        ? availableColors[Math.floor(Math.random() * availableColors.length)]
+        : colors[Math.floor(Math.random() * colors.length)]; // Fallback if all colors used
+
+      const lastSeen = new Date().toISOString();
+      const insertResult = await client.execute({
+        sql: "INSERT INTO users (username, password, color, token, last_seen) VALUES (?, ?, ?, ?, ?)",
+        args: [username, hash, randomColor, token, lastSeen]
+      });
+      
+      res.json({ token, username, id: Number(insertResult.lastInsertRowid), color: randomColor });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
-    const hash = await bcrypt.hash(password, 10);
-    const token = crypto.randomUUID();
-    
-    // Get initials for the new user
-    let initials = "?";
-    const parts = username.trim().split(" ");
-    if (parts.length > 1) {
-      initials = (parts[0][0] + parts[1][0]).toUpperCase();
-    } else {
-      initials = username.substring(0, 2).toUpperCase();
-    }
-
-    // Find used colors by users with the same initials
-    const usedColors = new Set(
-      db.users.filter(u => {
-        let uInit = "?";
-        const p = u.username.trim().split(" ");
-        if (p.length > 1) uInit = (p[0][0] + p[1][0]).toUpperCase();
-        else uInit = u.username.substring(0, 2).toUpperCase();
-        return uInit === initials;
-      }).map(u => u.color)
-    );
-
-    const colors = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-yellow-500", "bg-purple-500", "bg-pink-500", "bg-indigo-500", "bg-teal-500"];
-    const availableColors = colors.filter(c => !usedColors.has(c));
-    const randomColor = availableColors.length > 0 
-      ? availableColors[Math.floor(Math.random() * availableColors.length)]
-      : colors[Math.floor(Math.random() * colors.length)]; // Fallback if all colors used
-
-    const newUser = { id: getNextId("users"), username, password: hash, avatar: null, color: randomColor, token, last_seen: new Date().toISOString() };
-    db.users.push(newUser);
-    saveDb();
-    res.json({ token, username, id: newUser.id, color: randomColor });
   });
 
   app.post("/api/login", async (req, res) => {
-    const { username, password } = req.body;
-    const user = db.users.find(u => u.username === username);
-    if (user && await bcrypt.compare(password, user.password)) {
-      const token = crypto.randomUUID();
-      user.token = token;
-      if (!user.color) {
-        const colors = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-yellow-500", "bg-purple-500", "bg-pink-500", "bg-indigo-500", "bg-teal-500"];
-        user.color = colors[Math.floor(Math.random() * colors.length)];
+    try {
+      const { username, password } = req.body;
+      const userRes = await client.execute({
+        sql: "SELECT * FROM users WHERE username = ?",
+        args: [username]
+      });
+      
+      if (userRes.rows.length > 0) {
+        const user = userRes.rows[0];
+        if (await bcrypt.compare(password, user.password as string)) {
+          const token = crypto.randomUUID();
+          let color = user.color;
+          if (!color) {
+            const colors = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-yellow-500", "bg-purple-500", "bg-pink-500", "bg-indigo-500", "bg-teal-500"];
+            color = colors[Math.floor(Math.random() * colors.length)];
+          }
+          await client.execute({
+            sql: "UPDATE users SET token = ?, color = ? WHERE id = ?",
+            args: [token, color, user.id]
+          });
+          res.json({ token, username: user.username, avatar: user.avatar, id: user.id, color });
+        } else {
+          res.status(401).json({ error: "Geçersiz giriş." });
+        }
+      } else {
+        res.status(401).json({ error: "Geçersiz giriş." });
       }
-      saveDb();
-      res.json({ token, username, avatar: user.avatar, id: user.id, color: user.color });
-    } else {
-      res.status(401).json({ error: "Geçersiz giriş." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 
@@ -138,22 +238,33 @@ async function startServer() {
   io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) return next(new Error("No token"));
-    const user = db.users.find(u => u.token === token);
-    if (!user) return next(new Error("Invalid token"));
-    socket.data.user = user;
-    next();
+    
+    try {
+      const userRes = await client.execute({
+        sql: "SELECT * FROM users WHERE token = ?",
+        args: [token]
+      });
+      if (userRes.rows.length === 0) return next(new Error("Invalid token"));
+      socket.data.user = userRes.rows[0];
+      next();
+    } catch(e) {
+      next(new Error("DB error"));
+    }
   });
 
   io.on("connection", (socket) => {
     const user = socket.data.user;
-    onlineUsers.set(user.id, socket.id);
-    socket.emit("your_id", user.id);
+    onlineUsers.set(Number(user.id), socket.id);
+    socket.emit("your_id", Number(user.id));
     io.emit("online_users", Array.from(onlineUsers.keys()));
 
-    const getUser = (id: number) => db.users.find(u => u.id === id);
+    const getUser = async (id: number) => {
+      const res = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [id] });
+      return res.rows.length > 0 ? res.rows[0] : null;
+    };
 
     socket.on("mark_global_read", (messageId) => {
-      globalRead.set(user.id, messageId);
+      globalRead.set(Number(user.id), messageId);
       io.emit("global_read_update", Array.from(globalRead.entries()));
     });
     
@@ -163,7 +274,7 @@ async function startServer() {
 
     socket.on("mark_chat_read", (chatId, messageId) => {
       if(!chatRead.has(chatId)) chatRead.set(chatId, new Map());
-      chatRead.get(chatId)!.set(user.id, messageId);
+      chatRead.get(chatId)!.set(Number(user.id), messageId);
       io.emit("chat_read_update", chatId, Array.from(chatRead.get(chatId)!.entries()));
     });
 
@@ -173,7 +284,7 @@ async function startServer() {
     });
 
     socket.on("get_user_profile", async (targetId, cb) => {
-      const u = getUser(targetId);
+      const u = await getUser(targetId);
       if (u) {
         cb({ id: u.id, username: u.username, avatar: u.avatar, color: u.color });
       } else {
@@ -182,104 +293,163 @@ async function startServer() {
     });
 
     socket.on("get_user_posts", async (targetId, cb) => {
-      const posts = db.posts.filter(p => p.user_id === targetId).map(p => {
-        const pUser = getUser(p.user_id);
-        const likes_count = db.likes.filter(l => l.post_id === p.id).length;
-        const is_liked = db.likes.some(l => l.post_id === p.id && l.user_id === user.id);
-        return { ...p, username: pUser?.username, avatar: pUser?.avatar, color: pUser?.color, likes_count, is_liked };
-      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      cb(posts);
+      try {
+        const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC", args: [targetId] });
+        const likesRes = await client.execute("SELECT * FROM likes");
+        const commentsRes = await client.execute("SELECT * FROM comments");
+        
+        const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
+          const pUser = await getUser(p.user_id as number);
+          const postLikes = likesRes.rows.filter(l => l.post_id === p.id);
+          const postComments = await Promise.all(commentsRes.rows.filter(c => c.post_id === p.id).map(async (c: any) => {
+            const cu = await getUser(c.user_id as number);
+            return { ...c, username: cu?.username, user_avatar: cu?.avatar, user_color: cu?.color };
+          }));
+          const is_liked = postLikes.some(l => l.user_id === user.id);
+          return { 
+            ...p, 
+            username: pUser?.username, 
+            user_avatar: pUser?.avatar, 
+            user_color: pUser?.color, 
+            avatar: pUser?.avatar, 
+            color: pUser?.color, 
+            likes_count: postLikes.length, 
+            is_liked, 
+            likes: postLikes, 
+            comments: postComments 
+          };
+        }));
+        cb(populated);
+      } catch(e) {
+        console.error(e);
+        cb([]);
+      }
     });
 
     // Feeds
     socket.on("get_feed", async (cb) => {
-      const posts = db.posts.map(p => {
-        const pUser = getUser(p.user_id);
-        const likes_count = db.likes.filter(l => l.post_id === p.id).length;
-        const is_liked = db.likes.some(l => l.post_id === p.id && l.user_id === user.id);
-        return { ...p, username: pUser?.username, avatar: pUser?.avatar, color: pUser?.color, likes_count, is_liked };
-      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      cb(posts);
+      try {
+        const postsRes = await client.execute("SELECT * FROM posts ORDER BY created_at DESC");
+        const likesRes = await client.execute("SELECT * FROM likes");
+        const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
+          const pUser = await getUser(p.user_id as number);
+          const postLikes = likesRes.rows.filter(l => l.post_id === p.id);
+          const is_liked = postLikes.some(l => l.user_id === user.id);
+          return { ...p, username: pUser?.username, avatar: pUser?.avatar, color: pUser?.color, likes_count: postLikes.length, is_liked };
+        }));
+        cb(populated);
+      } catch(e) {
+        cb([]);
+      }
     });
 
     socket.on("create_post", async (data, cb) => {
-      db.posts.push({ id: getNextId("posts"), user_id: user.id, image: data.image, caption: data.caption, created_at: new Date().toISOString() });
-      saveDb();
+      await client.execute({
+        sql: "INSERT INTO posts (user_id, image, caption, created_at) VALUES (?, ?, ?, ?)",
+        args: [user.id, data.image, data.caption, new Date().toISOString()]
+      });
       io.emit("feed_updated");
       if(cb) cb();
     });
 
     socket.on("like_post", async (postId) => {
-      const idx = db.likes.findIndex(l => l.post_id === postId && l.user_id === user.id);
-      if (idx !== -1) db.likes.splice(idx, 1);
-      else db.likes.push({ post_id: postId, user_id: user.id });
-      saveDb();
+      const existing = await client.execute({
+        sql: "SELECT id FROM likes WHERE post_id = ? AND user_id = ?",
+        args: [postId, user.id]
+      });
+      if (existing.rows.length > 0) {
+        await client.execute({
+          sql: "DELETE FROM likes WHERE id = ?",
+          args: [existing.rows[0].id]
+        });
+      } else {
+        await client.execute({
+          sql: "INSERT INTO likes (post_id, user_id) VALUES (?, ?)",
+          args: [postId, user.id]
+        });
+      }
       io.emit("feed_updated");
     });
 
     socket.on("get_comments", async (postId, cb) => {
-      const comments = db.comments.filter(c => c.post_id === postId).map(c => {
-        const cUser = getUser(c.user_id);
+      const commentsRes = await client.execute({
+        sql: "SELECT * FROM comments WHERE post_id = ? ORDER BY created_at ASC",
+        args: [postId]
+      });
+      const populated = await Promise.all(commentsRes.rows.map(async (c: any) => {
+        const cUser = await getUser(c.user_id as number);
         return { ...c, username: cUser?.username, avatar: cUser?.avatar, color: cUser?.color };
-      }).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      cb(comments);
+      }));
+      cb(populated);
     });
 
     socket.on("add_comment", async (data) => {
-      db.comments.push({ id: getNextId("comments"), post_id: data.postId, user_id: user.id, content: data.content, created_at: new Date().toISOString() });
-      saveDb();
+      await client.execute({
+        sql: "INSERT INTO comments (post_id, user_id, content, created_at) VALUES (?, ?, ?, ?)",
+        args: [data.postId, user.id, data.content, new Date().toISOString()]
+      });
       io.emit("feed_updated");
       io.emit("comments_updated", data.postId);
     });
 
     // Stories (last 24 hours)
     socket.on("get_stories", async (cb) => {
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const stories = db.stories.filter(s => new Date(s.created_at) >= oneDayAgo).map(s => {
-        const sUser = getUser(s.user_id);
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const storiesRes = await client.execute({
+        sql: "SELECT * FROM stories WHERE created_at >= ? ORDER BY created_at DESC",
+        args: [oneDayAgo]
+      });
+      const populated = await Promise.all(storiesRes.rows.map(async (s: any) => {
+        const sUser = await getUser(s.user_id as number);
         return { ...s, username: sUser?.username, avatar: sUser?.avatar, color: sUser?.color };
-      }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      cb(stories);
+      }));
+      cb(populated);
     });
     
     socket.on("create_story", async (image, cb) => {
-      db.stories.push({ id: getNextId("stories"), user_id: user.id, image, created_at: new Date().toISOString() });
-      saveDb();
+      await client.execute({
+        sql: "INSERT INTO stories (user_id, image, created_at) VALUES (?, ?, ?)",
+        args: [user.id, image, new Date().toISOString()]
+      });
       io.emit("stories_updated");
       if(cb) cb();
     });
 
-    const addNotification = (userId: number, type: string, content: string) => {
+    const addNotification = async (userId: number, type: string, content: string) => {
       if (userId === user.id) return;
-      const notif = { id: getNextId("notifications"), user_id: userId, type, content, read: false, created_at: new Date().toISOString() };
-      db.notifications.push(notif);
-      saveDb();
+      const res = await client.execute({
+        sql: "INSERT INTO notifications (user_id, type, content, read, created_at) VALUES (?, ?, ?, 0, ?)",
+        args: [userId, type, content, new Date().toISOString()]
+      });
+      const newNotifRes = await client.execute({ sql: "SELECT * FROM notifications WHERE id = ?", args: [res.lastInsertRowid] });
       const s = onlineUsers.get(userId);
-      if (s) io.to(s).emit("new_notification", notif);
+      if (s) io.to(s).emit("new_notification", newNotifRes.rows[0]);
     };
 
-    socket.on("get_notifications", (cb) => {
-      const notifs = db.notifications.filter((n: any) => n.user_id === user.id).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      cb(notifs);
+    socket.on("get_notifications", async (cb) => {
+      const notifsRes = await client.execute({
+        sql: "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC",
+        args: [user.id]
+      });
+      cb(notifsRes.rows);
     });
 
-    socket.on("mark_notifications_read", () => {
-      let changed = false;
-      db.notifications.forEach((n: any) => {
-        if (n.user_id === user.id && !n.read) {
-          n.read = true;
-          changed = true;
-        }
+    socket.on("mark_notifications_read", async () => {
+      await client.execute({
+        sql: "UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0",
+        args: [user.id]
       });
-      if (changed) saveDb();
     });
 
     // Friends
     socket.on("get_friends", async (cb) => {
-      const myFriends = db.friends.filter(f => f.user1 === user.id || f.user2 === user.id);
-      const result = myFriends.map(f => {
+      const friendsRes = await client.execute({
+        sql: "SELECT * FROM friends WHERE user1 = ? OR user2 = ?",
+        args: [user.id, user.id]
+      });
+      const result = await Promise.all(friendsRes.rows.map(async (f: any) => {
         const otherId = f.user1 === user.id ? f.user2 : f.user1;
-        const otherUser = getUser(otherId);
+        const otherUser = await getUser(otherId as number);
         return {
           id: otherUser?.id,
           username: otherUser?.username,
@@ -287,147 +457,189 @@ async function startServer() {
           status: f.status,
           is_sender: f.user1 === user.id
         };
-      }).filter(x => x.id);
-      cb(result);
+      }));
+      cb(result.filter(x => x.id));
     });
 
     socket.on("search_users", async (query, cb) => {
       if(!query) return cb([]);
-      const users = db.users.filter(u => u.id !== user.id && u.username.toLowerCase().includes(query.toLowerCase())).slice(0, 20);
-      cb(users.map(u => ({ id: u.id, username: u.username, avatar: u.avatar })));
+      const usersRes = await client.execute({
+        sql: "SELECT id, username, avatar FROM users WHERE id != ? AND username LIKE ? LIMIT 20",
+        args: [user.id, `%${query}%`]
+      });
+      cb(usersRes.rows);
     });
 
     socket.on("add_friend", async (targetId, cb) => {
-      const existing = db.friends.find(f => (f.user1 === user.id && f.user2 === targetId) || (f.user1 === targetId && f.user2 === user.id));
-      if (!existing) {
-        db.friends.push({ user1: user.id, user2: targetId, status: 0 });
-        saveDb();
+      const existing = await client.execute({
+        sql: "SELECT id FROM friends WHERE (user1 = ? AND user2 = ?) OR (user1 = ? AND user2 = ?)",
+        args: [user.id, targetId, targetId, user.id]
+      });
+      if (existing.rows.length === 0) {
+        await client.execute({
+          sql: "INSERT INTO friends (user1, user2, status) VALUES (?, ?, 0)",
+          args: [user.id, targetId]
+        });
         const targetSocket = onlineUsers.get(targetId);
         if (targetSocket) io.to(targetSocket).emit("friends_updated");
-        addNotification(targetId, "friend_request", `${user.username} sana arkadaşlık isteği gönderdi.`);
+        await addNotification(targetId, "friend_request", `${user.username} sana arkadaşlık isteği gönderdi.`);
       }
       if(cb) cb();
     });
 
     socket.on("accept_friend", async (targetId, cb) => {
-      const friend = db.friends.find(f => f.user1 === targetId && f.user2 === user.id);
-      if (friend) {
-        friend.status = 1;
-        saveDb();
+      const friendRes = await client.execute({
+        sql: "SELECT id FROM friends WHERE user1 = ? AND user2 = ?",
+        args: [targetId, user.id]
+      });
+      if (friendRes.rows.length > 0) {
+        await client.execute({
+          sql: "UPDATE friends SET status = 1 WHERE id = ?",
+          args: [friendRes.rows[0].id]
+        });
         const targetSocket = onlineUsers.get(targetId);
         if (targetSocket) io.to(targetSocket).emit("friends_updated");
-        addNotification(targetId, "friend_accept", `${user.username} arkadaşlık isteğini kabul etti.`);
+        await addNotification(targetId, "friend_accept", `${user.username} arkadaşlık isteğini kabul etti.`);
       }
       if(cb) cb();
     });
 
     socket.on("get_all_users", async (cb) => {
-      const users = db.users.map(u => ({ id: u.id, username: u.username, avatar: u.avatar, color: u.color }));
-      cb(users);
+      const usersRes = await client.execute("SELECT id, username, avatar, color FROM users");
+      cb(usersRes.rows);
     });
 
     // Chat
     socket.on("get_messages", async (friendId, cb) => {
-      const messages = db.messages.filter(m => (m.sender === user.id && m.receiver === friendId) || (m.sender === friendId && m.receiver === user.id))
-        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      cb(messages);
+      const msgRes = await client.execute({
+        sql: "SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at ASC",
+        args: [user.id, friendId, friendId, user.id]
+      });
+      cb(msgRes.rows.map(r => ({ ...r, reactions: JSON.parse(r.reactions as string || "[]") })));
     });
 
     socket.on("send_message", async (data) => {
       const { receiver, type, content, reply_to } = data;
-      const newMsg = { id: getNextId("messages"), sender: user.id, receiver, type, content, reply_to, reactions: [], created_at: new Date().toISOString() };
-      db.messages.push(newMsg);
-      saveDb();
+      const res = await client.execute({
+        sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?)",
+        args: [user.id, receiver, type, content, reply_to || null, new Date().toISOString()]
+      });
+      const newMsgRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [res.lastInsertRowid] });
+      const newMsg = { ...newMsgRes.rows[0], reactions: [] };
       
       const targetSocket = onlineUsers.get(receiver);
       if (targetSocket) io.to(targetSocket).emit("new_message", newMsg);
       socket.emit("new_message", newMsg); // echo back
-      addNotification(receiver, "new_message", `${user.username} sana yeni bir mesaj gönderdi.`);
+      await addNotification(receiver, "new_message", `${user.username} sana yeni bir mesaj gönderdi.`);
     });
 
-    const populateMessage = (m: any) => {
-      const sUser = getUser(m.sender);
+    const populateMessage = async (m: any, type: "global" | "group") => {
+      const sUser = await getUser(m.sender);
       let replyMsg = null;
       if (m.reply_to) {
-         // Figure out which table to look at
-         let sourceTbl = db.messages;
-         if (m.group_id) sourceTbl = db.group_messages;
-         else if (db.global_messages.some(gm => gm.id === m.id)) sourceTbl = db.global_messages;
-         const refMsg = sourceTbl.find((x: any) => x.id === m.reply_to);
-         if (refMsg) {
-           const refUser = getUser(refMsg.sender);
+         const table = type === "global" ? "global_messages" : "group_messages";
+         const refMsgRes = await client.execute({ sql: `SELECT * FROM ${table} WHERE id = ?`, args: [m.reply_to] });
+         if (refMsgRes.rows.length > 0) {
+           const refMsg = refMsgRes.rows[0];
+           const refUser = await getUser(refMsg.sender as number);
            replyMsg = { ...refMsg, sender_name: refUser?.username };
          }
       }
-      return { ...m, sender_name: sUser?.username, sender_avatar: sUser?.avatar, sender_color: sUser?.color, reply_message: replyMsg };
+      return { 
+        ...m, 
+        reactions: JSON.parse(m.reactions as string || "[]"), 
+        sender_name: sUser?.username, 
+        sender_avatar: sUser?.avatar, 
+        sender_color: sUser?.color, 
+        reply_message: replyMsg 
+      };
     };
 
     // Global Chat
     socket.on("get_global_messages", async (cb) => {
-      cb(db.global_messages.slice(-100).map(populateMessage));
+      const msgs = await client.execute("SELECT * FROM (SELECT * FROM global_messages ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC");
+      const populated = await Promise.all(msgs.rows.map(m => populateMessage(m, "global")));
+      cb(populated);
     });
 
     socket.on("send_global_message", async (data) => {
       const { type, content, reply_to } = data;
-      const newMsg = { id: getNextId("global_messages"), sender: user.id, type, content, reply_to, reactions: [], created_at: new Date().toISOString() };
-      db.global_messages.push(newMsg);
-      saveDb();
-      io.emit("new_global_message", populateMessage(newMsg));
+      const res = await client.execute({
+        sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, created_at) VALUES (?, ?, ?, ?, '[]', ?)",
+        args: [user.id, type, content, reply_to || null, new Date().toISOString()]
+      });
+      const newMsgRes = await client.execute({ sql: "SELECT * FROM global_messages WHERE id = ?", args: [res.lastInsertRowid] });
+      const popMsg = await populateMessage(newMsgRes.rows[0], "global");
+      io.emit("new_global_message", popMsg);
     });
 
     // Groups
     socket.on("get_groups", async (cb) => {
-      const myGroups = db.groups.filter(g => g.members.includes(user.id));
+      const groupsRes = await client.execute("SELECT * FROM groups");
+      const myGroups = groupsRes.rows.filter(g => {
+         const members = JSON.parse(g.members as string || "[]");
+         return members.includes(Number(user.id));
+      }).map(g => ({ ...g, members: JSON.parse(g.members as string || "[]") }));
       cb(myGroups);
     });
 
     socket.on("create_group", async (data, cb) => {
       const { name, members } = data; 
-      const allMembers = [user.id, ...members];
-      const newGroup = { id: getNextId("groups"), name, creator: user.id, members: allMembers, created_at: new Date().toISOString() };
-      db.groups.push(newGroup);
-      saveDb();
-      allMembers.forEach((memberId: number) => {
+      const allMembers = [Number(user.id), ...members];
+      const res = await client.execute({
+        sql: "INSERT INTO groups (name, creator, members, created_at) VALUES (?, ?, ?, ?)",
+        args: [name, user.id, JSON.stringify(allMembers), new Date().toISOString()]
+      });
+      const newGroupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [res.lastInsertRowid] });
+      const newGroup = { ...newGroupRes.rows[0], members: JSON.parse(newGroupRes.rows[0].members as string || "[]") };
+      
+      allMembers.forEach(async (memberId: number) => {
         const targetSocket = onlineUsers.get(memberId);
         if (targetSocket) io.to(targetSocket).emit("groups_updated");
-        addNotification(memberId, "group_invite", `${user.username} seni ${name} grubuna ekledi.`);
+        await addNotification(memberId, "group_invite", `${user.username} seni ${name} grubuna ekledi.`);
       });
       if(cb) cb(newGroup);
     });
 
     socket.on("get_group_messages", async (groupId, cb) => {
-      const messages = db.group_messages.filter(m => m.group_id === groupId)
-        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-        .map(populateMessage);
-      cb(messages);
+      const msgsRes = await client.execute({
+        sql: "SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at ASC",
+        args: [groupId]
+      });
+      const populated = await Promise.all(msgsRes.rows.map(m => populateMessage(m, "group")));
+      cb(populated);
     });
 
     socket.on("send_group_message", async (data) => {
       const { group_id, type, content, reply_to } = data;
-      const newMsg = { id: getNextId("group_messages"), group_id, sender: user.id, type, content, reply_to, reactions: [], created_at: new Date().toISOString() };
-      db.group_messages.push(newMsg);
-      saveDb();
+      const res = await client.execute({
+        sql: "INSERT INTO group_messages (group_id, sender, type, content, reply_to, reactions, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?)",
+        args: [group_id, user.id, type, content, reply_to || null, new Date().toISOString()]
+      });
       
-      const group = db.groups.find(g => g.id === group_id);
-      if (group) {
-        const popMsg = populateMessage(newMsg);
-        group.members.forEach((memberId: number) => {
+      const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [group_id] });
+      if (groupRes.rows.length > 0) {
+        const group = groupRes.rows[0];
+        const members = JSON.parse(group.members as string || "[]");
+        const newMsgRes = await client.execute({ sql: "SELECT * FROM group_messages WHERE id = ?", args: [res.lastInsertRowid] });
+        const popMsg = await populateMessage(newMsgRes.rows[0], "group");
+        members.forEach(async (memberId: number) => {
           const targetSocket = onlineUsers.get(memberId);
           if (targetSocket) io.to(targetSocket).emit("new_group_message", popMsg);
-          addNotification(memberId, "new_group_message", `${group.name} grubuna yeni bir mesaj geldi.`);
+          await addNotification(memberId, "new_group_message", `${group.name} grubuna yeni bir mesaj geldi.`);
         });
       }
     });
 
-    socket.on("typing", (data) => {
-      // data: { type: 'global' | 'group' | 'private', receiver?: number, group_id?: number }
+    socket.on("typing", async (data) => {
       if (data.type === 'private') {
         const targetSocket = onlineUsers.get(data.receiver);
         if (targetSocket) io.to(targetSocket).emit("user_typing", { type: 'private', sender: user.id });
       } else if (data.type === 'group') {
-        const group = db.groups.find((g: any) => g.id === data.group_id);
-        if (group) {
-          group.members.forEach((memberId: number) => {
+        const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [data.group_id] });
+        if (groupRes.rows.length > 0) {
+          const members = JSON.parse(groupRes.rows[0].members as string || "[]");
+          members.forEach((memberId: number) => {
             if (memberId !== user.id) {
               const targetSocket = onlineUsers.get(memberId);
               if (targetSocket) io.to(targetSocket).emit("user_typing", { type: 'group', group_id: data.group_id, sender: user.id });
@@ -439,46 +651,47 @@ async function startServer() {
       }
     });
 
-    socket.on("react_message", (data) => {
-       // data: { type: 'private' | 'group' | 'global', message_id, emoji }
-       let msgList;
-       if (data.type === 'private') msgList = db.messages;
-       else if (data.type === 'group') msgList = db.group_messages;
-       else if (data.type === 'global') msgList = db.global_messages;
+    socket.on("react_message", async (data) => {
+       let table = "";
+       if (data.type === 'private') table = "messages";
+       else if (data.type === 'group') table = "group_messages";
+       else if (data.type === 'global') table = "global_messages";
        
-       if (msgList) {
-         const msg = msgList.find((m: any) => m.id === data.message_id);
-         if (msg) {
-           if (!msg.reactions) msg.reactions = [];
-           const existingIdx = msg.reactions.findIndex((r: any) => r.user_id === user.id && r.emoji === data.emoji);
+       if (table) {
+         const msgRes = await client.execute({ sql: `SELECT * FROM ${table} WHERE id = ?`, args: [data.message_id] });
+         if (msgRes.rows.length > 0) {
+           const msg = msgRes.rows[0];
+           const reactions = JSON.parse(msg.reactions as string || "[]");
+           const existingIdx = reactions.findIndex((r: any) => r.user_id === user.id && r.emoji === data.emoji);
            if (existingIdx > -1) {
-             msg.reactions.splice(existingIdx, 1);
+             reactions.splice(existingIdx, 1);
            } else {
-             msg.reactions.push({ user_id: user.id, emoji: data.emoji });
+             reactions.push({ user_id: user.id, emoji: data.emoji });
            }
-           saveDb();
-           io.emit("message_reacted", { type: data.type, message_id: data.message_id, reactions: msg.reactions });
+           await client.execute({
+             sql: `UPDATE ${table} SET reactions = ? WHERE id = ?`,
+             args: [JSON.stringify(reactions), data.message_id]
+           });
+           io.emit("message_reacted", { type: data.type, message_id: data.message_id, reactions });
          }
        }
     });
 
     socket.on("update_avatar", async (url) => {
-      const u = getUser(user.id);
-      if (u) {
-        u.avatar = url;
-        saveDb();
-        io.emit("feed_updated");
-        io.emit("friends_updated");
-      }
+      await client.execute({
+        sql: "UPDATE users SET avatar = ? WHERE id = ?",
+        args: [url, user.id]
+      });
+      io.emit("feed_updated");
+      io.emit("friends_updated");
     });
 
     socket.on("disconnect", async () => {
-      const u = getUser(user.id);
-      if (u) {
-        u.last_seen = new Date().toISOString();
-        saveDb();
-      }
-      onlineUsers.delete(user.id);
+      await client.execute({
+        sql: "UPDATE users SET last_seen = ? WHERE id = ?",
+        args: [new Date().toISOString(), user.id]
+      });
+      onlineUsers.delete(Number(user.id));
       io.emit("online_users", Array.from(onlineUsers.keys()));
     });
   });

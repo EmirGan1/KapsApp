@@ -136,7 +136,7 @@ export default function Profile({
                 </div>
                 <div className="flex items-center gap-2 text-slate-500">
                   <MessageCircle size={20} />
-                  <span className="font-medium text-sm">Yorumlar</span>
+                  <span className="font-medium text-sm">{post.comments?.length || 0} Yorum</span>
                 </div>
               </div>
             </div>
