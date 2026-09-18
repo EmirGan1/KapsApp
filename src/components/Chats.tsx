@@ -396,15 +396,15 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
               {messages.map((msg, idx) => {
                 const isMine = msg.sender === currentUserId;
                 const isLast = idx === messages.length - 1;
                 const readers = isLast ? Object.entries(readReceipts).filter(([uid, mid]) => Number(uid) !== currentUserId && mid === msg.id).map(([uid]) => users.find(u => u.id === Number(uid))).filter(Boolean) : [];
                 return (
-                  <div key={msg.id || idx} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} mb-1`}>
-                    <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} group w-full relative`}>
-                      <div className={`max-w-[75%] rounded-2xl p-2 px-3 shadow-sm relative ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
+                  <div key={msg.id || idx} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} mb-1 w-full min-w-0`}>
+                    <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} group w-full min-w-0 relative`}>
+                      <div className={`max-w-[85%] md:max-w-[75%] min-w-0 rounded-2xl p-2 px-3 shadow-sm relative overflow-hidden [overflow-wrap:anywhere] break-words break-all ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
                         
                         {/* Action Buttons (Reply/React) hidden by default, shown on hover */}
                         <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
@@ -427,19 +427,19 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                         {activeTab === "groups" && !isMine && (
                           <div className="flex items-center gap-2 mb-1 cursor-pointer" onClick={() => onUserClick && onUserClick(msg.sender)}>
                             <Avatar url={msg.sender_avatar} name={msg.sender_name} color={msg.sender_color} size={4} />
-                            <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline">{msg.sender_name}</span>
+                            <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline truncate">{msg.sender_name}</span>
                           </div>
                         )}
                         
                         {/* Reply Context */}
                         {msg.reply_message && (
-                          <div className={`mb-2 p-2 rounded-lg text-sm border-l-4 ${isMine ? 'bg-green-700/20 border-green-600 text-green-900 dark:text-green-100' : 'bg-slate-100 dark:bg-slate-700 border-blue-500 text-slate-600 dark:text-slate-300'}`}>
-                            <div className="font-semibold text-xs mb-1">{msg.reply_message.sender_name}</div>
+                          <div className={`mb-2 p-2 rounded-lg text-sm border-l-4 min-w-0 max-w-full overflow-hidden ${isMine ? 'bg-green-700/20 border-green-600 text-green-900 dark:text-green-100' : 'bg-slate-100 dark:bg-slate-700 border-blue-500 text-slate-600 dark:text-slate-300'}`}>
+                            <div className="font-semibold text-xs mb-1 truncate">{msg.reply_message.sender_name}</div>
                             {msg.reply_message.type === 'text' ? <p className="truncate text-xs">{msg.reply_message.content}</p> : <span className="italic text-xs">Medya</span>}
                           </div>
                         )}
 
-                        {msg.type === 'text' && <p className="text-[15px] text-slate-800 leading-relaxed break-words">{msg.content}</p>}
+                        {msg.type === 'text' && <p className="text-[15px] text-slate-800 dark:text-slate-100 leading-relaxed break-words break-all [overflow-wrap:anywhere] whitespace-pre-wrap select-text">{msg.content}</p>}
                         {msg.type === 'image' && (
                           <div className="relative group cursor-pointer overflow-hidden rounded-xl max-w-xs md:max-w-sm" onClick={() => openMediaModal(msg)}>
                             <img src={msg.content} referrerPolicy="no-referrer" alt="Fotoğraf" className="w-full object-cover rounded-xl hover:opacity-95 transition-opacity" />
@@ -563,8 +563,9 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                 <form onSubmit={handleSendText} className="flex-1 relative">
                   <input 
                     type="text" 
-                    placeholder="Bir mesaj yazın..." 
-                    className="w-full bg-white border-transparent focus:ring-0 focus:outline-none py-3 px-4 rounded-xl shadow-sm text-[15px]"
+                    placeholder="Bir mesaj yazın... (maks 1000 karakter)" 
+                    maxLength={1000}
+                    className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-transparent focus:ring-0 focus:outline-none py-3 px-4 rounded-xl shadow-sm text-[15px]"
                     value={text}
                     onChange={handleTyping}
                   />

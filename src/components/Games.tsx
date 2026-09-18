@@ -1,64 +1,120 @@
-import React, { useState, useEffect } from 'react';
-import { Gamepad2, Users, RefreshCcw, LogOut, Plus, Play } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Gamepad2, Users, RefreshCcw, LogOut, Plus, Play, 
+  ArrowDown, CheckCircle2, Trophy, Sparkles, Layers, 
+  AlertCircle, ChevronRight, HelpCircle, Volume2
+} from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import Avatar from './Avatar';
+import { 
+  Tile, 
+  TableMeld, 
+  OkeyRoomState, 
+  autoSortRuns, 
+  autoSortPairs, 
+  check101Open 
+} from '../utils/okeyEngine';
 
-type TileColor = 'red' | 'blue' | 'black' | 'yellow' | 'fake';
-interface Tile {
-  id: string;
-  number: number;
-  color: TileColor;
-}
-
-interface RackSlot {
-  index: number;
-  tile: Tile | null;
-}
-
-const INITIAL_RACK_SIZE = 30; // 2 rows of 15 slots
+const INITIAL_RACK_SIZE = 30; // 2 rows x 15 slots
 
 export default function Games({ 
   socket, currentUserId, username, avatar, color 
 }: { 
-  socket: Socket | null; currentUserId: number; username: string; avatar?: string | null; color?: string | null; 
+  socket: Socket | null; 
+  currentUserId: number; 
+  username: string; 
+  avatar?: string | null; 
+  color?: string | null; 
 }) {
   const [rooms, setRooms] = useState<any[]>([]);
-  const [currentRoom, setCurrentRoom] = useState<any | null>(null);
+  const [currentRoom, setCurrentRoom] = useState<OkeyRoomState | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [newRoomName, setNewRoomName] = useState('Eğlencelik Masa');
-  const [newRoomMode, setNewRoomMode] = useState<'classic'|'101'>('101');
+  const [newRoomMode, setNewRoomMode] = useState<'classic' | '101'>('101');
 
-  const [rack, setRack] = useState<RackSlot[]>(Array.from({ length: INITIAL_RACK_SIZE }, (_, i) => ({ index: i, tile: null })));
-  const [draggedTileIndex, setDraggedTileIndex] = useState<number | null>(null);
+  // Rack & Selection state
+  const [rack, setRack] = useState<(Tile | null)[]>(Array(INITIAL_RACK_SIZE).fill(null));
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
+  const [selectedForMeld, setSelectedForMeld] = useState<number[]>([]);
+  const [draggedSlot, setDraggedSlot] = useState<number | null>(null);
+
+  // Messages / feedback
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  // Hand reference to prevent overwriting user-arranged rack on trivial updates
+  const myHandRef = useRef<Tile[]>([]);
 
   useEffect(() => {
     if (!socket) return;
-    
+
+    // Refresh rooms and ask if user has an ongoing table
     socket.emit("get_okey_rooms");
+    socket.emit("get_my_okey_room");
 
-    socket.on("okey_rooms_list", (roomList) => {
-      setRooms(roomList);
-    });
-
-    socket.on("okey_state", (state: any) => {
-      setCurrentRoom(state);
-    });
-    
-    socket.on("okey_room_created", (roomId: string) => {
+    const onRoomsList = (roomList: any[]) => setRooms(roomList);
+    const onRoomCreated = (roomId: string) => {
       socket.emit("join_okey", roomId);
-    });
+    };
+    const onRoomState = (state: OkeyRoomState) => {
+      setCurrentRoom(state);
+      if (state.lastActionMessage) {
+        setInfoMessage(state.lastActionMessage);
+      }
+    };
+    const onHand = (handTiles: Tile[]) => {
+      myHandRef.current = handTiles;
+      // Synchronize rack with new hand: keep existing placements if possible
+      setRack(prev => {
+        const remainingTiles = [...handTiles];
+        const newRack: (Tile | null)[] = Array(INITIAL_RACK_SIZE).fill(null);
+
+        // Keep tiles that are still in hand in their existing slot positions
+        prev.forEach((tile, idx) => {
+          if (tile) {
+            const foundIdx = remainingTiles.findIndex(t => t.id === tile.id);
+            if (foundIdx !== -1) {
+              newRack[idx] = remainingTiles[foundIdx];
+              remainingTiles.splice(foundIdx, 1);
+            }
+          }
+        });
+
+        // Place remaining (e.g. newly drawn) tiles into the first empty slots
+        let remIdx = 0;
+        for (let i = 0; i < INITIAL_RACK_SIZE && remIdx < remainingTiles.length; i++) {
+          if (newRack[i] === null) {
+            newRack[i] = remainingTiles[remIdx++];
+          }
+        }
+        return newRack;
+      });
+    };
+    const onError = (msg: string) => {
+      setErrorMessage(msg);
+      setTimeout(() => setErrorMessage(null), 3500);
+    };
+
+    socket.on("okey_rooms_list", onRoomsList);
+    socket.on("okey_room_created", onRoomCreated);
+    socket.on("okey_state", onRoomState);
+    socket.on("okey_hand", onHand);
+    socket.on("okey_error", onError);
 
     return () => {
-      socket.off("okey_rooms_list");
-      socket.off("okey_state");
-      socket.off("okey_room_created");
+      socket.off("okey_rooms_list", onRoomsList);
+      socket.off("okey_room_created", onRoomCreated);
+      socket.off("okey_state", onRoomState);
+      socket.off("okey_hand", onHand);
+      socket.off("okey_error", onError);
     };
   }, [socket]);
 
+  // Actions
   const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomName.trim() || !socket) return;
-    socket.emit("create_okey_room", { name: newRoomName, gameMode: newRoomMode });
+    socket.emit("create_okey_room", { name: newRoomName.trim(), gameMode: newRoomMode });
     setIsCreating(false);
     setNewRoomName('Eğlencelik Masa');
   };
@@ -72,6 +128,8 @@ export default function Games({
     if (!socket) return;
     socket.emit("leave_okey");
     setCurrentRoom(null);
+    setRack(Array(INITIAL_RACK_SIZE).fill(null));
+    setSelectedSlot(null);
   };
 
   const startGame = () => {
@@ -79,8 +137,59 @@ export default function Games({
     socket.emit("start_okey_game", currentRoom.id);
   };
 
+  // Turn checks
+  const myPlayerIdx = currentRoom?.players.findIndex(p => p.id === currentUserId) ?? -1;
+  const isMyTurn = currentRoom?.status === 'playing' && currentRoom.currentTurn === myPlayerIdx;
+  const canDraw = isMyTurn && currentRoom?.turnPhase === 'draw';
+  const canDiscard = isMyTurn && currentRoom?.turnPhase === 'discard';
+
+  // Draw tile
+  const handleDrawFromDeck = () => {
+    if (!socket || !canDraw) return;
+    socket.emit("okey_draw", { source: 'deck' });
+  };
+
+  const handleDrawFromDiscard = () => {
+    if (!socket || !canDraw) return;
+    socket.emit("okey_draw", { source: 'discard' });
+  };
+
+  // Discard tile
+  const handleDiscard = (slotIndex: number) => {
+    if (!socket || !canDiscard) return;
+    const tile = rack[slotIndex];
+    if (!tile) return;
+    socket.emit("okey_discard", tile);
+    setSelectedSlot(null);
+  };
+
+  // Rack Slot Click / Tap interaction (Touch friendly!)
+  const handleSlotClick = (index: number) => {
+    if (selectedSlot === null) {
+      if (rack[index] !== null) {
+        setSelectedSlot(index);
+      }
+    } else {
+      if (selectedSlot === index) {
+        // Toggle selection off
+        setSelectedSlot(null);
+      } else {
+        // Swap or move tile
+        setRack(prev => {
+          const next = [...prev];
+          const temp = next[selectedSlot];
+          next[selectedSlot] = next[index];
+          next[index] = temp;
+          return next;
+        });
+        setSelectedSlot(null);
+      }
+    }
+  };
+
+  // Drag and Drop (Mouse / Desktop)
   const handleDragStart = (e: React.DragEvent, index: number) => {
-    setDraggedTileIndex(index);
+    setDraggedSlot(index);
     e.dataTransfer.setData('text/plain', index.toString());
   };
 
@@ -88,137 +197,184 @@ export default function Games({
     e.preventDefault();
   };
 
-  const handleDropOnRack = (e: React.DragEvent, targetIndex: number) => {
+  const handleDropOnSlot = (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
-    if (draggedTileIndex === null || draggedTileIndex === targetIndex) return;
-    setRack((prevRack) => {
-      const newRack = [...prevRack];
-      const draggedTile = newRack[draggedTileIndex].tile;
-      const targetTile = newRack[targetIndex].tile;
-      newRack[draggedTileIndex].tile = targetTile;
-      newRack[targetIndex].tile = draggedTile;
-      return newRack;
+    if (draggedSlot === null || draggedSlot === targetIndex) return;
+    setRack(prev => {
+      const next = [...prev];
+      const temp = next[draggedSlot];
+      next[draggedSlot] = next[targetIndex];
+      next[targetIndex] = temp;
+      return next;
     });
-    setDraggedTileIndex(null);
+    setDraggedSlot(null);
   };
 
-  const handleDropOnDiscard = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (draggedTileIndex === null || !currentRoom) return;
-    const tileToDiscard = rack[draggedTileIndex].tile;
-    if (!tileToDiscard) return;
-    
-    if (socket) {
-      socket.emit("okey_discard", tileToDiscard);
+  // Auto Sort
+  const handleSortRuns = () => {
+    setRack(prev => autoSortRuns(prev));
+    setSelectedSlot(null);
+  };
+
+  const handleSortPairs = () => {
+    setRack(prev => autoSortPairs(prev));
+    setSelectedSlot(null);
+  };
+
+  // 101 Mode: Open hand
+  const handleOpenHand101 = () => {
+    if (!socket || !currentRoom || currentRoom.gameMode !== '101' || !isMyTurn) return;
+
+    // Collect all consecutive groups of non-null tiles from the rack
+    const melds: Tile[][] = [];
+    let currentMeld: Tile[] = [];
+
+    rack.forEach(tile => {
+      if (tile) {
+        currentMeld.push(tile);
+      } else {
+        if (currentMeld.length >= 2) {
+          melds.push(currentMeld);
+        }
+        currentMeld = [];
+      }
+    });
+    if (currentMeld.length >= 2) {
+      melds.push(currentMeld);
     }
-    setRack((prevRack) => {
-      const newRack = [...prevRack];
-      newRack[draggedTileIndex].tile = null;
-      return newRack;
-    });
-    setDraggedTileIndex(null);
-  };
 
-  // Mocking draw for UI since fully server-authoritative requires a lot of back-and-forth
-  const drawTile = () => {
-    const firstEmptyIndex = rack.findIndex(slot => slot.tile === null);
-    if (firstEmptyIndex === -1) {
-      alert("Istakan dolu!");
+    if (melds.length === 0) {
+      setErrorMessage("Istakanızda yan yana dizili perler (en az 3'lü seri/grup veya 5 çift) bulunmalıdır.");
+      setTimeout(() => setErrorMessage(null), 3500);
       return;
     }
-    const colors: TileColor[] = ['red', 'blue', 'black', 'yellow'];
-    const newTile = {
-      id: Math.random().toString(),
-      number: Math.floor(Math.random() * 13) + 1,
-      color: colors[Math.floor(Math.random() * colors.length)]
-    };
-    setRack(prev => {
-      const newRack = [...prev];
-      newRack[firstEmptyIndex].tile = newTile;
-      return newRack;
-    });
+
+    socket.emit("okey_open_hand", melds);
   };
 
+  // Declare Win
+  const handleDeclareWin = () => {
+    if (!socket || !isMyTurn) return;
+    socket.emit("okey_declare_win");
+  };
+
+  // --- LOBBY VIEW ---
   if (!currentRoom) {
     return (
-      <div className="flex-1 bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 overflow-y-auto p-6 transition-colors duration-200">
+      <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 p-4 md:p-6 transition-colors">
         <div className="max-w-4xl mx-auto space-y-6">
-          <div className="flex justify-between items-center bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 transition-colors">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
             <div>
-              <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-3">
-                <Gamepad2 className="text-emerald-500" size={28} />
-                Oyun Lobisi
+              <h1 className="text-2xl font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Gamepad2 className="text-emerald-500" /> Okey Masaları & Lobisi
               </h1>
-              <p className="text-slate-500 dark:text-slate-400 mt-1">Açık odalara katıl veya kendi masanı kur.</p>
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                Klasik Okey veya 101 Okey oyna! Masaya katıl veya kendi masanı kur.
+              </p>
             </div>
-            <button 
-              onClick={() => setIsCreating(true)}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl transition-colors shadow-sm flex items-center gap-2"
-            >
-              <Plus size={18} /> Masa Kur
-            </button>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => socket?.emit("get_okey_rooms")}
+                className="p-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl transition-colors"
+                title="Yenile"
+              >
+                <RefreshCcw size={18} />
+              </button>
+              <button 
+                onClick={() => setIsCreating(true)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl transition-colors shadow-sm flex items-center gap-2"
+              >
+                <Plus size={18} /> Masa Kur
+              </button>
+            </div>
           </div>
 
+          {/* Create Room Modal/Box */}
           {isCreating && (
-            <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 transition-colors">
-              <h2 className="font-semibold text-lg mb-4">Yeni Masa Oluştur</h2>
+            <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 transition-colors">
+              <h2 className="font-bold text-base md:text-lg mb-3 text-slate-800 dark:text-slate-200">Yeni Masa Oluştur</h2>
               <form onSubmit={handleCreateRoom} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1 text-slate-700 dark:text-slate-300">Oda Adı</label>
+                  <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">Masa Adı</label>
                   <input 
                     type="text" 
                     value={newRoomName}
                     onChange={(e) => setNewRoomName(e.target.value)}
                     required
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2 outline-none focus:border-emerald-500"
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-emerald-500"
                     placeholder="Eğlencelik Masa"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1 text-slate-700 dark:text-slate-300">Oyun Modu</label>
+                  <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">Oyun Modu</label>
                   <div className="flex gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" checked={newRoomMode === '101'} onChange={() => setNewRoomMode('101')} className="accent-emerald-500" />
-                      <span>101 Okey</span>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 flex-1">
+                      <input type="radio" name="mode" checked={newRoomMode === '101'} onChange={() => setNewRoomMode('101')} className="accent-emerald-500" />
+                      <div>
+                        <span className="font-bold">101 Okey</span>
+                        <p className="text-[11px] text-slate-400">Per açmalı, seri & çift kurallı</p>
+                      </div>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" checked={newRoomMode === 'classic'} onChange={() => setNewRoomMode('classic')} className="accent-emerald-500" />
-                      <span>Klasik Okey</span>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 flex-1">
+                      <input type="radio" name="mode" checked={newRoomMode === 'classic'} onChange={() => setNewRoomMode('classic')} className="accent-emerald-500" />
+                      <div>
+                        <span className="font-bold">Klasik Okey</span>
+                        <p className="text-[11px] text-slate-400">Geleneksel 14 taş bitirme</p>
+                      </div>
                     </label>
                   </div>
                 </div>
-                <div className="flex justify-end gap-3 pt-2">
-                  <button type="button" onClick={() => setIsCreating(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl transition-colors">İptal</button>
-                  <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-colors">Oluştur</button>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button type="button" onClick={() => setIsCreating(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-medium">İptal</button>
+                  <button type="submit" className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold">Oluştur ve Otur</button>
                 </div>
               </form>
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Rooms Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {rooms.length === 0 ? (
-              <div className="col-span-full py-12 text-center text-slate-500 dark:text-slate-400">
-                Şu an aktif masa bulunmuyor. Yeni bir tane kurabilirsin!
+              <div className="col-span-full py-16 text-center">
+                <div className="w-16 h-16 bg-slate-100 dark:bg-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-3 text-slate-400">
+                  <Gamepad2 size={32} />
+                </div>
+                <p className="font-bold text-slate-700 dark:text-slate-300">Aktif masa bulunmuyor</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-4">İlk masayı kurup botlar veya arkadaşlarınla hemen başlayabilirsin!</p>
+                <button 
+                  onClick={() => setIsCreating(true)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl text-sm transition-colors inline-flex items-center gap-2"
+                >
+                  <Plus size={16} /> Hemen Masa Kur
+                </button>
               </div>
             ) : (
               rooms.map((room) => (
-                <div key={room.id} className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex justify-between items-center transition-colors">
-                  <div>
-                    <h3 className="font-bold text-slate-800 dark:text-slate-100">{room.name}</h3>
-                    <div className="flex gap-3 text-xs mt-1 text-slate-500 dark:text-slate-400">
-                      <span className="flex items-center gap-1"><Users size={12}/> {room.players} / 4</span>
-                      <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">{room.gameMode === '101' ? '101 Okey' : 'Klasik'}</span>
-                      <span className={room.status === 'playing' ? 'text-amber-500' : 'text-emerald-500'}>
-                        {room.status === 'playing' ? 'Oyun Başladı' : 'Bekleniyor'}
+                <div key={room.id} className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex justify-between items-center transition-all hover:border-emerald-500/50">
+                  <div className="space-y-1">
+                    <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm sm:text-base">{room.name}</h3>
+                    <div className="flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
+                      <span className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
+                        <Users size={12}/> {room.players} / 4
+                      </span>
+                      <span className="bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 font-medium px-2 py-0.5 rounded-md">
+                        {room.gameMode === '101' ? '101 Okey' : 'Klasik'}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-md font-medium ${room.status === 'playing' ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-500' : 'bg-blue-50 dark:bg-blue-950/50 text-blue-500'}`}>
+                        {room.status === 'playing' ? 'Oyun Sürüyor' : 'Bekleniyor'}
                       </span>
                     </div>
                   </div>
                   <button 
                     onClick={() => joinRoom(room.id)}
-                    disabled={room.players >= 4}
-                    className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${room.players >= 4 ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                    disabled={room.players >= 4 && room.status !== 'playing'}
+                    className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors ${
+                      room.players >= 4 && room.status !== 'playing' 
+                        ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed' 
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+                    }`}
                   >
-                    Katıl
+                    Masaya Otur
                   </button>
                 </div>
               ))
@@ -229,18 +385,21 @@ export default function Games({
     );
   }
 
-  // --- GAME VIEW ---
+  // --- OKEY TABLE VIEW ---
   const tablePlayers = currentRoom.players || [];
-  let topOpponent = null;
+  
+  // Arrange players relative to current user:
+  // Me is Bottom.
+  // Others: Left (Seat +3), Top (Seat +2), Right (Seat +1)
   let leftOpponent = null;
+  let topOpponent = null;
   let rightOpponent = null;
 
   if (tablePlayers.length > 0) {
-    const myIndex = tablePlayers.findIndex((p:any) => p.id === currentUserId);
-    if (myIndex !== -1) {
-      rightOpponent = tablePlayers[(myIndex + 1) % 4] || null;
-      topOpponent = tablePlayers[(myIndex + 2) % 4] || null;
-      leftOpponent = tablePlayers[(myIndex + 3) % 4] || null;
+    if (myPlayerIdx !== -1) {
+      rightOpponent = tablePlayers[(myPlayerIdx + 1) % tablePlayers.length] || null;
+      topOpponent = tablePlayers.length >= 3 ? tablePlayers[(myPlayerIdx + 2) % tablePlayers.length] : null;
+      leftOpponent = tablePlayers.length >= 4 ? tablePlayers[(myPlayerIdx + 3) % tablePlayers.length] : null;
     } else {
       leftOpponent = tablePlayers[0] || null;
       topOpponent = tablePlayers[1] || null;
@@ -248,210 +407,480 @@ export default function Games({
     }
   }
 
+  const previousPlayer = myPlayerIdx !== -1 
+    ? tablePlayers[(myPlayerIdx + tablePlayers.length - 1) % tablePlayers.length] 
+    : null;
+  const previousPlayerDiscard = previousPlayer?.discardPile && previousPlayer.discardPile.length > 0 
+    ? previousPlayer.discardPile[previousPlayer.discardPile.length - 1] 
+    : null;
+
+  const currentTurnPlayer = tablePlayers[currentRoom.currentTurn];
+
   return (
-    <div className="flex-1 flex flex-col bg-slate-900 text-slate-100 overflow-hidden relative selection:bg-transparent transition-colors">
-      {/* Game Header */}
-      <div className="p-3 md:p-4 bg-slate-950 flex items-center justify-between border-b border-slate-800 shrink-0 z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 md:w-10 md:h-10 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-900/50">
-            <Gamepad2 className="text-white w-4 h-4 md:w-5 md:h-5" />
+    <div className="flex-1 flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative selection:bg-transparent">
+      
+      {/* Toast Feedback */}
+      {errorMessage && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-red-600/95 text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-xl shadow-xl flex items-center gap-2 backdrop-blur-md animate-bounce">
+          <AlertCircle size={16} /> {errorMessage}
+        </div>
+      )}
+
+      {/* Top Header Bar */}
+      <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between shrink-0 z-20 backdrop-blur-md">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 bg-emerald-600 rounded-lg flex items-center justify-center shadow">
+            <Gamepad2 className="text-white w-4 h-4" />
           </div>
           <div>
-            <h2 className="font-bold text-sm md:text-lg text-emerald-400">{currentRoom.name} <span className="text-xs text-slate-500 font-normal">({currentRoom.gameMode === '101' ? '101 Okey' : 'Klasik'})</span></h2>
-            <p className="text-[10px] md:text-xs text-slate-400 flex items-center gap-1">
-              <Users size={12} /> {tablePlayers.length} / 4 Oyuncu
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-xs sm:text-sm text-emerald-400">{currentRoom.name}</h2>
+              <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 font-mono">
+                {currentRoom.gameMode === '101' ? '101 Okey' : 'Klasik'}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-400 flex items-center gap-1">
+              <Users size={10} /> {tablePlayers.length}/4 Oyuncu {currentRoom.status === 'playing' ? '• Canlı Oyun' : '• Bekleniyor'}
             </p>
           </div>
         </div>
-        
-        <div className="flex gap-2">
-          {currentRoom.status === 'waiting' && tablePlayers.length > 1 && (
-            <button onClick={startGame} className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors text-xs md:text-sm font-medium">
-              <Play size={16} /> <span className="hidden sm:inline">Oyunu Başlat</span>
+
+        {/* Header Actions */}
+        <div className="flex items-center gap-2">
+          {currentRoom.status === 'waiting' && (
+            <button 
+              onClick={startGame}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-md transition-colors"
+            >
+              <Play size={14} fill="currentColor" /> Başlat (Botlarla Doldur)
             </button>
           )}
-          <button onClick={leaveRoom} className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2 bg-slate-800 hover:bg-slate-700 text-red-400 rounded-lg transition-colors text-xs md:text-sm font-medium">
-            <LogOut size={16} /> <span className="hidden sm:inline">Ayrıl</span>
+
+          <button 
+            onClick={leaveRoom}
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 rounded-lg text-xs font-medium transition-colors"
+            title="Masadan Ayrıl"
+          >
+            <LogOut size={14} /> <span className="hidden sm:inline">Ayrıl</span>
           </button>
         </div>
       </div>
 
-      {/* Game Table Area */}
-      <div className="flex-1 relative flex flex-col justify-between p-2 md:p-4 overflow-hidden bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-900 to-slate-900">
-        
-        {/* Opponents Area (Top, Left, Right) */}
-        <div className="absolute top-2 md:top-4 left-1/2 -translate-x-1/2 flex flex-col items-center opacity-90">
-          {topOpponent ? (
-             <div className="mb-2 flex flex-col items-center">
-               <Avatar url={topOpponent.avatar} name={topOpponent.username} color={topOpponent.color} size={10} />
-               <span className="text-[10px] mt-1 bg-slate-800/80 px-2 py-0.5 rounded-full shadow-md">{topOpponent.username.split(" ")[0]}</span>
-             </div>
+      {/* Opponents Dashboard Bar (Top) - Compact, Mobile Optimized */}
+      <div className="bg-slate-900/60 border-b border-slate-800/80 px-2 py-1.5 flex items-center justify-around gap-1 shrink-0 z-10">
+        {/* Left Opponent */}
+        <div className={`flex items-center gap-1.5 p-1 rounded-lg transition-all ${currentTurnPlayer?.id === leftOpponent?.id ? 'ring-2 ring-emerald-400 bg-emerald-950/40' : 'opacity-80'}`}>
+          {leftOpponent ? (
+            <>
+              <div className="relative">
+                <Avatar url={leftOpponent.avatar || undefined} name={leftOpponent.username} color={leftOpponent.color || undefined} size={7} />
+                {currentTurnPlayer?.id === leftOpponent.id && (
+                  <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-emerald-400 rounded-full border-2 border-slate-900 animate-ping"></span>
+                )}
+              </div>
+              <div className="text-left">
+                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate">
+                  {leftOpponent.username}
+                </p>
+                <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
+                  🀄 {leftOpponent.tileCount} taş
+                  {leftOpponent.hasOpened && <span className="text-emerald-400 font-bold ml-1">({leftOpponent.openedSum}p)</span>}
+                </span>
+              </div>
+            </>
           ) : (
-            <div className="w-10 h-10 md:w-12 md:h-12 bg-slate-800 rounded-full mb-2 flex items-center justify-center text-slate-400 border-2 border-slate-700 text-xs">O3</div>
+            <div className="text-[10px] text-slate-500 py-1 px-2 border border-dashed border-slate-700 rounded-md">Boş Koltuk</div>
           )}
-          <div className="w-32 md:w-48 h-6 md:h-8 bg-amber-800/80 rounded-sm border-t-4 border-amber-700 shadow-xl flex gap-0.5 p-0.5 justify-center">
-            {Array.from({length: 14}).map((_, i) => <div key={i} className="w-1.5 md:w-2.5 h-full bg-slate-200 rounded-[1px]"></div>)}
+        </div>
+
+        {/* Top Opponent */}
+        <div className={`flex items-center gap-1.5 p-1 rounded-lg transition-all ${currentTurnPlayer?.id === topOpponent?.id ? 'ring-2 ring-emerald-400 bg-emerald-950/40' : 'opacity-80'}`}>
+          {topOpponent ? (
+            <>
+              <div className="relative">
+                <Avatar url={topOpponent.avatar || undefined} name={topOpponent.username} color={topOpponent.color || undefined} size={7} />
+                {currentTurnPlayer?.id === topOpponent.id && (
+                  <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-emerald-400 rounded-full border-2 border-slate-900 animate-ping"></span>
+                )}
+              </div>
+              <div className="text-left">
+                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate">
+                  {topOpponent.username}
+                </p>
+                <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
+                  🀄 {topOpponent.tileCount} taş
+                  {topOpponent.hasOpened && <span className="text-emerald-400 font-bold ml-1">({topOpponent.openedSum}p)</span>}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="text-[10px] text-slate-500 py-1 px-2 border border-dashed border-slate-700 rounded-md">Boş Koltuk</div>
+          )}
+        </div>
+
+        {/* Right Opponent */}
+        <div className={`flex items-center gap-1.5 p-1 rounded-lg transition-all ${currentTurnPlayer?.id === rightOpponent?.id ? 'ring-2 ring-emerald-400 bg-emerald-950/40' : 'opacity-80'}`}>
+          {rightOpponent ? (
+            <>
+              <div className="relative">
+                <Avatar url={rightOpponent.avatar || undefined} name={rightOpponent.username} color={rightOpponent.color || undefined} size={7} />
+                {currentTurnPlayer?.id === rightOpponent.id && (
+                  <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-emerald-400 rounded-full border-2 border-slate-900 animate-ping"></span>
+                )}
+              </div>
+              <div className="text-left">
+                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate">
+                  {rightOpponent.username}
+                </p>
+                <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
+                  🀄 {rightOpponent.tileCount} taş
+                  {rightOpponent.hasOpened && <span className="text-emerald-400 font-bold ml-1">({rightOpponent.openedSum}p)</span>}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="text-[10px] text-slate-500 py-1 px-2 border border-dashed border-slate-700 rounded-md">Boş Koltuk</div>
+          )}
+        </div>
+      </div>
+
+      {/* Main Board Surface (Green Felt Area) */}
+      <div className="flex-1 relative flex flex-col justify-between p-2 sm:p-3 overflow-hidden bg-[radial-gradient(ellipse_at_center,#134e34_0%,#09261a_70%,#03120b_100%)] border-y border-emerald-950/40 shadow-inner">
+        
+        {/* Live Action Ticker Banner */}
+        <div className="w-full flex justify-center z-10">
+          <div className="bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-full border border-slate-700/60 shadow flex items-center gap-2 max-w-md">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="text-[11px] sm:text-xs text-slate-300 font-medium truncate">
+              {currentRoom.status === 'playing' ? (
+                isMyTurn ? (
+                  canDraw ? "🎯 Sıra Sende! Ortadan veya yandan bir taş çekin." : "🎯 Sıra Sende! Istakandan bir taş seçip 'Taşı At'ın."
+                ) : (
+                  `${currentTurnPlayer?.username || 'Oyuncu'} düşünüyor...`
+                )
+              ) : (
+                "Oyunun başlaması için 'Başlat' butonuna basın."
+              )}
+            </span>
           </div>
         </div>
 
-        <div className="absolute left-2 md:left-4 top-1/2 -translate-y-1/2 flex flex-col items-center opacity-90 scale-75 md:scale-100 origin-left">
-           {leftOpponent ? (
-             <div className="mb-2 flex flex-col items-center">
-               <Avatar url={leftOpponent.avatar} name={leftOpponent.username} color={leftOpponent.color} size={12} />
-               <span className="text-[10px] mt-1 bg-slate-800/80 px-2 py-0.5 rounded-full shadow-md">{leftOpponent.username.split(" ")[0]}</span>
-             </div>
-           ) : (
-             <div className="w-12 h-12 bg-slate-800 rounded-full mb-2 flex items-center justify-center text-slate-400 border-2 border-slate-700">O2</div>
-           )}
-           <div className="w-8 h-40 bg-amber-800/80 rounded-sm border-l-4 border-amber-700 shadow-xl flex flex-col gap-0.5 p-0.5 justify-center">
-             {Array.from({length: 14}).map((_, i) => <div key={i} className="h-2.5 w-full bg-slate-200 rounded-[1px]"></div>)}
-           </div>
+        {/* Center Arena: Deck, Indicator, Discards, and 101 Melds */}
+        <div className="my-auto flex flex-col items-center justify-center gap-2 sm:gap-3 w-full max-w-3xl mx-auto z-10">
+          
+          {/* Deck & Discard Center Station */}
+          <div className="flex items-center justify-center gap-4 sm:gap-8 flex-wrap">
+            
+            {/* Draw Deck (Kapalı Deste) */}
+            <div className="flex flex-col items-center gap-1">
+              <button 
+                onClick={handleDrawFromDeck}
+                disabled={!canDraw}
+                className={`relative w-11 h-16 sm:w-14 sm:h-20 bg-amber-50 rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
+                  canDraw 
+                    ? 'ring-4 ring-emerald-400 hover:scale-105 border-emerald-500 cursor-pointer animate-pulse' 
+                    : 'border-slate-300 opacity-90 cursor-default'
+                }`}
+                title={canDraw ? "Ortadan Taş Çek" : "Deste"}
+              >
+                <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full border-2 border-red-700/60 flex items-center justify-center">
+                  <span className="text-[10px] sm:text-xs font-black text-red-700">OKEY</span>
+                </div>
+                <span className="text-[10px] font-bold text-slate-700 mt-1">
+                  {currentRoom.deckCount}
+                </span>
+                <span className="absolute -top-2 bg-slate-900 text-white text-[9px] px-1.5 py-0.2 rounded-full shadow">
+                  Deste
+                </span>
+              </button>
+            </div>
+
+            {/* Indicator Tile (Gösterge) */}
+            <div className="flex flex-col items-center gap-1">
+              {currentRoom.indicator ? (
+                <div className="relative">
+                  <TileView tile={currentRoom.indicator} size="md" />
+                  <span className="absolute -top-2 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
+                    Gösterge
+                  </span>
+                </div>
+              ) : (
+                <div className="w-11 h-16 sm:w-14 sm:h-20 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
+                  Yok
+                </div>
+              )}
+            </div>
+
+            {/* Okey Tile Indicator Badge */}
+            {currentRoom.okeyTile && (
+              <div className="flex flex-col items-center gap-1">
+                <div className="relative">
+                  <TileView tile={currentRoom.okeyTile} size="md" isOkeyBadge />
+                  <span className="absolute -top-2 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow flex items-center gap-0.5 whitespace-nowrap">
+                    <Sparkles size={10} /> OKEY
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Right Neighbor Discard (Yandan Çekilecek Taş) */}
+            <div className="flex flex-col items-center gap-1">
+              <button 
+                onClick={handleDrawFromDiscard}
+                disabled={!canDraw || !previousPlayerDiscard}
+                className={`relative rounded-lg transition-all ${
+                  canDraw && previousPlayerDiscard 
+                    ? 'ring-4 ring-blue-400 hover:scale-105 cursor-pointer' 
+                    : 'cursor-default opacity-80'
+                }`}
+                title={canDraw && previousPlayerDiscard ? "Yandan Atılan Taşı Al" : "Yandan Atılan"}
+              >
+                {previousPlayerDiscard ? (
+                  <>
+                    <TileView tile={previousPlayerDiscard} size="md" />
+                    <span className="absolute -top-2 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
+                      Yandan Al
+                    </span>
+                  </>
+                ) : (
+                  <div className="w-11 h-16 sm:w-14 sm:h-20 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
+                    Yan Boş
+                  </div>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* 101 Okey Opened Melds Field (Perler) */}
+          {currentRoom.gameMode === '101' && (
+            <div className="w-full max-h-24 sm:max-h-32 overflow-y-auto bg-emerald-950/40 border border-emerald-800/40 rounded-xl p-2 custom-scrollbar">
+              <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider mb-1 flex items-center justify-between">
+                <span>Yere Açılan Perler</span>
+                <span className="text-slate-400 text-[9px] font-normal">Per toplamı en az 101 olmalı</span>
+              </div>
+              {currentRoom.centerMelds.length === 0 ? (
+                <div className="text-center py-2 text-slate-400 text-xs">
+                  Henüz masaya per açılmadı. Istakanızda 101 barajını geçip serilerinizi açabilirsiniz.
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {currentRoom.centerMelds.map((meld) => (
+                    <div key={meld.id} className="bg-slate-900/80 p-1.5 rounded-lg border border-slate-700 flex items-center gap-1 shadow-sm">
+                      <span className="text-[9px] text-slate-400 font-bold mr-1">{meld.playerName.split(" ")[0]}:</span>
+                      <div className="flex gap-0.5">
+                        {meld.tiles.map((t, idx) => (
+                          <TileView key={idx} tile={t} size="sm" />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Game End Modal / Banner */}
+          {currentRoom.status === 'ended' && (
+            <div className="bg-slate-900/95 p-4 rounded-2xl border-2 border-emerald-500 shadow-2xl text-center max-w-sm w-full animate-in fade-in zoom-in">
+              <Trophy className="text-amber-400 w-12 h-12 mx-auto mb-2" />
+              <h3 className="text-lg font-black text-white">Oyun Bitti!</h3>
+              <p className="text-xs text-slate-300 mt-1 mb-3">{currentRoom.winningReason}</p>
+              <button 
+                onClick={startGame}
+                className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow transition-colors"
+              >
+                Yeni El Başlat
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="absolute right-2 md:right-4 top-1/2 -translate-y-1/2 flex flex-col items-center opacity-90 scale-75 md:scale-100 origin-right">
-           {rightOpponent ? (
-             <div className="mb-2 flex flex-col items-center">
-               <Avatar url={rightOpponent.avatar} name={rightOpponent.username} color={rightOpponent.color} size={12} />
-               <span className="text-[10px] mt-1 bg-slate-800/80 px-2 py-0.5 rounded-full shadow-md">{rightOpponent.username.split(" ")[0]}</span>
-             </div>
-           ) : (
-             <div className="w-12 h-12 bg-slate-800 rounded-full mb-2 flex items-center justify-center text-slate-400 border-2 border-slate-700">O4</div>
-           )}
-           <div className="w-8 h-40 bg-amber-800/80 rounded-sm border-r-4 border-amber-700 shadow-xl flex flex-col gap-0.5 p-0.5 justify-center">
-             {Array.from({length: 14}).map((_, i) => <div key={i} className="h-2.5 w-full bg-slate-200 rounded-[1px]"></div>)}
-           </div>
+        {/* Player Action Buttons Toolbar */}
+        <div className="w-full max-w-3xl mx-auto flex items-center justify-between gap-1 sm:gap-2 px-1 z-10">
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={handleSortRuns}
+              className="px-2 sm:px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 shadow"
+              title="Taşları renklere ve sayılara göre serilere diz"
+            >
+              <Layers size={12} /> <span className="hidden xs:inline">Seri</span> Diz
+            </button>
+            <button 
+              onClick={handleSortPairs}
+              className="px-2 sm:px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 shadow"
+              title="Taşları çiftlere göre diz"
+            >
+              <CheckCircle2 size={12} /> <span className="hidden xs:inline">Çift</span> Diz
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {currentRoom.gameMode === '101' && currentRoom.status === 'playing' && (
+              <button 
+                onClick={handleOpenHand101}
+                disabled={!isMyTurn}
+                className={`px-2.5 sm:px-3.5 py-1 text-[11px] sm:text-xs font-bold rounded-lg shadow transition-colors ${
+                  isMyTurn ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                Eli Aç (101)
+              </button>
+            )}
+
+            {selectedSlot !== null && canDiscard && (
+              <button 
+                onClick={() => handleDiscard(selectedSlot)}
+                className="px-3 sm:px-4 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] sm:text-xs font-bold rounded-lg shadow animate-pulse flex items-center gap-1"
+              >
+                <ArrowDown size={12} /> Seçiliyi At
+              </button>
+            )}
+
+            {currentRoom.status === 'playing' && isMyTurn && (
+              <button 
+                onClick={handleDeclareWin}
+                className="px-2 sm:px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[11px] sm:text-xs font-bold rounded-lg shadow"
+                title="Eli bitirdiğini bildir"
+              >
+                Bitti!
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Center Area */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4 w-full px-12 md:px-32">
-           {currentRoom.status === 'playing' ? (
-             <div className="flex flex-col items-center gap-6 w-full">
-               <div className="flex gap-4 md:gap-8">
-                 {/* Center Deck */}
-                 <div onClick={drawTile} className="relative w-10 h-14 md:w-14 md:h-20 bg-slate-200 rounded-md shadow-2xl cursor-pointer hover:-translate-y-1 transition-transform border border-slate-300 flex items-center justify-center" title="Taş Çek">
-                   <div className="absolute inset-1 border-2 border-dashed border-slate-400 rounded-sm opacity-50"></div>
-                   <div className="w-10 h-14 md:w-14 md:h-20 bg-slate-200 rounded-md absolute -bottom-1 -right-1 -z-10 border border-slate-300"></div>
-                   <span className="text-slate-400 font-black text-sm md:text-xl rotate-45 opacity-50">Okey</span>
-                 </div>
-                 {/* Indicator Tile (Gösterge) */}
-                 <div className="relative w-10 h-14 md:w-14 md:h-20 bg-white rounded-md shadow-xl border border-slate-200 flex flex-col items-center justify-center opacity-90">
-                   {currentRoom.indicator ? (
-                     <>
-                        <span className={`text-sm md:text-lg font-bold ${currentRoom.indicator.color === 'red' ? 'text-red-600' : currentRoom.indicator.color === 'blue' ? 'text-blue-600' : currentRoom.indicator.color === 'black' ? 'text-slate-900' : 'text-amber-500'}`}>{currentRoom.indicator.number}</span>
-                        <div className={`w-3 h-3 md:w-4 md:h-4 rounded-full ${currentRoom.indicator.color === 'red' ? 'bg-red-600' : currentRoom.indicator.color === 'blue' ? 'bg-blue-600' : currentRoom.indicator.color === 'black' ? 'bg-slate-900' : 'bg-amber-500'}`}></div>
-                     </>
-                   ) : (
-                     <div className="text-slate-400 text-xs">Yok</div>
-                   )}
-                   <div className="absolute -top-3 md:-top-4 px-2 py-0.5 bg-slate-800 text-[9px] md:text-xs text-white rounded-full shadow-md whitespace-nowrap">Gösterge</div>
-                 </div>
-               </div>
+        {/* The Istaka (Player Rack) - Responsive, Scaled for Mobile & Tablet */}
+        <div className="w-full max-w-4xl mx-auto z-10 origin-bottom pt-1">
+          <div className="bg-gradient-to-b from-[#7a3e14] via-[#5c2b09] to-[#381a04] p-1 sm:p-2.5 rounded-t-2xl border-t-2 border-amber-600/80 shadow-2xl relative">
+            
+            {/* Top Row of Istaka */}
+            <div className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-0.5 sm:gap-1 pb-1 border-b border-[#381a04]">
+              {rack.slice(0, 15).map((tile, idx) => (
+                <RackSlot 
+                  key={idx}
+                  slotIndex={idx}
+                  tile={tile}
+                  isSelected={selectedSlot === idx}
+                  onClick={() => handleSlotClick(idx)}
+                  onDragStart={(e) => handleDragStart(e, idx)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDropOnSlot(e, idx)}
+                />
+              ))}
+            </div>
 
-               {/* 101 Melds Area */}
-               {currentRoom.gameMode === '101' && (
-                 <div className="w-full h-32 md:h-48 border-2 border-dashed border-emerald-700/50 rounded-2xl bg-emerald-950/30 flex flex-col items-center justify-center relative backdrop-blur-sm p-2 overflow-y-auto">
-                   <div className="absolute top-2 text-emerald-700/80 text-xs md:text-sm font-semibold uppercase tracking-wider">Yere Açılan Perler</div>
-                   <div className="text-slate-500 text-xs md:text-sm mt-4 text-center px-4">
-                     Henüz per açılmadı.<br/>(Istakanızda serilerinizi hazırlayıp buraya açabilirsiniz.)
-                   </div>
-                 </div>
-               )}
-             </div>
-           ) : (
-             <div className="bg-slate-900/60 backdrop-blur-md p-6 rounded-2xl border border-slate-700 shadow-2xl text-center">
-               <h3 className="text-xl font-bold text-white mb-2">Oyuncular Bekleniyor</h3>
-               <p className="text-slate-400 text-sm mb-4">Masanın dolmasını veya kurucunun başlatmasını bekleyin.</p>
-               <div className="flex justify-center gap-2">
-                 {Array.from({length: 4}).map((_, i) => (
-                   <div key={i} className={`w-3 h-3 rounded-full ${i < tablePlayers.length ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]' : 'bg-slate-700'}`}></div>
-                 ))}
-               </div>
-             </div>
-           )}
+            {/* Bottom Row of Istaka */}
+            <div className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-0.5 sm:gap-1 pt-1">
+              {rack.slice(15, 30).map((tile, idx) => {
+                const realIdx = idx + 15;
+                return (
+                  <RackSlot 
+                    key={realIdx}
+                    slotIndex={realIdx}
+                    tile={tile}
+                    isSelected={selectedSlot === realIdx}
+                    onClick={() => handleSlotClick(realIdx)}
+                    onDragStart={(e) => handleDragStart(e, realIdx)}
+                    onDragOver={handleDragOver}
+                    onDrop={(e) => handleDropOnSlot(e, realIdx)}
+                  />
+                );
+              })}
+            </div>
+          </div>
         </div>
 
-        {/* Bottom Area: Player Rack & Discard */}
-        <div className="mt-auto flex items-end justify-center gap-2 md:gap-4 pb-2 w-full origin-bottom">
-           
-           {/* Player Rack */}
-           <div className="bg-[#603813] p-1.5 md:p-3 rounded-lg border-b-4 md:border-b-8 border-[#3b2109] shadow-2xl overflow-x-auto custom-scrollbar relative flex-1 max-w-[850px]">
-             <div className="absolute top-0 left-0 w-full h-1.5 md:h-2 bg-[#7a4819]"></div>
-             
-             <div className="grid grid-rows-2 gap-1 md:gap-2 relative z-10 pt-1 md:pt-2 min-w-[max-content] md:min-w-0">
-               {/* Top Row */}
-               <div className="flex gap-0.5 md:gap-1.5 h-[50px] md:h-[90px]">
-                 {rack.slice(0, 15).map((slot) => (
-                   <RackSlotComponent key={slot.index} slot={slot} onDragStart={handleDragStart} onDragOver={handleDragOver} onDrop={handleDropOnRack} />
-                 ))}
-               </div>
-               
-               {/* Bottom Row */}
-               <div className="flex gap-0.5 md:gap-1.5 h-[50px] md:h-[90px]">
-                 {rack.slice(15, 30).map((slot) => (
-                   <RackSlotComponent key={slot.index} slot={slot} onDragStart={handleDragStart} onDragOver={handleDragOver} onDrop={handleDropOnRack} />
-                 ))}
-               </div>
-             </div>
-             
-             {/* 101 Hand Buttons */}
-             {currentRoom.gameMode === '101' && currentRoom.status === 'playing' && (
-               <div className="absolute -top-12 md:-top-14 right-0 flex gap-2">
-                 <button className="px-3 md:px-5 py-1.5 md:py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs md:text-sm font-bold rounded-t-xl shadow-lg transition-colors">Ortaya Aç</button>
-                 <button className="px-3 md:px-5 py-1.5 md:py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs md:text-sm font-bold rounded-t-xl shadow-lg transition-colors">Çifte Git</button>
-               </div>
-             )}
-           </div>
-
-           {/* Discard Pile (Yere Atılan) */}
-           <div 
-             className="w-12 h-16 md:w-20 md:h-28 bg-slate-800/80 rounded-xl border-2 border-dashed border-slate-600 flex items-center justify-center relative shrink-0 transition-transform"
-             onDragOver={handleDragOver}
-             onDrop={handleDropOnDiscard}
-           >
-             {currentRoom.discardPile.length === 0 ? (
-               <span className="text-slate-500 text-[10px] md:text-sm text-center font-medium leading-tight">Buraya<br/>At</span>
-             ) : (
-               <div className="absolute scale-[0.6] md:scale-90 pointer-events-none">
-                 <TileComponent tile={currentRoom.discardPile[currentRoom.discardPile.length - 1]} />
-                 <span className="absolute -top-3 -right-3 bg-red-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center shadow-lg z-10 pointer-events-auto">
-                   {currentRoom.discardPile.length}
-                 </span>
-               </div>
-             )}
-           </div>
-        </div>
       </div>
     </div>
   );
 }
 
-// Subcomponents
-function RackSlotComponent({ slot, onDragStart, onDragOver, onDrop }: { slot: RackSlot, onDragStart: (e: React.DragEvent, index: number) => void, onDragOver: (e: React.DragEvent) => void, onDrop: (e: React.DragEvent, index: number) => void }) {
+// Subcomponents: Single Rack Slot
+function RackSlot({ 
+  slotIndex, 
+  tile, 
+  isSelected, 
+  onClick, 
+  onDragStart, 
+  onDragOver, 
+  onDrop 
+}: { 
+  slotIndex: number; 
+  tile: Tile | null; 
+  isSelected: boolean; 
+  onClick: () => void; 
+  onDragStart: (e: React.DragEvent) => void; 
+  onDragOver: (e: React.DragEvent) => void; 
+  onDrop: (e: React.DragEvent) => void; 
+}) {
   return (
     <div 
-      className="w-[28px] md:w-[50px] h-full bg-[#4a2a0a]/50 rounded-sm border border-[#3b2109]/30 flex items-center justify-center relative shadow-inner"
+      onClick={onClick}
       onDragOver={onDragOver}
-      onDrop={(e) => onDrop(e, slot.index)}
+      onDrop={onDrop}
+      className={`aspect-[2/3] max-w-[44px] bg-[#3a1a03]/80 rounded-[3px] sm:rounded-sm border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-transform select-none ${
+        isSelected ? 'ring-2 ring-emerald-400 -translate-y-1.5 sm:-translate-y-2.5 z-20 shadow-xl' : ''
+      }`}
     >
-      {slot.tile && <TileComponent tile={slot.tile} draggable onDragStart={(e) => onDragStart(e, slot.index)} />}
+      {tile && (
+        <TileView 
+          tile={tile} 
+          size="rack" 
+          draggable 
+          onDragStart={onDragStart} 
+        />
+      )}
     </div>
   );
 }
 
-function TileComponent({ tile, draggable, onDragStart }: { tile: Tile, draggable?: boolean, onDragStart?: (e: React.DragEvent) => void }) {
-  const colorMap = { 'red': 'text-red-600', 'blue': 'text-blue-600', 'black': 'text-slate-900', 'yellow': 'text-amber-500' };
+// Subcomponent: High Quality Okey Tile Display
+function TileView({ 
+  tile, 
+  size = 'rack',
+  draggable = false, 
+  onDragStart,
+  isOkeyBadge = false
+}: { 
+  tile: Tile; 
+  size?: 'sm' | 'md' | 'rack'; 
+  draggable?: boolean; 
+  onDragStart?: (e: React.DragEvent) => void;
+  isOkeyBadge?: boolean;
+}) {
+  const colorTextMap: Record<string, string> = {
+    red: 'text-red-600',
+    blue: 'text-blue-600',
+    black: 'text-slate-950',
+    yellow: 'text-amber-500',
+    fake: 'text-slate-800'
+  };
+
+  const colorBgMap: Record<string, string> = {
+    red: 'bg-red-600',
+    blue: 'bg-blue-600',
+    black: 'bg-slate-950',
+    yellow: 'bg-amber-500',
+    fake: 'bg-slate-800'
+  };
+
+  // Sizing styles
+  const sizeClasses = {
+    sm: 'w-6 h-9 text-xs rounded-[2px]',
+    md: 'w-11 h-16 sm:w-14 sm:h-20 text-base sm:text-2xl rounded-md',
+    rack: 'w-full h-full text-[13px] xs:text-sm sm:text-base md:text-xl rounded-[2px] sm:rounded-sm'
+  }[size];
 
   if (tile.color === 'fake') {
     return (
       <div 
         draggable={draggable}
         onDragStart={onDragStart}
-        className="w-[26px] h-[46px] md:w-[46px] md:h-[70px] bg-[#FDFBF7] rounded shadow-[0_2px_0_0_#d1d5db,0_3px_3px_rgba(0,0,0,0.4)] md:shadow-[0_4px_0_0_#d1d5db,0_5px_5px_rgba(0,0,0,0.4)] border border-slate-300 flex items-center justify-center cursor-grab active:cursor-grabbing hover:-translate-y-1 transition-transform relative"
+        className={`${sizeClasses} bg-[#fefae0] border border-slate-300 shadow flex flex-col items-center justify-center relative cursor-grab active:cursor-grabbing font-black`}
       >
-        <div className="w-4 h-4 md:w-8 md:h-8 rounded-full border-2 md:border-4 border-slate-800 flex items-center justify-center">
-           <div className="w-1.5 h-1.5 md:w-3 md:h-3 rounded-full bg-slate-800"></div>
+        <div className="w-2.5 h-2.5 sm:w-4 sm:h-4 rounded-full border-2 border-slate-900 flex items-center justify-center">
+          <div className="w-1 h-1 bg-slate-900 rounded-full"></div>
         </div>
-        <div className="absolute inset-0.5 md:inset-1 rounded-[1px] md:rounded-sm border border-slate-100"></div>
+        <span className="text-[7px] sm:text-[9px] text-slate-600 font-bold mt-0.5">Sahte</span>
       </div>
     );
   }
@@ -460,12 +889,15 @@ function TileComponent({ tile, draggable, onDragStart }: { tile: Tile, draggable
     <div 
       draggable={draggable}
       onDragStart={onDragStart}
-      className={`w-[26px] h-[46px] md:w-[46px] md:h-[70px] bg-[#FDFBF7] rounded shadow-[0_2px_0_0_#d1d5db,0_3px_3px_rgba(0,0,0,0.4)] md:shadow-[0_4px_0_0_#d1d5db,0_5px_5px_rgba(0,0,0,0.4)] border border-slate-300 flex flex-col items-center justify-center gap-0.5 md:gap-1 cursor-grab active:cursor-grabbing hover:-translate-y-1 transition-transform relative ${colorMap[tile.color]}`}
+      className={`${sizeClasses} bg-[#fefae0] border border-slate-300 shadow flex flex-col items-center justify-center relative cursor-grab active:cursor-grabbing font-black leading-none select-none ${colorTextMap[tile.color] || 'text-slate-900'}`}
     >
-      <span className="text-[16px] md:text-3xl font-black leading-none mt-0.5 md:mt-1">{tile.number}</span>
-      <div className={`w-1.5 h-1.5 md:w-3 md:h-3 rounded-full ${tile.color === 'red' ? 'bg-red-600' : tile.color === 'blue' ? 'bg-blue-600' : tile.color === 'black' ? 'bg-slate-900' : 'bg-amber-500'}`}></div>
-      <div className="absolute inset-0.5 md:inset-1 rounded-[1px] md:rounded-sm border border-slate-100"></div>
+      <span className="mt-0.5">{tile.number}</span>
+      <div className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full mt-0.5 sm:mt-1 ${colorBgMap[tile.color] || 'bg-slate-900'}`}></div>
+      {tile.isOkey && (
+        <span className="absolute -top-1 -right-1 text-[8px] sm:text-[10px]" title="Okey">
+          ⭐
+        </span>
+      )}
     </div>
   );
 }
-

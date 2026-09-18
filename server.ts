@@ -10,6 +10,14 @@ import fs from "fs";
 import os from "os";
 import { createClient } from "@libsql/client";
 import dotenv from "dotenv";
+import { 
+  generateDeck, 
+  check101Open, 
+  canAddToMeld, 
+  isSerialMeld,
+  Tile, 
+  TableMeld 
+} from "./src/utils/okeyEngine.ts";
 
 dotenv.config();
 
@@ -50,6 +58,9 @@ async function initDb() {
     token TEXT,
     last_seen TEXT
   )`);
+  try {
+    await client.execute(`ALTER TABLE users ADD COLUMN okey_wins INTEGER DEFAULT 0`);
+  } catch (e) {}
   await client.execute(`CREATE TABLE IF NOT EXISTS friends (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user1 INTEGER,
@@ -343,24 +354,112 @@ async function startServer() {
   const chatRead = new Map<number, Map<number, number>>();
   
   const okeyRooms = new Map<string, any>();
-  
-  const generateDeck = () => {
-    const colors = ['red', 'blue', 'black', 'yellow'];
-    const deck = [];
-    let idCounter = 1;
-    for (const color of colors) {
-      for (let num = 1; num <= 13; num++) {
-        deck.push({ id: `t${idCounter++}`, number: num, color });
-        deck.push({ id: `t${idCounter++}`, number: num, color });
+
+  const getSanitizedRoom = (room: any) => {
+    return {
+      id: room.id,
+      name: room.name,
+      gameMode: room.gameMode,
+      status: room.status,
+      creatorId: room.creatorId,
+      players: room.players.map((p: any) => ({
+        id: p.id,
+        username: p.username,
+        avatar: p.avatar,
+        color: p.color,
+        isBot: !!p.isBot,
+        tileCount: p.hand ? p.hand.length : 0,
+        hasOpened: !!p.hasOpened,
+        hasOpenedPairs: !!p.hasOpenedPairs,
+        openedSum: p.openedSum || 0,
+        discardPile: p.discardPile || [],
+        score: p.score || 0
+      })),
+      deckCount: room.deck ? room.deck.length : 0,
+      indicator: room.indicator,
+      okeyTile: room.okeyTile,
+      currentTurn: room.currentTurn || 0,
+      turnPhase: room.turnPhase || 'draw',
+      centerMelds: room.centerMelds || [],
+      winnerId: room.winnerId,
+      winningReason: room.winningReason,
+      lastActionMessage: room.lastActionMessage
+    };
+  };
+
+  const broadcastOkeyRoom = (roomId: string) => {
+    const room = okeyRooms.get(roomId);
+    if (!room) return;
+    const publicState = getSanitizedRoom(room);
+    io.to(`okey_${roomId}`).emit("okey_state", publicState);
+    for (const p of room.players) {
+      if (!p.isBot) {
+        const sockId = onlineUsers.get(Number(p.id));
+        if (sockId) {
+          io.to(sockId).emit("okey_hand", p.hand || []);
+        }
       }
     }
-    deck.push({ id: `t${idCounter++}`, number: 0, color: 'fake' });
-    deck.push({ id: `t${idCounter++}`, number: 0, color: 'fake' });
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    return deck;
+  };
+
+  const runBotTurn = (roomId: string) => {
+    const room = okeyRooms.get(roomId);
+    if (!room || room.status !== 'playing') return;
+    const currPlayer = room.players[room.currentTurn];
+    if (!currPlayer || !currPlayer.isBot) return;
+
+    clearTimeout(room.botTimeout);
+    room.botTimeout = setTimeout(() => {
+      const r = okeyRooms.get(roomId);
+      if (!r || r.status !== 'playing') return;
+      const bot = r.players[r.currentTurn];
+      if (!bot || !bot.isBot) return;
+
+      if (r.turnPhase === 'draw') {
+        if (r.deck.length > 0) {
+          const drawn = r.deck.pop();
+          if (drawn) {
+            bot.hand.push(drawn);
+            r.lastActionMessage = `${bot.username} desteden taş çekti.`;
+          }
+        }
+        r.turnPhase = 'discard';
+        broadcastOkeyRoom(roomId);
+      }
+
+      r.botTimeout = setTimeout(() => {
+        const r2 = okeyRooms.get(roomId);
+        if (!r2 || r2.status !== 'playing') return;
+        const bot2 = r2.players[r2.currentTurn];
+        if (!bot2 || !bot2.isBot) return;
+
+        let discardIdx = bot2.hand.findIndex((t: any) => !t.isOkey);
+        if (discardIdx === -1) discardIdx = 0;
+        const discarded = bot2.hand.splice(discardIdx, 1)[0];
+        if (discarded) {
+          bot2.discardPile.push(discarded);
+          const colorText = discarded.color === 'red' ? 'Kırmızı' : discarded.color === 'blue' ? 'Mavi' : discarded.color === 'black' ? 'Siyah' : 'Sarı';
+          r2.lastActionMessage = `${bot2.username} ${discarded.number} ${colorText} attı.`;
+        }
+
+        if (bot2.hand.length === 0) {
+          r2.status = 'ended';
+          r2.winnerId = bot2.id;
+          r2.winningReason = `${bot2.username} elini bitirdi ve kazandı!`;
+          broadcastOkeyRoom(roomId);
+          return;
+        }
+
+        r2.currentTurn = (r2.currentTurn + 1) % r2.players.length;
+        r2.turnPhase = 'draw';
+        broadcastOkeyRoom(roomId);
+
+        if (r2.players[r2.currentTurn]?.isBot) {
+          runBotTurn(roomId);
+        }
+      }, 1200);
+
+    }, 1000);
   };
 
   io.use(async (socket, next) => {
@@ -763,7 +862,14 @@ async function startServer() {
     });
 
     socket.on("send_message", async (data) => {
-      const { receiver, type, content, reply_to, file_name, file_size } = data;
+      let { receiver, type, content, reply_to, file_name, file_size } = data;
+      if (type === "text") {
+        if (!content || typeof content !== "string" || !content.trim()) return;
+        content = content.trim();
+        if (content.length > 1000) {
+          content = content.slice(0, 1000);
+        }
+      }
       const res = await client.execute({
         sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
         args: [user.id, receiver, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
@@ -827,7 +933,14 @@ async function startServer() {
     });
 
     socket.on("send_global_message", async (data) => {
-      const { type, content, reply_to, file_name, file_size } = data;
+      let { type, content, reply_to, file_name, file_size } = data;
+      if (type === "text") {
+        if (!content || typeof content !== "string" || !content.trim()) return;
+        content = content.trim();
+        if (content.length > 1000) {
+          content = content.slice(0, 1000);
+        }
+      }
       const res = await client.execute({
         sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, '[]', ?, ?, ?)",
         args: [user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
@@ -835,6 +948,15 @@ async function startServer() {
       const newMsgRes = await client.execute({ sql: "SELECT * FROM global_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const popMsg = await populateMessage(newMsgRes.rows[0], "global");
       io.emit("new_global_message", popMsg);
+    });
+
+    socket.on("clear_global_chat", async () => {
+      try {
+        await client.execute("DELETE FROM global_messages");
+        io.emit("global_chat_cleared");
+      } catch (err) {
+        console.error("clear_global_chat error:", err);
+      }
     });
 
     // Groups
@@ -875,7 +997,14 @@ async function startServer() {
     });
 
     socket.on("send_group_message", async (data) => {
-      const { group_id, type, content, reply_to, file_name, file_size } = data;
+      let { group_id, type, content, reply_to, file_name, file_size } = data;
+      if (type === "text") {
+        if (!content || typeof content !== "string" || !content.trim()) return;
+        content = content.trim();
+        if (content.length > 1000) {
+          content = content.slice(0, 1000);
+        }
+      }
       const res = await client.execute({
         sql: "INSERT INTO group_messages (group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
         args: [group_id, user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
@@ -999,67 +1128,352 @@ async function startServer() {
       emitRooms();
     });
 
+    socket.on("get_my_okey_room", () => {
+      let targetRoomId = socket.data.currentOkeyRoom;
+      if (!targetRoomId) {
+        for (const [id, r] of okeyRooms.entries()) {
+          if (r.players.some((p: any) => p.id === user.id)) {
+            targetRoomId = id;
+            break;
+          }
+        }
+      }
+
+      if (targetRoomId) {
+        const room = okeyRooms.get(targetRoomId);
+        if (room) {
+          socket.data.currentOkeyRoom = targetRoomId;
+          socket.join(`okey_${targetRoomId}`);
+          socket.emit("okey_state", getSanitizedRoom(room));
+          const player = room.players.find((p: any) => p.id === user.id);
+          if (player) {
+            socket.emit("okey_hand", player.hand || []);
+          }
+        }
+      }
+    });
+
     socket.on("create_okey_room", ({ name, gameMode }) => {
       const roomId = `room_${Date.now()}`;
       okeyRooms.set(roomId, {
         id: roomId,
-        name,
-        gameMode,
-        players: [],
+        name: name || "Eğlencelik Masa",
+        gameMode: gameMode || "101",
+        status: "waiting",
+        creatorId: user.id,
+        players: [{
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          color: user.color,
+          isBot: false,
+          hand: [],
+          openedMelds: [],
+          openedSum: 0,
+          hasOpened: false,
+          hasOpenedPairs: false,
+          discardPile: [],
+          score: 0
+        }],
         deck: [],
-        discardPile: [],
         indicator: null,
+        okeyTile: null,
+        currentTurn: 0,
+        turnPhase: "draw",
         centerMelds: [],
-        status: 'waiting'
+        winnerId: null,
+        winningReason: null,
+        lastActionMessage: `${user.username} masayı kurdu.`
       });
+      socket.join(`okey_${roomId}`);
+      socket.data.currentOkeyRoom = roomId;
       emitRooms();
       socket.emit("okey_room_created", roomId);
+      broadcastOkeyRoom(roomId);
     });
 
     socket.on("join_okey", (roomId) => {
-      if (!roomId) roomId = "global"; // fallback
+      if (!roomId) return;
       let room = okeyRooms.get(roomId);
-      if (!room && roomId === "global") {
-        room = {
-          id: "global",
-          name: "Genel Masa",
-          gameMode: "101",
-          players: [],
-          deck: [],
-          discardPile: [],
-          indicator: null,
-          centerMelds: [],
-          status: 'waiting'
-        };
-        okeyRooms.set("global", room);
-      }
-      if (room && !room.players.find((p: any) => p.id === user.id) && room.players.length < 4) {
+      if (!room) return;
+
+      const existingPlayer = room.players.find((p: any) => p.id === user.id);
+      if (!existingPlayer && room.players.length < 4 && room.status === 'waiting') {
         room.players.push({
           id: user.id,
           username: user.username,
           avatar: user.avatar,
-          color: user.color
+          color: user.color,
+          isBot: false,
+          hand: [],
+          openedMelds: [],
+          openedSum: 0,
+          hasOpened: false,
+          hasOpenedPairs: false,
+          discardPile: [],
+          score: 0
         });
-        socket.join(`okey_${roomId}`);
-        socket.data.currentOkeyRoom = roomId;
-        io.to(`okey_${roomId}`).emit("okey_state", room);
-        emitRooms();
       }
+
+      socket.join(`okey_${roomId}`);
+      socket.data.currentOkeyRoom = roomId;
+      broadcastOkeyRoom(roomId);
+      emitRooms();
     });
 
     socket.on("start_okey_game", (roomId) => {
       const room = okeyRooms.get(roomId);
-      if (room && room.players.length > 1 && room.status === 'waiting') {
-        room.status = 'playing';
-        room.deck = generateDeck();
-        room.discardPile = [];
-        room.indicator = room.deck.pop();
-        
-        // Deal tiles (skip in pure UI mockup, but let's send event)
-        io.to(`okey_${roomId}`).emit("okey_game_started", room);
-        io.to(`okey_${roomId}`).emit("okey_state", room);
-        emitRooms();
+      if (!room || room.status !== 'waiting') return;
+
+      // Auto-fill empty seats with Bots up to 4 players so user can always play!
+      const botNames = [
+        { username: 'Zeynep (Bot)', color: '#ec4899' },
+        { username: 'Ahmet (Bot)', color: '#3b82f6' },
+        { username: 'Mehmet (Bot)', color: '#10b981' }
+      ];
+      let bIdx = 0;
+      while (room.players.length < 4 && bIdx < botNames.length) {
+        const b = botNames[bIdx];
+        room.players.push({
+          id: -100 - (bIdx + 1),
+          username: b.username,
+          avatar: null,
+          color: b.color,
+          isBot: true,
+          hand: [],
+          openedMelds: [],
+          openedSum: 0,
+          hasOpened: false,
+          hasOpenedPairs: false,
+          discardPile: [],
+          score: 0
+        });
+        bIdx++;
       }
+
+      // Generate 106 shuffled deck & Okey
+      const { deck, indicator, okeyTile } = generateDeck();
+      room.deck = deck;
+      room.indicator = indicator;
+      room.okeyTile = okeyTile;
+      room.status = 'playing';
+      room.centerMelds = [];
+      room.currentTurn = 0;
+      room.turnPhase = 'discard'; // Starting player already has 1 extra tile!
+      room.lastActionMessage = `Oyun başladı! Gösterge: ${indicator.number} (${indicator.color}). Okey: ${okeyTile.number} (${okeyTile.color}).`;
+
+      // Deal tiles
+      const is101 = room.gameMode === '101';
+      const firstCount = is101 ? 22 : 15;
+      const otherCount = is101 ? 21 : 14;
+
+      for (let i = 0; i < room.players.length; i++) {
+        const count = i === 0 ? firstCount : otherCount;
+        room.players[i].hand = room.deck.splice(0, count);
+        room.players[i].discardPile = [];
+        room.players[i].hasOpened = false;
+        room.players[i].openedSum = 0;
+      }
+
+      broadcastOkeyRoom(roomId);
+      emitRooms();
+
+      if (room.players[0].isBot) {
+        runBotTurn(roomId);
+      }
+    });
+
+    socket.on("okey_draw", ({ source }: { source: 'deck' | 'discard' }) => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (!roomId) return;
+      const room = okeyRooms.get(roomId);
+      if (!room || room.status !== 'playing') return;
+
+      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIdx === -1 || room.currentTurn !== playerIdx || room.turnPhase !== 'draw') {
+        return socket.emit("okey_error", "Şu an taş çekme sırası sizde değil.");
+      }
+
+      const player = room.players[playerIdx];
+      if (source === 'deck') {
+        if (room.deck.length === 0) {
+          return socket.emit("okey_error", "Destede çekilecek taş kalmadı!");
+        }
+        const drawn = room.deck.pop();
+        if (drawn) {
+          player.hand.push(drawn);
+          room.lastActionMessage = `${user.username} desteden taş çekti.`;
+        }
+      } else if (source === 'discard') {
+        const prevIdx = (playerIdx + room.players.length - 1) % room.players.length;
+        const prevPlayer = room.players[prevIdx];
+        if (!prevPlayer || !prevPlayer.discardPile || prevPlayer.discardPile.length === 0) {
+          return socket.emit("okey_error", "Yandan çekilebilecek taş bulunmuyor.");
+        }
+        const drawn = prevPlayer.discardPile.pop();
+        if (drawn) {
+          player.hand.push(drawn);
+          room.lastActionMessage = `${user.username} yandan atılan taşı çekti.`;
+        }
+      }
+
+      room.turnPhase = 'discard';
+      broadcastOkeyRoom(roomId);
+    });
+
+    socket.on("okey_discard", (tile: any) => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (!roomId) return;
+      const room = okeyRooms.get(roomId);
+      if (!room || room.status !== 'playing') return;
+
+      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIdx === -1 || room.currentTurn !== playerIdx || room.turnPhase !== 'discard') {
+        return socket.emit("okey_error", "Şu an taş atma sırası sizde değil.");
+      }
+
+      const player = room.players[playerIdx];
+      const handIdx = player.hand.findIndex((t: any) => t.id === tile.id);
+      if (handIdx === -1) {
+        return socket.emit("okey_error", "Atmak istediğiniz taş elinizde yok.");
+      }
+
+      const discarded = player.hand.splice(handIdx, 1)[0];
+      player.discardPile.push(discarded);
+      const colorText = discarded.color === 'red' ? 'Kırmızı' : discarded.color === 'blue' ? 'Mavi' : discarded.color === 'black' ? 'Siyah' : 'Sarı';
+      room.lastActionMessage = `${user.username} ${discarded.number} ${colorText} attı.`;
+
+      // Check win if hand is 0
+      if (player.hand.length === 0) {
+        room.status = 'ended';
+        room.winnerId = user.id;
+        room.winningReason = `${user.username} elini bitirdi ve oyunu kazandı! 🏆`;
+        client.execute({
+          sql: "UPDATE users SET okey_wins = COALESCE(okey_wins, 0) + 1 WHERE id = ?",
+          args: [user.id]
+        }).catch(console.error);
+        broadcastOkeyRoom(roomId);
+        emitRooms();
+        return;
+      }
+
+      // Next player's turn
+      room.currentTurn = (room.currentTurn + 1) % room.players.length;
+      room.turnPhase = 'draw';
+      broadcastOkeyRoom(roomId);
+
+      if (room.players[room.currentTurn]?.isBot) {
+        runBotTurn(roomId);
+      }
+    });
+
+    socket.on("okey_open_hand", (melds: any[]) => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (!roomId) return;
+      const room = okeyRooms.get(roomId);
+      if (!room || room.status !== 'playing' || room.gameMode !== '101') return;
+
+      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIdx === -1 || room.currentTurn !== playerIdx) {
+        return socket.emit("okey_error", "Sıra sizde değil.");
+      }
+
+      const player = room.players[playerIdx];
+      const validation = check101Open(melds, room.okeyTile);
+      if (!validation.valid) {
+        return socket.emit("okey_error", validation.error || "Açılan seriler kurallara uymuyor.");
+      }
+
+      // Verify all tiles are actually in player's hand
+      const usedIds = new Set<string>();
+      for (const meld of melds) {
+        for (const t of meld) {
+          if (usedIds.has(t.id) || !player.hand.some((h: any) => h.id === t.id)) {
+            return socket.emit("okey_error", "Geçersiz taş seçimi.");
+          }
+          usedIds.add(t.id);
+        }
+      }
+
+      player.hand = player.hand.filter((t: any) => !usedIds.has(t.id));
+      for (const meld of melds) {
+        room.centerMelds.push({
+          id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          playerId: user.id,
+          playerName: user.username,
+          type: validation.isPairOpener ? 'pair' : 'serial',
+          tiles: meld
+        });
+      }
+
+      player.hasOpened = true;
+      player.hasOpenedPairs = validation.isPairOpener;
+      player.openedSum = (player.openedSum || 0) + validation.sum;
+      room.lastActionMessage = `${user.username} ${validation.sum} puanla masaya el açtı! ✨`;
+
+      broadcastOkeyRoom(roomId);
+    });
+
+    socket.on("okey_add_to_meld", ({ tileId, meldId }: { tileId: string; meldId: string }) => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (!roomId) return;
+      const room = okeyRooms.get(roomId);
+      if (!room || room.status !== 'playing') return;
+
+      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIdx === -1 || room.currentTurn !== playerIdx) {
+        return socket.emit("okey_error", "Sıra sizde değil.");
+      }
+
+      const player = room.players[playerIdx];
+      if (!player.hasOpened) {
+        return socket.emit("okey_error", "Masadaki serilere taş işlemek için önce el açmış olmalısınız.");
+      }
+
+      const tIdx = player.hand.findIndex((t: any) => t.id === tileId);
+      if (tIdx === -1) return socket.emit("okey_error", "Taş bulunamadı.");
+
+      const meld = room.centerMelds.find((m: any) => m.id === meldId);
+      if (!meld) return socket.emit("okey_error", "Hedef seri bulunamadı.");
+
+      const tile = player.hand[tIdx];
+      if (!canAddToMeld(tile, meld, room.okeyTile)) {
+        return socket.emit("okey_error", "Bu taş seçilen seriye uymuyor.");
+      }
+
+      player.hand.splice(tIdx, 1);
+      const testBefore = [tile, ...meld.tiles];
+      if (meld.type === 'serial' && isSerialMeld(testBefore, room.okeyTile)) {
+        meld.tiles.unshift(tile);
+      } else {
+        meld.tiles.push(tile);
+      }
+
+      room.lastActionMessage = `${user.username} masadaki bir per'e taş işledi.`;
+      broadcastOkeyRoom(roomId);
+    });
+
+    socket.on("okey_declare_win", () => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (!roomId) return;
+      const room = okeyRooms.get(roomId);
+      if (!room || room.status !== 'playing') return;
+
+      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIdx === -1 || room.currentTurn !== playerIdx) {
+        return socket.emit("okey_error", "Sıra sizde değil.");
+      }
+
+      room.status = 'ended';
+      room.winnerId = user.id;
+      room.winningReason = `${user.username} okeyi bitirdi ve kazandı! 🏆`;
+      client.execute({
+        sql: "UPDATE users SET okey_wins = COALESCE(okey_wins, 0) + 1 WHERE id = ?",
+        args: [user.id]
+      }).catch(console.error);
+
+      broadcastOkeyRoom(roomId);
+      emitRooms();
     });
 
     socket.on("leave_okey", () => {
@@ -1069,10 +1483,11 @@ async function startServer() {
         const room = okeyRooms.get(roomId);
         if (room) {
           room.players = room.players.filter((p: any) => p.id !== user.id);
-          if (room.players.length === 0) {
+          if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
+            clearTimeout(room.botTimeout);
             okeyRooms.delete(roomId);
           } else {
-            io.to(`okey_${roomId}`).emit("okey_state", room);
+            broadcastOkeyRoom(roomId);
           }
           emitRooms();
         }
@@ -1080,27 +1495,17 @@ async function startServer() {
       }
     });
 
-    socket.on("okey_discard", (tile) => {
-      const roomId = socket.data.currentOkeyRoom;
-      if (roomId) {
-        const room = okeyRooms.get(roomId);
-        if (room) {
-          room.discardPile.push(tile);
-          io.to(`okey_${roomId}`).emit("okey_state", room);
-        }
-      }
-    });
-
     socket.on("disconnect", async () => {
       const roomId = socket.data.currentOkeyRoom;
       if (roomId) {
         const room = okeyRooms.get(roomId);
-        if (room) {
+        // Only remove player if waiting in lobby, NOT if actively playing!
+        if (room && room.status === 'waiting') {
           room.players = room.players.filter((p: any) => p.id !== user.id);
           if (room.players.length === 0) {
             okeyRooms.delete(roomId);
           } else {
-            io.to(`okey_${roomId}`).emit("okey_state", room);
+            broadcastOkeyRoom(roomId);
           }
           emitRooms();
         }

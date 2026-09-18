@@ -55,6 +55,8 @@ export default function GlobalChat({
         }
       };
 
+      const onCleared = () => setMessages([]);
+
       const onTyping = (data: any) => {
         if (data.type === "global") {
           setTypingUsers((prev) => {
@@ -72,6 +74,7 @@ export default function GlobalChat({
       socket.on("new_global_message", onNewMsg);
       socket.on("message_reacted", onReacted);
       socket.on("message_deleted", onMessageDeleted);
+      socket.on("global_chat_cleared", onCleared);
       socket.on("user_typing", onTyping);
       socket.on("global_read_update", onReadUpdate);
 
@@ -79,6 +82,7 @@ export default function GlobalChat({
         socket.off("new_global_message", onNewMsg);
         socket.off("message_reacted", onReacted);
         socket.off("message_deleted", onMessageDeleted);
+        socket.off("global_chat_cleared", onCleared);
         socket.off("user_typing", onTyping);
         socket.off("global_read_update", onReadUpdate);
       };
@@ -100,10 +104,15 @@ export default function GlobalChat({
   };
 
   const handleSend = () => {
-    if (newMessage.trim() && socket) {
+    const trimmed = newMessage.trim();
+    if (trimmed && socket) {
+      if (trimmed.length > 1000) {
+        alert("Mesajınız en fazla 1000 karakter olabilir.");
+        return;
+      }
       socket.emit("send_global_message", {
         type: "text",
-        content: newMessage.trim(),
+        content: trimmed.slice(0, 1000),
         reply_to: replyTo?.id,
       });
       setNewMessage("");
@@ -228,15 +237,28 @@ export default function GlobalChat({
               Herkesle anlık iletişim kur, fotoğraf, video ve dosya paylaş
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
-            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-              {onlineUsers.length} Çevrimiçi
-            </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                if (window.confirm("Genel sohbeti sıfırlamak istediğinize emin misiniz? Tüm mesajlar silinecektir.")) {
+                  socket?.emit("clear_global_chat");
+                }
+              }}
+              className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-900/50 transition-colors"
+              title="Genel Sohbeti Temizle"
+            >
+              Sohbeti Sıfırla
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                {onlineUsers.length} Çevrimiçi
+              </span>
+            </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
           {messages.map((msg, index) => {
             const isMine = msg.sender === currentUserId;
             const isLast = index === messages.length - 1;
@@ -254,15 +276,15 @@ export default function GlobalChat({
             return (
               <div
                 key={msg.id}
-                className={`flex flex-col ${isMine ? "items-end" : "items-start"}`}
+                className={`flex flex-col ${isMine ? "items-end" : "items-start"} w-full min-w-0`}
               >
                 <div
-                  className={`flex gap-2 max-w-[85%] md:max-w-[70%] group relative ${
+                  className={`flex gap-2 max-w-[85%] md:max-w-[70%] min-w-0 group relative ${
                     isMine ? "flex-row-reverse" : "flex-row"
                   }`}
                 >
                   <div
-                    className={`relative rounded-2xl p-3.5 shadow-sm transition-all ${
+                    className={`relative rounded-2xl p-3.5 shadow-sm transition-all min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere] break-words break-all ${
                       isMine
                         ? "bg-blue-600 text-white rounded-br-none"
                         : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-100 dark:border-slate-700"
@@ -317,7 +339,7 @@ export default function GlobalChat({
                           color={msg.sender_color}
                           size={5}
                         />
-                        <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                        <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline truncate">
                           {msg.sender_name}
                         </span>
                       </div>
@@ -326,13 +348,13 @@ export default function GlobalChat({
                     {/* Reply Context */}
                     {msg.reply_message && (
                       <div
-                        className={`mb-2 p-2 rounded-lg text-sm border-l-4 ${
+                        className={`mb-2 p-2 rounded-lg text-sm border-l-4 min-w-0 max-w-full overflow-hidden ${
                           isMine
                             ? "bg-blue-700/50 border-white text-white/90"
                             : "bg-slate-200 dark:bg-slate-700/50 border-blue-500 text-slate-700 dark:text-slate-300"
                         }`}
                       >
-                        <div className="font-semibold text-xs mb-1">
+                        <div className="font-semibold text-xs mb-1 truncate">
                           {msg.reply_message.sender_name}
                         </div>
                         {msg.reply_message.type === "text" ? (
@@ -345,7 +367,9 @@ export default function GlobalChat({
 
                     {/* Text Message */}
                     {msg.type === "text" && (
-                      <p className="break-words text-[15px] leading-relaxed">{msg.content}</p>
+                      <p className="break-words break-all [overflow-wrap:anywhere] whitespace-pre-wrap text-[15px] leading-relaxed select-text">
+                        {msg.content}
+                      </p>
                     )}
 
                     {/* Image Message */}
@@ -568,14 +592,22 @@ export default function GlobalChat({
               <Paperclip size={22} />
             </label>
 
-            <input
-              type="text"
-              placeholder="Mesaj yaz..."
-              value={newMessage}
-              onChange={handleTyping}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              className="flex-1 bg-slate-100 border-none rounded-full px-5 py-3 focus:ring-2 focus:ring-blue-500 outline-none text-[15px]"
-            />
+            <div className="flex-1 flex items-center bg-slate-100 dark:bg-slate-800 rounded-full px-4 py-1.5 focus-within:ring-2 focus-within:ring-blue-500 min-w-0">
+              <input
+                type="text"
+                placeholder="Mesaj yaz... (maks 1000 karakter)"
+                value={newMessage}
+                maxLength={1000}
+                onChange={handleTyping}
+                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                className="flex-1 bg-transparent border-none focus:outline-none text-[15px] py-1.5 text-slate-800 dark:text-slate-100 min-w-0"
+              />
+              {newMessage.length > 700 && (
+                <span className="text-[11px] text-slate-400 font-mono shrink-0 pl-1">
+                  {1000 - newMessage.length}
+                </span>
+              )}
+            </div>
 
             {newMessage.trim() ? (
               <button
