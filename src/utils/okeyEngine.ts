@@ -8,14 +8,6 @@ export interface Tile {
   isFake?: boolean;
 }
 
-export interface TableMeld {
-  id: string;
-  playerId: number;
-  playerName: string;
-  type: 'serial' | 'group' | 'pair';
-  tiles: Tile[];
-}
-
 export interface OkeyPlayer {
   id: number;
   username: string;
@@ -23,9 +15,6 @@ export interface OkeyPlayer {
   color?: string | null;
   isBot?: boolean;
   tileCount: number;
-  hasOpened: boolean;
-  hasOpenedPairs: boolean;
-  openedSum: number;
   discardPile: Tile[];
   score: number;
 }
@@ -33,7 +22,7 @@ export interface OkeyPlayer {
 export interface OkeyRoomState {
   id: string;
   name: string;
-  gameMode: 'classic' | '101';
+  gameMode: 'classic';
   status: 'waiting' | 'playing' | 'ended';
   creatorId: number;
   players: OkeyPlayer[];
@@ -42,18 +31,18 @@ export interface OkeyRoomState {
   okeyTile: Tile | null;
   currentTurn: number;
   turnPhase: 'draw' | 'discard';
-  centerMelds: TableMeld[];
   winnerId: number | null;
   winningReason: string | null;
   lastActionMessage?: string;
 }
 
-// 1. Deck & Okey Generator
+// 1. Deck & Okey Generator (Standard 106 tiles)
 export const generateDeck = (): { deck: Tile[]; indicator: Tile; okeyTile: Tile } => {
   const colors: TileColor[] = ['red', 'blue', 'black', 'yellow'];
   const allTiles: Tile[] = [];
   let idCount = 1;
 
+  // 104 regular tiles (2 sets of 1-13 in 4 colors)
   for (const color of colors) {
     for (let num = 1; num <= 13; num++) {
       allTiles.push({ id: `t_${idCount++}`, number: num, color });
@@ -85,7 +74,7 @@ export const generateDeck = (): { deck: Tile[]; indicator: Tile; okeyTile: Tile 
     isOkey: true,
   };
 
-  // Mark the real okeys and fake okeys in the deck
+  // Mark real okeys and assign fake okey values
   for (const t of allTiles) {
     if (t.isFake) {
       // Fake okey takes the place of the real okey's face value
@@ -103,22 +92,19 @@ export const generateDeck = (): { deck: Tile[]; indicator: Tile; okeyTile: Tile 
 export const isSerialMeld = (tiles: Tile[], okeyRef?: Tile | null): boolean => {
   if (tiles.length < 3) return false;
 
-  // Separate regular tiles and jokers
   const jokers = tiles.filter(t => t.isOkey);
   const regulars = tiles.filter(t => !t.isOkey);
 
   if (regulars.length === 0) return true; // All jokers
 
-  // Regular tiles must all be the same color
+  // Regular tiles must all be same color
   const color = regulars[0].color;
   if (regulars.some(t => t.color !== color)) return false;
 
-  // Numbers without jokers
   const nums = regulars.map(t => t.number);
   const uniqueNums = new Set(nums);
-  if (uniqueNums.size !== nums.length) return false; // duplicate numbers not allowed in run
+  if (uniqueNums.size !== nums.length) return false;
 
-  // Check normal sequence (accounting for jokers as wildcards)
   const sorted = [...nums].sort((a, b) => a - b);
 
   const canFormSequence = (arr: number[], numJokers: number): boolean => {
@@ -131,14 +117,12 @@ export const isSerialMeld = (tiles: Tile[], okeyRef?: Tile | null): boolean => {
     return needed <= numJokers;
   };
 
-  // Normal run check
   if (canFormSequence(sorted, jokers.length)) {
-    // Check range does not exceed 13
     const span = sorted[sorted.length - 1] - sorted[0] + 1;
     if (span + (jokers.length - (span - sorted.length)) <= 14) return true;
   }
 
-  // 12-13-1 Wrap around case: 1 can follow 13
+  // 12-13-1 Wrap around case: 1 follows 13
   if (sorted.includes(1) && sorted.some(n => n >= 11)) {
     const wrapped = sorted.map(n => (n === 1 ? 14 : n)).sort((a, b) => a - b);
     if (canFormSequence(wrapped, jokers.length)) return true;
@@ -161,106 +145,192 @@ export const isGroupMeld = (tiles: Tile[], okeyRef?: Tile | null): boolean => {
 
   const colors = new Set<TileColor>();
   for (const t of regulars) {
-    if (colors.has(t.color)) return false; // same color twice not allowed in group
+    if (colors.has(t.color)) return false;
     colors.add(t.color);
   }
 
   return colors.size + jokers.length <= 4;
 };
 
-// 4. Pair Validation (e.g. 2 identical tiles)
-export const isPair = (tiles: Tile[]): boolean => {
-  if (tiles.length !== 2) return false;
-  if (tiles[0].isOkey || tiles[1].isOkey) return true;
-  return tiles[0].number === tiles[1].number && tiles[0].color === tiles[1].color;
+// 4. Pair Check (2 identical tiles or pair with Okey)
+export const isPair = (t1: Tile, t2: Tile): boolean => {
+  if (t1.isOkey || t2.isOkey) return true;
+  return t1.number === t2.number && t1.color === t2.color;
 };
 
-// 5. Meld Score Calculation
-export const calculateMeldSum = (tiles: Tile[], okeyRef?: Tile | null): number => {
-  return tiles.reduce((sum, t) => {
-    if (t.isOkey && okeyRef) {
-      return sum + (okeyRef.number === 1 ? 11 : okeyRef.number);
+// Check if 14 tiles can form 7 pairs
+export const check7Pairs = (tiles: Tile[]): boolean => {
+  if (tiles.length !== 14) return false;
+
+  const used = new Array(14).fill(false);
+
+  const matchPair = (idx: number): boolean => {
+    if (idx >= 14) return true;
+    if (used[idx]) return matchPair(idx + 1);
+
+    used[idx] = true;
+    for (let j = idx + 1; j < 14; j++) {
+      if (!used[j] && isPair(tiles[idx], tiles[j])) {
+        used[j] = true;
+        if (matchPair(idx + 1)) return true;
+        used[j] = false;
+      }
     }
-    return sum + (t.number === 1 ? 11 : t.number);
-  }, 0);
+    used[idx] = false;
+    return false;
+  };
+
+  return matchPair(0);
 };
 
-// 6. 101 Mode Hand Open Check
-export const check101Open = (
-  melds: Tile[][],
-  okeyRef?: Tile | null
-): { valid: boolean; sum: number; isPairOpener: boolean; error?: string } => {
-  if (melds.length === 0) {
-    return { valid: false, sum: 0, isPairOpener: false, error: 'Hiç per seçilmedi.' };
-  }
+// Check if 14 tiles can be partitioned into valid runs/groups
+export const checkValidRuns = (tiles: Tile[], okeyRef?: Tile | null): boolean => {
+  if (tiles.length !== 14) return false;
 
-  let allPairs = true;
-  let allSets = true;
-  let totalSum = 0;
+  const n = tiles.length;
+  const used = new Array(n).fill(false);
 
-  for (const meld of melds) {
-    if (isPair(meld)) {
-      allSets = false;
-      const val = meld[0].isOkey ? 10 : meld[0].number;
-      totalSum += val * 2;
-    } else if (isSerialMeld(meld, okeyRef) || isGroupMeld(meld, okeyRef)) {
-      allPairs = false;
-      totalSum += calculateMeldSum(meld, okeyRef);
-    } else {
-      return { valid: false, sum: 0, isPairOpener: false, error: 'Seçilen perlerden biri kurala uymuyor.' };
+  const backtrack = (count: number): boolean => {
+    if (count === n) return true;
+
+    // Find first unused tile
+    let firstUnused = -1;
+    for (let i = 0; i < n; i++) {
+      if (!used[i]) {
+        firstUnused = i;
+        break;
+      }
     }
-  }
+    if (firstUnused === -1) return true;
 
-  if (allPairs) {
-    if (melds.length >= 5) {
-      return { valid: true, sum: totalSum, isPairOpener: true };
+    // Remaining tiles
+    const remainingIndices: number[] = [];
+    for (let i = firstUnused + 1; i < n; i++) {
+      if (!used[i]) remainingIndices.push(i);
     }
-    return {
-      valid: false,
-      sum: totalSum,
-      isPairOpener: true,
-      error: `Çiftten açmak için en az 5 çift gerekir (${melds.length}/5 çift var).`,
-    };
-  }
 
-  if (allSets) {
-    if (totalSum >= 101) {
-      return { valid: true, sum: totalSum, isPairOpener: false };
+    // A meld can be size 3, 4, or 5
+    // Try size 3 combinations
+    for (let i = 0; i < remainingIndices.length; i++) {
+      const idx1 = remainingIndices[i];
+      for (let j = i + 1; j < remainingIndices.length; j++) {
+        const idx2 = remainingIndices[j];
+        const meld3 = [tiles[firstUnused], tiles[idx1], tiles[idx2]];
+        if (isSerialMeld(meld3, okeyRef) || isGroupMeld(meld3, okeyRef)) {
+          used[firstUnused] = true;
+          used[idx1] = true;
+          used[idx2] = true;
+          if (backtrack(count + 3)) return true;
+          used[firstUnused] = false;
+          used[idx1] = false;
+          used[idx2] = false;
+        }
+
+        // Try size 4 combinations
+        for (let k = j + 1; k < remainingIndices.length; k++) {
+          const idx3 = remainingIndices[k];
+          const meld4 = [tiles[firstUnused], tiles[idx1], tiles[idx2], tiles[idx3]];
+          if (isSerialMeld(meld4, okeyRef) || isGroupMeld(meld4, okeyRef)) {
+            used[firstUnused] = true;
+            used[idx1] = true;
+            used[idx2] = true;
+            used[idx3] = true;
+            if (backtrack(count + 4)) return true;
+            used[firstUnused] = false;
+            used[idx1] = false;
+            used[idx2] = false;
+            used[idx3] = false;
+          }
+
+          // Try size 5 combinations
+          for (let l = k + 1; l < remainingIndices.length; l++) {
+            const idx4 = remainingIndices[l];
+            const meld5 = [tiles[firstUnused], tiles[idx1], tiles[idx2], tiles[idx3], tiles[idx4]];
+            if (isSerialMeld(meld5, okeyRef)) {
+              used[firstUnused] = true;
+              used[idx1] = true;
+              used[idx2] = true;
+              used[idx3] = true;
+              used[idx4] = true;
+              if (backtrack(count + 5)) return true;
+              used[firstUnused] = false;
+              used[idx1] = false;
+              used[idx2] = false;
+              used[idx3] = false;
+              used[idx4] = false;
+            }
+          }
+        }
+      }
     }
-    return {
-      valid: false,
-      sum: totalSum,
-      isPairOpener: false,
-      error: `Perlerin sayı toplamı en az 101 olmalıdır (Şu anki toplam: ${totalSum}).`,
-    };
-  }
 
-  return { valid: false, sum: totalSum, isPairOpener: false, error: 'Aynı anda hem per hem çift açılamaz.' };
+    return false;
+  };
+
+  return backtrack(0);
 };
 
-// 7. Check if a single tile can be added to an opened meld (Taş İşleme)
-export const canAddToMeld = (tile: Tile, meld: TableMeld, okeyRef?: Tile | null): boolean => {
-  if (meld.type === 'pair') return false; // cannot add to pairs
-
-  // Try prepend or append
-  const testBefore = [tile, ...meld.tiles];
-  const testAfter = [...meld.tiles, tile];
-
-  if (meld.type === 'serial') {
-    return isSerialMeld(testBefore, okeyRef) || isSerialMeld(testAfter, okeyRef);
-  } else if (meld.type === 'group') {
-    return isGroupMeld(testAfter, okeyRef);
+// Comprehensive Classic Okey Winning Check
+export const checkClassicOkeyWin = (
+  hand: Tile[],
+  okeyRef?: Tile | null,
+  selectedDiscardId?: string
+): { canWin: boolean; discardTileId?: string; isPairs?: boolean; reason?: string } => {
+  if (hand.length < 14) {
+    return { canWin: false, reason: 'Elinizde yeterli taş yok (en az 14 taş gerekir).' };
   }
 
-  return false;
+  // If hand has 14 tiles exactly (e.g. discard already made)
+  if (hand.length === 14) {
+    if (check7Pairs(hand)) {
+      return { canWin: true, isPairs: true, reason: '7 Çift ile bitti! 🏆' };
+    }
+    if (checkValidRuns(hand, okeyRef)) {
+      return { canWin: true, isPairs: false, reason: 'Perler tamamlandı ve el bitti! 🏆' };
+    }
+    return { canWin: false, reason: 'Elinizdeki taşlar kurala uygun per veya 7 çift oluşturmuyor.' };
+  }
+
+  // Hand has 15 tiles (player turn to discard 1 tile and declare win)
+  if (hand.length === 15) {
+    // If a specific discard is chosen by the player, test that candidate first
+    if (selectedDiscardId) {
+      const filtered = hand.filter(t => t.id !== selectedDiscardId);
+      if (filtered.length === 14) {
+        if (check7Pairs(filtered)) {
+          return { canWin: true, discardTileId: selectedDiscardId, isPairs: true, reason: '7 Çift ile bitti! 🏆' };
+        }
+        if (checkValidRuns(filtered, okeyRef)) {
+          return { canWin: true, discardTileId: selectedDiscardId, isPairs: false, reason: 'Perler tamamlandı ve el bitti! 🏆' };
+        }
+      }
+    }
+
+    // Otherwise, check all 15 possible discards to see if any leaves a winning 14-tile hand
+    for (const discardCandidate of hand) {
+      const filtered = hand.filter(t => t.id !== discardCandidate.id);
+      if (filtered.length === 14) {
+        if (check7Pairs(filtered)) {
+          return { canWin: true, discardTileId: discardCandidate.id, isPairs: true, reason: '7 Çift ile bitti! 🏆' };
+        }
+        if (checkValidRuns(filtered, okeyRef)) {
+          return { canWin: true, discardTileId: discardCandidate.id, isPairs: false, reason: 'Perler tamamlandı ve el bitti! 🏆' };
+        }
+      }
+    }
+
+    return { canWin: false, reason: 'Eliniz henüz bitmeye uygun değil. 14 taş per veya 7 çift olmalı.' };
+  }
+
+  return { canWin: false, reason: 'Elinizde geçersiz sayıda taş bulunuyor.' };
 };
 
-// 8. Auto Sorting Helpers for Player Rack
+// 5. Auto Sorting Helpers for Player Rack
 export const autoSortRuns = (tiles: (Tile | null)[]): (Tile | null)[] => {
   const nonNull = tiles.filter((t): t is Tile => t !== null);
-  // Sort by color first, then number
   const colorOrder: Record<TileColor, number> = { red: 1, blue: 2, black: 3, yellow: 4, fake: 5 };
 
+  // Sort by color first, then number, jokers at the end
   nonNull.sort((a, b) => {
     if (a.isOkey && !b.isOkey) return 1;
     if (!a.isOkey && b.isOkey) return -1;
@@ -280,8 +350,10 @@ export const autoSortRuns = (tiles: (Tile | null)[]): (Tile | null)[] => {
 export const autoSortPairs = (tiles: (Tile | null)[]): (Tile | null)[] => {
   const nonNull = tiles.filter((t): t is Tile => t !== null);
 
-  // Group tiles by number
+  // Group tiles by number and color
   nonNull.sort((a, b) => {
+    if (a.isOkey && !b.isOkey) return 1;
+    if (!a.isOkey && b.isOkey) return -1;
     if (a.number !== b.number) {
       return a.number - b.number;
     }

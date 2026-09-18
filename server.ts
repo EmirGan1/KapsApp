@@ -12,11 +12,8 @@ import { createClient } from "@libsql/client";
 import dotenv from "dotenv";
 import { 
   generateDeck, 
-  check101Open, 
-  canAddToMeld, 
-  isSerialMeld,
-  Tile, 
-  TableMeld 
+  checkClassicOkeyWin,
+  Tile 
 } from "./src/utils/okeyEngine.ts";
 
 dotenv.config();
@@ -359,7 +356,7 @@ async function startServer() {
     return {
       id: room.id,
       name: room.name,
-      gameMode: room.gameMode,
+      gameMode: 'classic',
       status: room.status,
       creatorId: room.creatorId,
       players: room.players.map((p: any) => ({
@@ -369,9 +366,6 @@ async function startServer() {
         color: p.color,
         isBot: !!p.isBot,
         tileCount: p.hand ? p.hand.length : 0,
-        hasOpened: !!p.hasOpened,
-        hasOpenedPairs: !!p.hasOpenedPairs,
-        openedSum: p.openedSum || 0,
         discardPile: p.discardPile || [],
         score: p.score || 0
       })),
@@ -380,7 +374,6 @@ async function startServer() {
       okeyTile: room.okeyTile,
       currentTurn: room.currentTurn || 0,
       turnPhase: room.turnPhase || 'draw',
-      centerMelds: room.centerMelds || [],
       winnerId: room.winnerId,
       winningReason: room.winningReason,
       lastActionMessage: room.lastActionMessage
@@ -416,7 +409,16 @@ async function startServer() {
       if (!bot || !bot.isBot) return;
 
       if (r.turnPhase === 'draw') {
-        if (r.deck.length > 0) {
+        // Draw from deck or side
+        const prevIdx = (r.currentTurn + r.players.length - 1) % r.players.length;
+        const prevPlayer = r.players[prevIdx];
+        const canTakeSide = prevPlayer && prevPlayer.discardPile && prevPlayer.discardPile.length > 0;
+
+        if (canTakeSide && Math.random() < 0.25) {
+          const drawn = prevPlayer.discardPile.pop();
+          bot.hand.push(drawn);
+          r.lastActionMessage = `${bot.username} yandan atılan taşı aldı.`;
+        } else if (r.deck.length > 0) {
           const drawn = r.deck.pop();
           if (drawn) {
             bot.hand.push(drawn);
@@ -433,6 +435,18 @@ async function startServer() {
         const bot2 = r2.players[r2.currentTurn];
         if (!bot2 || !bot2.isBot) return;
 
+        // Check if bot can declare win
+        const winCheck = checkClassicOkeyWin(bot2.hand, r2.okeyTile);
+        if (winCheck.canWin) {
+          r2.status = 'ended';
+          r2.winnerId = bot2.id;
+          r2.winningReason = `${bot2.username} ${winCheck.reason || 'elini bitirdi ve kazandı!'} 🏆`;
+          r2.lastActionMessage = `${bot2.username} oyunu bitirdi!`;
+          broadcastOkeyRoom(roomId);
+          return;
+        }
+
+        // Otherwise discard a non-okey tile
         let discardIdx = bot2.hand.findIndex((t: any) => !t.isOkey);
         if (discardIdx === -1) discardIdx = 0;
         const discarded = bot2.hand.splice(discardIdx, 1)[0];
@@ -440,14 +454,6 @@ async function startServer() {
           bot2.discardPile.push(discarded);
           const colorText = discarded.color === 'red' ? 'Kırmızı' : discarded.color === 'blue' ? 'Mavi' : discarded.color === 'black' ? 'Siyah' : 'Sarı';
           r2.lastActionMessage = `${bot2.username} ${discarded.number} ${colorText} attı.`;
-        }
-
-        if (bot2.hand.length === 0) {
-          r2.status = 'ended';
-          r2.winnerId = bot2.id;
-          r2.winningReason = `${bot2.username} elini bitirdi ve kazandı!`;
-          broadcastOkeyRoom(roomId);
-          return;
         }
 
         r2.currentTurn = (r2.currentTurn + 1) % r2.players.length;
@@ -1153,12 +1159,12 @@ async function startServer() {
       }
     });
 
-    socket.on("create_okey_room", ({ name, gameMode }) => {
+    socket.on("create_okey_room", ({ name }) => {
       const roomId = `room_${Date.now()}`;
       okeyRooms.set(roomId, {
         id: roomId,
-        name: name || "Eğlencelik Masa",
-        gameMode: gameMode || "101",
+        name: name || "Klasik Okey Masası",
+        gameMode: "classic",
         status: "waiting",
         creatorId: user.id,
         players: [{
@@ -1168,10 +1174,6 @@ async function startServer() {
           color: user.color,
           isBot: false,
           hand: [],
-          openedMelds: [],
-          openedSum: 0,
-          hasOpened: false,
-          hasOpenedPairs: false,
           discardPile: [],
           score: 0
         }],
@@ -1180,7 +1182,6 @@ async function startServer() {
         okeyTile: null,
         currentTurn: 0,
         turnPhase: "draw",
-        centerMelds: [],
         winnerId: null,
         winningReason: null,
         lastActionMessage: `${user.username} masayı kurdu.`
@@ -1206,10 +1207,6 @@ async function startServer() {
           color: user.color,
           isBot: false,
           hand: [],
-          openedMelds: [],
-          openedSum: 0,
-          hasOpened: false,
-          hasOpenedPairs: false,
           discardPile: [],
           score: 0
         });
@@ -1225,7 +1222,7 @@ async function startServer() {
       const room = okeyRooms.get(roomId);
       if (!room || room.status !== 'waiting') return;
 
-      // Auto-fill empty seats with Bots up to 4 players so user can always play!
+      // Auto-fill empty seats with Bots up to 4 players so game can always start
       const botNames = [
         { username: 'Zeynep (Bot)', color: '#ec4899' },
         { username: 'Ahmet (Bot)', color: '#3b82f6' },
@@ -1241,38 +1238,29 @@ async function startServer() {
           color: b.color,
           isBot: true,
           hand: [],
-          openedMelds: [],
-          openedSum: 0,
-          hasOpened: false,
-          hasOpenedPairs: false,
           discardPile: [],
           score: 0
         });
         bIdx++;
       }
 
-      // Generate 106 shuffled deck & Okey
+      // Generate 106 shuffled deck & determine Okey
       const { deck, indicator, okeyTile } = generateDeck();
       room.deck = deck;
       room.indicator = indicator;
       room.okeyTile = okeyTile;
       room.status = 'playing';
-      room.centerMelds = [];
       room.currentTurn = 0;
-      room.turnPhase = 'discard'; // Starting player already has 1 extra tile!
-      room.lastActionMessage = `Oyun başladı! Gösterge: ${indicator.number} (${indicator.color}). Okey: ${okeyTile.number} (${okeyTile.color}).`;
+      room.turnPhase = 'discard'; // Starting player starts with 15 tiles and throws first!
+      room.winnerId = null;
+      room.winningReason = null;
+      room.lastActionMessage = `Oyun başladı! Gösterge: ${indicator.number} (${indicator.color}). Okey: ${okeyTile.number} (${okeyTile.color}). Sıra ${room.players[0].username} oyuncusunda.`;
 
-      // Deal tiles
-      const is101 = room.gameMode === '101';
-      const firstCount = is101 ? 22 : 15;
-      const otherCount = is101 ? 21 : 14;
-
+      // Strictly deal 15 tiles to 1st player, 14 tiles to other 3 players
       for (let i = 0; i < room.players.length; i++) {
-        const count = i === 0 ? firstCount : otherCount;
+        const count = i === 0 ? 15 : 14;
         room.players[i].hand = room.deck.splice(0, count);
         room.players[i].discardPile = [];
-        room.players[i].hasOpened = false;
-        room.players[i].openedSum = 0;
       }
 
       broadcastOkeyRoom(roomId);
@@ -1343,20 +1331,6 @@ async function startServer() {
       const colorText = discarded.color === 'red' ? 'Kırmızı' : discarded.color === 'blue' ? 'Mavi' : discarded.color === 'black' ? 'Siyah' : 'Sarı';
       room.lastActionMessage = `${user.username} ${discarded.number} ${colorText} attı.`;
 
-      // Check win if hand is 0
-      if (player.hand.length === 0) {
-        room.status = 'ended';
-        room.winnerId = user.id;
-        room.winningReason = `${user.username} elini bitirdi ve oyunu kazandı! 🏆`;
-        client.execute({
-          sql: "UPDATE users SET okey_wins = COALESCE(okey_wins, 0) + 1 WHERE id = ?",
-          args: [user.id]
-        }).catch(console.error);
-        broadcastOkeyRoom(roomId);
-        emitRooms();
-        return;
-      }
-
       // Next player's turn
       room.currentTurn = (room.currentTurn + 1) % room.players.length;
       room.turnPhase = 'draw';
@@ -1367,11 +1341,11 @@ async function startServer() {
       }
     });
 
-    socket.on("okey_open_hand", (melds: any[]) => {
+    socket.on("okey_declare_win", (data?: { discardTileId?: string }) => {
       const roomId = socket.data.currentOkeyRoom;
       if (!roomId) return;
       const room = okeyRooms.get(roomId);
-      if (!room || room.status !== 'playing' || room.gameMode !== '101') return;
+      if (!room || room.status !== 'playing') return;
 
       const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
       if (playerIdx === -1 || room.currentTurn !== playerIdx) {
@@ -1379,94 +1353,25 @@ async function startServer() {
       }
 
       const player = room.players[playerIdx];
-      const validation = check101Open(melds, room.okeyTile);
-      if (!validation.valid) {
-        return socket.emit("okey_error", validation.error || "Açılan seriler kurallara uymuyor.");
+      const winCheck = checkClassicOkeyWin(player.hand, room.okeyTile, data?.discardTileId);
+      if (!winCheck.canWin) {
+        return socket.emit("okey_error", winCheck.reason || "Eliniz kurallara uygun bitmiyor. 14 taş per veya 7 çift olmalıdır.");
       }
 
-      // Verify all tiles are actually in player's hand
-      const usedIds = new Set<string>();
-      for (const meld of melds) {
-        for (const t of meld) {
-          if (usedIds.has(t.id) || !player.hand.some((h: any) => h.id === t.id)) {
-            return socket.emit("okey_error", "Geçersiz taş seçimi.");
-          }
-          usedIds.add(t.id);
+      // If discard was part of winning (15th tile thrown to finish)
+      if (winCheck.discardTileId) {
+        const dIdx = player.hand.findIndex((t: any) => t.id === winCheck.discardTileId);
+        if (dIdx !== -1) {
+          const finishTile = player.hand.splice(dIdx, 1)[0];
+          player.discardPile.push(finishTile);
         }
-      }
-
-      player.hand = player.hand.filter((t: any) => !usedIds.has(t.id));
-      for (const meld of melds) {
-        room.centerMelds.push({
-          id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          playerId: user.id,
-          playerName: user.username,
-          type: validation.isPairOpener ? 'pair' : 'serial',
-          tiles: meld
-        });
-      }
-
-      player.hasOpened = true;
-      player.hasOpenedPairs = validation.isPairOpener;
-      player.openedSum = (player.openedSum || 0) + validation.sum;
-      room.lastActionMessage = `${user.username} ${validation.sum} puanla masaya el açtı! ✨`;
-
-      broadcastOkeyRoom(roomId);
-    });
-
-    socket.on("okey_add_to_meld", ({ tileId, meldId }: { tileId: string; meldId: string }) => {
-      const roomId = socket.data.currentOkeyRoom;
-      if (!roomId) return;
-      const room = okeyRooms.get(roomId);
-      if (!room || room.status !== 'playing') return;
-
-      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
-      if (playerIdx === -1 || room.currentTurn !== playerIdx) {
-        return socket.emit("okey_error", "Sıra sizde değil.");
-      }
-
-      const player = room.players[playerIdx];
-      if (!player.hasOpened) {
-        return socket.emit("okey_error", "Masadaki serilere taş işlemek için önce el açmış olmalısınız.");
-      }
-
-      const tIdx = player.hand.findIndex((t: any) => t.id === tileId);
-      if (tIdx === -1) return socket.emit("okey_error", "Taş bulunamadı.");
-
-      const meld = room.centerMelds.find((m: any) => m.id === meldId);
-      if (!meld) return socket.emit("okey_error", "Hedef seri bulunamadı.");
-
-      const tile = player.hand[tIdx];
-      if (!canAddToMeld(tile, meld, room.okeyTile)) {
-        return socket.emit("okey_error", "Bu taş seçilen seriye uymuyor.");
-      }
-
-      player.hand.splice(tIdx, 1);
-      const testBefore = [tile, ...meld.tiles];
-      if (meld.type === 'serial' && isSerialMeld(testBefore, room.okeyTile)) {
-        meld.tiles.unshift(tile);
-      } else {
-        meld.tiles.push(tile);
-      }
-
-      room.lastActionMessage = `${user.username} masadaki bir per'e taş işledi.`;
-      broadcastOkeyRoom(roomId);
-    });
-
-    socket.on("okey_declare_win", () => {
-      const roomId = socket.data.currentOkeyRoom;
-      if (!roomId) return;
-      const room = okeyRooms.get(roomId);
-      if (!room || room.status !== 'playing') return;
-
-      const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
-      if (playerIdx === -1 || room.currentTurn !== playerIdx) {
-        return socket.emit("okey_error", "Sıra sizde değil.");
       }
 
       room.status = 'ended';
       room.winnerId = user.id;
-      room.winningReason = `${user.username} okeyi bitirdi ve kazandı! 🏆`;
+      room.winningReason = `${user.username} ${winCheck.reason || 'elini bitirdi ve oyunu kazandı!'} 🏆`;
+      room.lastActionMessage = `${user.username} oyunu kazandı! 🏆`;
+
       client.execute({
         sql: "UPDATE users SET okey_wins = COALESCE(okey_wins, 0) + 1 WHERE id = ?",
         args: [user.id]
