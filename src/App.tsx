@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { io, Socket } from "socket.io-client";
-import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun } from "lucide-react";
+import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2 } from "lucide-react";
 import Auth from "./components/Auth";
 import Feed from "./components/Feed";
 import Chats from "./components/Chats";
@@ -8,6 +8,7 @@ import Friends from "./components/Friends";
 import Profile from "./components/Profile";
 import GlobalChat from "./components/GlobalChat";
 import Notifications from "./components/Notifications";
+import Games from "./components/Games";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -24,7 +25,7 @@ export default function App() {
   const [onlineUsers, setOnlineUsers] = useState<number[]>([]);
   const [currentUserId, setCurrentUserId] = useState<number>(Number(localStorage.getItem("lan_user_id")) || 0);
   
-  const [activeTab, setActiveTab] = useState<"global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject">("chats");
+  const [activeTab, setActiveTab] = useState<"global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games">("chats");
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<number>(currentUserId);
   
@@ -114,7 +115,7 @@ export default function App() {
     return <Auth onAuthSuccess={handleAuthSuccess} />;
   }
 
-  const handleTabChange = (tab: "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject") => {
+  const handleTabChange = (tab: "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games") => {
     setActiveTab(tab);
     if (tab === "profile") {
       setViewingUserId(currentUserId);
@@ -153,6 +154,7 @@ export default function App() {
             <NavItem icon={<LayoutGrid />} label="Akış" active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
             <NavItem icon={<Users />} label="Arkadaşlar" active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
             <NavItem icon={<Bell />} label="Bildirimler" active={activeTab === 'notifications'} badge={unreadNotificationsCount} onClick={() => handleTabChange('notifications')} />
+            <NavItem icon={<Gamepad2 />} label="Oyunlar" active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
             <NavItem icon={<UserCircle2 />} label="Profil" active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
           </nav>
           
@@ -196,6 +198,7 @@ export default function App() {
         {activeTab === 'subject' && <Feed socket={socket} currentUserId={currentUserId} onUserClick={handleUserClick} activeSubject={activeSubject} />}
         {activeTab === 'friends' && <Friends socket={socket} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
         {activeTab === 'notifications' && <Notifications socket={socket} />}
+        {activeTab === 'games' && <Games />}
         {activeTab === 'profile' && <Profile socket={socket} currentUserId={currentUserId} viewingUserId={viewingUserId} username={username} avatar={avatar} color={color} onLogout={handleLogout} onAvatarUpdated={handleAvatarUpdated} onUserClick={handleUserClick} />}
       </div>
 
@@ -206,6 +209,7 @@ export default function App() {
           <MobileNavItem icon={<MessageSquare />} active={activeTab === 'chats'} onClick={() => handleTabChange('chats')} />
           <MobileNavItem icon={<LayoutGrid />} active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
           <MobileNavItem icon={<Folder />} active={activeTab === 'subject'} onClick={() => handleSubjectClick("Turkish")} />
+          <MobileNavItem icon={<Gamepad2 />} active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
           <MobileNavItem icon={<Users />} active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
           <MobileNavItem icon={<UserCircle2 />} active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
         </nav>
