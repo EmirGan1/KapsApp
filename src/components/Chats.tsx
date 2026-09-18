@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { Friend, Message, MediaModalData } from "../types";
-import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile, FileText, Download, Paperclip, Maximize2 } from "lucide-react";
+import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile, FileText, Download, Paperclip, Maximize2, Trash2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 
@@ -13,7 +13,7 @@ type Group = {
   created_at: string;
 };
 
-export default function Chats({ socket, currentUserId, onlineUsers, onUserClick }: { socket: Socket | null, currentUserId: number, onlineUsers: number[], onUserClick?: (id: number) => void }) {
+export default function Chats({ socket, currentUserId, currentUsername, onlineUsers, onUserClick }: { socket: Socket | null, currentUserId: number, currentUsername?: string, onlineUsers: number[], onUserClick?: (id: number) => void }) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [activeTab, setActiveTab] = useState<"friends" | "groups">("friends");
@@ -399,28 +399,30 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
               {messages.map((msg, idx) => {
                 const isMine = msg.sender === currentUserId;
+                const isEmirgan = currentUsername?.trim().toLowerCase() === 'emirgan';
+                const canDelete = isMine || isEmirgan;
                 const isLast = idx === messages.length - 1;
                 const readers = isLast ? Object.entries(readReceipts).filter(([uid, mid]) => Number(uid) !== currentUserId && mid === msg.id).map(([uid]) => users.find(u => u.id === Number(uid))).filter(Boolean) : [];
                 return (
                   <div key={msg.id || idx} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} mb-1 w-full min-w-0`}>
                     <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} group w-full min-w-0 relative`}>
-                      <div className={`max-w-[85%] md:max-w-[75%] min-w-0 rounded-2xl p-2 px-3 shadow-sm relative overflow-hidden [overflow-wrap:anywhere] break-words break-all ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
+                      <div className={`max-w-[88%] sm:max-w-[80%] md:max-w-[75%] min-w-0 rounded-2xl p-2 px-3 shadow-sm relative overflow-hidden [overflow-wrap:anywhere] break-words break-all ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
                         
-                        {/* Action Buttons (Reply/React) hidden by default, shown on hover */}
-                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
-                          <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500 dark:hover:text-blue-400"><Reply size={14}/></button>
-                          <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500"><Smile size={14}/></button>
-                          {isMine && (
+                        {/* Desktop Floating Action Buttons (Shown on hover) */}
+                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-24'} hidden sm:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
+                          <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500 dark:hover:text-blue-400 transition-colors" title="Yanıtla"><Reply size={14}/></button>
+                          <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500 transition-colors" title="Beğen"><Smile size={14}/></button>
+                          {canDelete && (
                             <button onClick={() => {
                               if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
                                 socket.emit("delete_message", { 
                                   message_id: msg.id, 
                                   type: activeTab === "friends" ? "private" : "group",
-                                  receiver: activeTab === "friends" ? activeChat.id : undefined,
-                                  group_id: activeTab === "groups" ? activeChat.id : undefined
+                                  receiver: activeTab === "friends" ? (activeChat as Friend)?.id : undefined,
+                                  group_id: activeTab === "groups" ? (activeChat as Group)?.id : undefined
                                 });
                               }
-                            }} className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400"><X size={14}/></button>
+                            }} className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors" title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}><Trash2 size={14}/></button>
                           )}
                         </div>
 
@@ -499,6 +501,71 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                             ))}
                           </div>
                         )}
+
+                        {/* Mobile / Tablet Touch Action Bar (Always visible on mobile & tablet) */}
+                        <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t sm:hidden ${
+                          isMine ? "border-green-600/30 justify-end" : "border-slate-200 dark:border-slate-700/60 justify-start"
+                        }`}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setReplyTo(msg);
+                            }}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                              isMine 
+                                ? "bg-green-700/20 active:bg-green-700/30 text-green-900 dark:text-green-100" 
+                                : "bg-slate-100 active:bg-slate-200 dark:bg-slate-700 dark:active:bg-slate-600 text-slate-700 dark:text-slate-200"
+                            }`}
+                            title="Yanıtla"
+                          >
+                            <Reply size={12} />
+                            <span>Yanıtla</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleReact(msg.id, "❤️");
+                            }}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                              isMine 
+                                ? "bg-green-700/20 active:bg-green-700/30 text-green-900 dark:text-green-100" 
+                                : "bg-slate-100 active:bg-slate-200 dark:bg-slate-700 dark:active:bg-slate-600 text-slate-700 dark:text-slate-200"
+                            }`}
+                            title="Beğen"
+                          >
+                            <Smile size={12} />
+                            <span>❤️</span>
+                          </button>
+
+                          {canDelete && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+                                  socket.emit("delete_message", { 
+                                    message_id: msg.id, 
+                                    type: activeTab === "friends" ? "private" : "group",
+                                    receiver: activeTab === "friends" ? (activeChat as Friend)?.id : undefined,
+                                    group_id: activeTab === "groups" ? (activeChat as Group)?.id : undefined
+                                  });
+                                }
+                              }}
+                              className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                                isMine 
+                                  ? "bg-red-700/20 active:bg-red-700/30 text-red-700 dark:text-red-200" 
+                                  : "bg-red-50 active:bg-red-100 dark:bg-red-950/50 dark:active:bg-red-900 text-red-600 dark:text-red-400"
+                              }`}
+                              title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}
+                            >
+                              <Trash2 size={12} />
+                              <span>Sil</span>
+                            </button>
+                          )}
+                        </div>
 
                         <div className={`text-[10px] mt-1 text-right ${isMine ? 'text-green-700/60' : 'text-slate-400'}`}>
                           {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

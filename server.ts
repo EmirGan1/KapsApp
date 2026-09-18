@@ -345,6 +345,32 @@ async function startServer() {
     });
   });
 
+  app.delete("/api/posts/:id", async (req, res) => {
+    try {
+      const token = req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Unauthorized" });
+      const userRes = await client.execute({ sql: "SELECT * FROM users WHERE token = ?", args: [token] });
+      if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
+      const authUser = userRes.rows[0];
+      const postId = req.params.id;
+      const postRes = await client.execute({ sql: "SELECT user_id FROM posts WHERE id = ?", args: [postId] });
+      if (postRes.rows.length === 0) return res.status(404).json({ error: "Post not found" });
+      
+      const isEmirgan = authUser.username && (authUser.username as string).trim().toLowerCase() === 'emirgan';
+      if (postRes.rows[0].user_id === authUser.id || isEmirgan) {
+        await client.execute({ sql: "DELETE FROM posts WHERE id = ?", args: [postId] });
+        await client.execute({ sql: "DELETE FROM likes WHERE post_id = ?", args: [postId] });
+        await client.execute({ sql: "DELETE FROM comments WHERE post_id = ?", args: [postId] });
+        io.emit("feed_updated");
+        return res.json({ success: true });
+      } else {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Socket Online Tracking
   const onlineUsers = new Map();
   const globalRead = new Map<number, number>();
@@ -692,12 +718,13 @@ async function startServer() {
     });
 
     socket.on("delete_post", async (postId, cb) => {
-      // First verify ownership
+      // First verify ownership or emirgan admin privilege
       const postRes = await client.execute({
         sql: "SELECT user_id FROM posts WHERE id = ?",
         args: [postId]
       });
-      if (postRes.rows.length > 0 && postRes.rows[0].user_id === user.id) {
+      const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
+      if (postRes.rows.length > 0 && (postRes.rows[0].user_id === user.id || isEmirgan)) {
         await client.execute({ sql: "DELETE FROM posts WHERE id = ?", args: [postId] });
         await client.execute({ sql: "DELETE FROM likes WHERE post_id = ?", args: [postId] });
         await client.execute({ sql: "DELETE FROM comments WHERE post_id = ?", args: [postId] });
@@ -1081,7 +1108,8 @@ async function startServer() {
       if (table) {
         try {
           const msgRes = await client.execute({ sql: `SELECT sender FROM ${table} WHERE id = ?`, args: [data.message_id] });
-          if (msgRes.rows.length > 0 && String(msgRes.rows[0].sender) === String(user.id)) {
+          const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
+          if (msgRes.rows.length > 0 && (String(msgRes.rows[0].sender) === String(user.id) || isEmirgan)) {
             await client.execute({ sql: `DELETE FROM ${table} WHERE id = ?`, args: [data.message_id] });
             io.emit("message_deleted", { type: data.type, message_id: data.message_id, group_id: data.group_id, receiver: data.receiver });
           }
@@ -1240,11 +1268,17 @@ async function startServer() {
 
     socket.on("start_okey_game", (roomId) => {
       const room = okeyRooms.get(roomId);
-      if (!room || room.status !== 'waiting') return;
+      if (!room || (room.status !== 'waiting' && room.status !== 'ended')) return;
 
       // Only table host can deal tiles and start game
       if (room.hostId && room.hostId !== user.id) {
         return socket.emit("okey_error", "Yalnızca masa yöneticisi (Host) taşları dağıtabilir.");
+      }
+
+      // Clear any pending bot timers
+      if (room.botTimeout) {
+        clearTimeout(room.botTimeout);
+        room.botTimeout = null;
       }
 
       // Auto-fill empty seats with Bots up to 4 players so game can always start
@@ -1267,6 +1301,12 @@ async function startServer() {
           score: 0
         });
         bIdx++;
+      }
+
+      // Completely clear previous hands and discard piles for all players
+      for (const p of room.players) {
+        p.hand = [];
+        p.discardPile = [];
       }
 
       // Generate 106 shuffled deck & determine Okey

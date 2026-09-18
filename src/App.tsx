@@ -193,9 +193,9 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col relative w-full max-w-full overflow-hidden">
         {activeTab === 'global' && <GlobalChat socket={socket} currentUserId={currentUserId} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
-        {activeTab === 'chats' && <Chats socket={socket} currentUserId={currentUserId} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
-        {activeTab === 'feed' && <Feed socket={socket} currentUserId={currentUserId} onUserClick={handleUserClick} />}
-        {activeTab === 'subject' && <Feed socket={socket} currentUserId={currentUserId} onUserClick={handleUserClick} activeSubject={activeSubject} />}
+        {activeTab === 'chats' && <Chats socket={socket} currentUserId={currentUserId} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
+        {activeTab === 'feed' && <Feed socket={socket} currentUserId={currentUserId} currentUsername={username} onUserClick={handleUserClick} />}
+        {activeTab === 'subject' && <Feed socket={socket} currentUserId={currentUserId} currentUsername={username} onUserClick={handleUserClick} activeSubject={activeSubject} />}
         {activeTab === 'friends' && <Friends socket={socket} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
         {activeTab === 'notifications' && <Notifications socket={socket} />}
         {activeTab === 'profile' && <Profile socket={socket} currentUserId={currentUserId} viewingUserId={viewingUserId} username={username} avatar={avatar} color={color} onLogout={handleLogout} onAvatarUpdated={handleAvatarUpdated} onUserClick={handleUserClick} />}

@@ -55,7 +55,13 @@ export default function Games({
       socket.emit("join_okey", roomId);
     };
     const onRoomState = (state: OkeyRoomState) => {
-      setCurrentRoom(state);
+      setCurrentRoom(prev => {
+        if (prev?.status === 'ended' && state.status === 'playing') {
+          setSelectedSlot(null);
+          setRack(Array(INITIAL_RACK_SIZE).fill(null));
+        }
+        return state;
+      });
       if (state.lastActionMessage) {
         setInfoMessage(state.lastActionMessage);
       }
@@ -131,6 +137,8 @@ export default function Games({
 
   const startGame = () => {
     if (!socket || !currentRoom) return;
+    setRack(Array(INITIAL_RACK_SIZE).fill(null));
+    setSelectedSlot(null);
     socket.emit("start_okey_game", currentRoom.id);
   };
 

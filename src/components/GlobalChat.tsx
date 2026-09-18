@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
-import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2 } from "lucide-react";
+import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2, Trash2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { MediaModalData } from "../types";
@@ -265,6 +265,8 @@ export default function GlobalChat({
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
           {messages.map((msg, index) => {
             const isMine = msg.sender === currentUserId;
+            const isEmirgan = currentUsername?.trim().toLowerCase() === 'emirgan';
+            const canDelete = isMine || isEmirgan;
             const isLast = index === messages.length - 1;
 
             const readers = Object.entries(readReceipts)
@@ -283,7 +285,7 @@ export default function GlobalChat({
                 className={`flex flex-col ${isMine ? "items-end" : "items-start"} w-full min-w-0`}
               >
                 <div
-                  className={`flex gap-2 max-w-[85%] md:max-w-[70%] min-w-0 group relative ${
+                  className={`flex gap-2 max-w-[88%] sm:max-w-[80%] md:max-w-[70%] min-w-0 group relative ${
                     isMine ? "flex-row-reverse" : "flex-row"
                   }`}
                 >
@@ -294,27 +296,27 @@ export default function GlobalChat({
                         : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-100 dark:border-slate-700"
                     }`}
                   >
-                    {/* Floating Reaction & Reply buttons */}
+                    {/* Floating Reaction & Reply buttons for Desktop (Hover) */}
                     <div
                       className={`absolute top-0 ${
-                        isMine ? "-left-28" : "-right-20"
-                      } hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-20`}
+                        isMine ? "-left-28" : "-right-24"
+                      } hidden sm:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}
                     >
                       <button
                         onClick={() => setReplyTo(msg)}
-                        className="p-1 text-slate-400 hover:text-blue-500"
+                        className="p-1 text-slate-400 hover:text-blue-500 transition-colors"
                         title="Yanıtla"
                       >
                         <Reply size={14} />
                       </button>
                       <button
                         onClick={() => handleReact(msg.id, "❤️")}
-                        className="p-1 text-slate-400 hover:text-red-500"
+                        className="p-1 text-slate-400 hover:text-red-500 transition-colors"
                         title="Beğen"
                       >
                         <Smile size={14} />
                       </button>
-                      {isMine && (
+                      {canDelete && (
                         <button
                           onClick={() => {
                             if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
@@ -324,10 +326,10 @@ export default function GlobalChat({
                               });
                             }
                           }}
-                          className="p-1 text-slate-400 hover:text-red-600"
-                          title="Sil"
+                          className="p-1 text-slate-400 hover:text-red-600 transition-colors"
+                          title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                          <Trash2 size={14} />
                         </button>
                       )}
                     </div>
@@ -477,6 +479,69 @@ export default function GlobalChat({
                         ))}
                       </div>
                     )}
+
+                    {/* Mobile / Tablet Touch Action Bar (Always visible on mobile & tablet) */}
+                    <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t sm:hidden ${
+                      isMine ? "border-blue-500/40 justify-end" : "border-slate-200 dark:border-slate-700/60 justify-start"
+                    }`}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setReplyTo(msg);
+                        }}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                          isMine 
+                            ? "bg-blue-700/60 active:bg-blue-800 text-blue-100" 
+                            : "bg-slate-200/80 active:bg-slate-300 dark:bg-slate-700 dark:active:bg-slate-600 text-slate-700 dark:text-slate-200"
+                        }`}
+                        title="Yanıtla"
+                      >
+                        <Reply size={12} />
+                        <span>Yanıtla</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleReact(msg.id, "❤️");
+                        }}
+                        className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                          isMine 
+                            ? "bg-blue-700/60 active:bg-blue-800 text-blue-100" 
+                            : "bg-slate-200/80 active:bg-slate-300 dark:bg-slate-700 dark:active:bg-slate-600 text-slate-700 dark:text-slate-200"
+                        }`}
+                        title="Beğen"
+                      >
+                        <Smile size={12} />
+                        <span>❤️</span>
+                      </button>
+
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+                              socket.emit("delete_message", { 
+                                message_id: msg.id, 
+                                type: "global"
+                              });
+                            }
+                          }}
+                          className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                            isMine 
+                              ? "bg-red-700/60 active:bg-red-800 text-red-100" 
+                              : "bg-red-50 active:bg-red-100 dark:bg-red-950/50 dark:active:bg-red-900 text-red-600 dark:text-red-400"
+                          }`}
+                          title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}
+                        >
+                          <Trash2 size={12} />
+                          <span>Sil</span>
+                        </button>
+                      )}
+                    </div>
 
                     <div
                       className={`text-[10px] mt-1 text-right ${
