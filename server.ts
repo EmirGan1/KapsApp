@@ -393,18 +393,25 @@ async function startServer() {
 
     socket.on("get_user_posts", async (targetId, cb) => {
       try {
-        const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC", args: [targetId] });
-        const likesRes = await client.execute("SELECT * FROM likes");
-        const commentsRes = await client.execute("SELECT * FROM comments");
+        const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", args: [targetId] });
+        const postIds = postsRes.rows.map((p: any) => p.id);
+        
+        let likesRes = { rows: [] };
+        let commentsRes = { rows: [] };
+        if (postIds.length > 0) {
+          const placeholders = postIds.map(() => "?").join(",");
+          likesRes = await client.execute({ sql: `SELECT * FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
+          commentsRes = await client.execute({ sql: `SELECT * FROM comments WHERE post_id IN (${placeholders})`, args: postIds });
+        }
         
         const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
           const pUser = await getUser(p.user_id as number);
-          const postLikes = likesRes.rows.filter(l => l.post_id === p.id);
-          const postComments = await Promise.all(commentsRes.rows.filter(c => c.post_id === p.id).map(async (c: any) => {
+          const postLikes = likesRes.rows.filter((l: any) => l.post_id === p.id);
+          const postComments = await Promise.all(commentsRes.rows.filter((c: any) => c.post_id === p.id).map(async (c: any) => {
             const cu = await getUser(c.user_id as number);
             return { ...c, username: cu?.username, user_avatar: cu?.avatar, user_color: cu?.color };
           }));
-          const is_liked = postLikes.some(l => l.user_id === user.id);
+          const is_liked = postLikes.some((l: any) => l.user_id === user.id);
           const ext = (p.image as string || "").split(".").pop()?.toLowerCase();
           const media_type = p.media_type || (["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image");
           return { 
@@ -437,15 +444,21 @@ async function startServer() {
       try {
         let postsRes;
         if (subjectFilter) {
-          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject = ? ORDER BY created_at DESC", args: [subjectFilter] });
+          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 50", args: [subjectFilter] });
         } else {
-          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC", args: [] });
+          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 50", args: [] });
         }
-        const likesRes = await client.execute("SELECT * FROM likes");
+        const postIds = postsRes.rows.map((p: any) => p.id);
+        let likesRes = { rows: [] };
+        if (postIds.length > 0) {
+          const placeholders = postIds.map(() => "?").join(",");
+          likesRes = await client.execute({ sql: `SELECT * FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
+        }
+        
         const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
           const pUser = await getUser(p.user_id as number);
-          const postLikes = likesRes.rows.filter(l => l.post_id === p.id);
-          const is_liked = postLikes.some(l => l.user_id === user.id);
+          const postLikes = likesRes.rows.filter((l: any) => l.post_id === p.id);
+          const is_liked = postLikes.some((l: any) => l.user_id === user.id);
           const ext = (p.image as string || "").split(".").pop()?.toLowerCase();
           const media_type = p.media_type || (["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image");
           return { 
@@ -554,7 +567,7 @@ async function startServer() {
 
     socket.on("get_notifications", async (cb) => {
       const notifsRes = await client.execute({
-        sql: "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC",
+        sql: "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
         args: [user.id]
       });
       cb(notifsRes.rows);
@@ -638,7 +651,7 @@ async function startServer() {
     // Chat
     socket.on("get_messages", async (friendId, cb) => {
       const msgRes = await client.execute({
-        sql: "SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at ASC",
+        sql: "SELECT * FROM (SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC",
         args: [user.id, friendId, friendId, user.id]
       });
       const populated = await Promise.all(msgRes.rows.map(async (r: any) => {
@@ -766,10 +779,10 @@ async function startServer() {
 
     socket.on("get_group_messages", async (groupId, cb) => {
       const msgsRes = await client.execute({
-        sql: "SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at ASC",
+        sql: "SELECT * FROM (SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC",
         args: [groupId]
       });
-      const populated = await Promise.all(msgsRes.rows.map(m => populateMessage(m, "group")));
+      const populated = await Promise.all(msgsRes.rows.map((m: any) => populateMessage(m, "group")));
       cb(populated);
     });
 
