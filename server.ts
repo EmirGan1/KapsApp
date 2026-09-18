@@ -14,18 +14,26 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // Ensure uploads dir
-if (!fs.existsSync("uploads")) {
-  fs.mkdirSync("uploads", { recursive: true });
+const uploadsDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 // Multer Config
 const storage = multer.diskStorage({
-  destination: "uploads/",
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
+    const ext = path.extname(file.originalname);
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + ext);
   },
 });
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100 MB limit for videos and files
+});
 
 const client = createClient({
   url: process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "file:local.db",
@@ -117,6 +125,24 @@ async function initDb() {
     read INTEGER DEFAULT 0,
     created_at TEXT
   )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS uploaded_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT UNIQUE,
+    original_name TEXT,
+    mimetype TEXT,
+    size INTEGER,
+    data TEXT,
+    created_at TEXT
+  )`);
+
+  // Migrations for existing tables
+  try { await client.execute("ALTER TABLE messages ADD COLUMN file_name TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE messages ADD COLUMN file_size TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE group_messages ADD COLUMN file_name TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE group_messages ADD COLUMN file_size TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE global_messages ADD COLUMN file_name TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE global_messages ADD COLUMN file_size TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE posts ADD COLUMN media_type TEXT"); } catch(e){}
 }
 
 async function startServer() {
@@ -125,8 +151,43 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
   
-  app.use(express.json());
-  app.use("/uploads", express.static("uploads"));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Explicit /uploads/:filename serving with Turso cloud fallback (Render restarts won't break media!)
+  app.get("/uploads/:filename", async (req, res) => {
+    const filename = path.basename(req.params.filename);
+    const filePath = path.join(uploadsDir, filename);
+
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(filePath);
+    }
+
+    try {
+      const fileRes = await client.execute({
+        sql: "SELECT original_name, mimetype, data FROM uploaded_files WHERE filename = ?",
+        args: [filename]
+      });
+      if (fileRes.rows.length > 0) {
+        const row = fileRes.rows[0];
+        const buffer = Buffer.from(row.data as string, "base64");
+        try {
+          fs.writeFileSync(filePath, buffer);
+        } catch (e) {
+          console.error("Cache write error:", e);
+        }
+        if (row.mimetype) {
+          res.setHeader("Content-Type", row.mimetype as string);
+        }
+        return res.send(buffer);
+      }
+    } catch (err) {
+      console.error("Error restoring file from cloud DB:", err);
+    }
+
+    // Never fall through to Vite SPA index.html for uploads!
+    return res.status(404).send("File not found");
+  });
 
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
@@ -225,9 +286,41 @@ async function startServer() {
     }
   });
 
-  app.post("/api/upload", upload.single("file"), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: "No file" });
-    res.json({ url: `/uploads/${req.file.filename}` });
+  app.post("/api/upload", upload.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "Dosya bulunamadı." });
+
+    const filename = req.file.filename;
+    const originalName = req.file.originalname;
+    const mimetype = req.file.mimetype;
+    const size = req.file.size;
+    const filePath = req.file.path;
+    const url = `/uploads/${filename}`;
+
+    // Persistent backup to Turso cloud database (so Render container restarts don't wipe files)
+    try {
+      if (size <= 25 * 1024 * 1024) {
+        const base64 = fs.readFileSync(filePath).toString("base64");
+        await client.execute({
+          sql: "INSERT OR REPLACE INTO uploaded_files (filename, original_name, mimetype, size, data, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          args: [filename, originalName, mimetype, size, base64, new Date().toISOString()]
+        });
+      }
+    } catch (err) {
+      console.error("Cloud file backup error:", err);
+    }
+
+    const isVideo = mimetype.startsWith("video/") || /\.(mp4|webm|mov|mkv|avi)$/i.test(originalName);
+    const isImage = mimetype.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(originalName);
+    const isAudio = mimetype.startsWith("audio/") || /\.(webm|mp3|ogg|wav)$/i.test(originalName);
+
+    res.json({
+      url,
+      filename,
+      original_name: originalName,
+      mimetype,
+      size,
+      media_type: isVideo ? "video" : isImage ? "image" : isAudio ? "voice" : "file"
+    });
   });
 
   // Socket Online Tracking
@@ -306,8 +399,11 @@ async function startServer() {
             return { ...c, username: cu?.username, user_avatar: cu?.avatar, user_color: cu?.color };
           }));
           const is_liked = postLikes.some(l => l.user_id === user.id);
+          const ext = (p.image as string || "").split(".").pop()?.toLowerCase();
+          const media_type = p.media_type || (["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image");
           return { 
             ...p, 
+            media_type,
             username: pUser?.username, 
             user_avatar: pUser?.avatar, 
             user_color: pUser?.color, 
@@ -335,7 +431,17 @@ async function startServer() {
           const pUser = await getUser(p.user_id as number);
           const postLikes = likesRes.rows.filter(l => l.post_id === p.id);
           const is_liked = postLikes.some(l => l.user_id === user.id);
-          return { ...p, username: pUser?.username, avatar: pUser?.avatar, color: pUser?.color, likes_count: postLikes.length, is_liked };
+          const ext = (p.image as string || "").split(".").pop()?.toLowerCase();
+          const media_type = p.media_type || (["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image");
+          return { 
+            ...p, 
+            media_type,
+            username: pUser?.username, 
+            avatar: pUser?.avatar, 
+            color: pUser?.color, 
+            likes_count: postLikes.length, 
+            is_liked 
+          };
         }));
         cb(populated);
       } catch(e) {
@@ -344,9 +450,14 @@ async function startServer() {
     });
 
     socket.on("create_post", async (data, cb) => {
+      let mediaType = data.media_type;
+      if (!mediaType && data.image) {
+        const ext = data.image.split(".").pop()?.toLowerCase();
+        mediaType = ["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image";
+      }
       await client.execute({
-        sql: "INSERT INTO posts (user_id, image, caption, created_at) VALUES (?, ?, ?, ?)",
-        args: [user.id, data.image, data.caption, new Date().toISOString()]
+        sql: "INSERT INTO posts (user_id, image, caption, media_type, created_at) VALUES (?, ?, ?, ?, ?)",
+        args: [user.id, data.image, data.caption, mediaType || "image", new Date().toISOString()]
       });
       io.emit("feed_updated");
       if(cb) cb();
@@ -421,7 +532,7 @@ async function startServer() {
         sql: "INSERT INTO notifications (user_id, type, content, read, created_at) VALUES (?, ?, ?, 0, ?)",
         args: [userId, type, content, new Date().toISOString()]
       });
-      const newNotifRes = await client.execute({ sql: "SELECT * FROM notifications WHERE id = ?", args: [res.lastInsertRowid] });
+      const newNotifRes = await client.execute({ sql: "SELECT * FROM notifications WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const s = onlineUsers.get(userId);
       if (s) io.to(s).emit("new_notification", newNotifRes.rows[0]);
     };
@@ -515,17 +626,52 @@ async function startServer() {
         sql: "SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at ASC",
         args: [user.id, friendId, friendId, user.id]
       });
-      cb(msgRes.rows.map(r => ({ ...r, reactions: JSON.parse(r.reactions as string || "[]") })));
+      const populated = await Promise.all(msgRes.rows.map(async (r: any) => {
+        let replyMsg = null;
+        if (r.reply_to) {
+          const refRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [r.reply_to] });
+          if (refRes.rows.length > 0) {
+            const refUser = await getUser(refRes.rows[0].sender as number);
+            replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
+          }
+        }
+        return { 
+          ...r, 
+          reactions: JSON.parse(r.reactions as string || "[]"),
+          reply_message: replyMsg,
+          file_name: r.file_name,
+          file_size: r.file_size
+        };
+      }));
+      cb(populated);
     });
 
     socket.on("send_message", async (data) => {
-      const { receiver, type, content, reply_to } = data;
+      const { receiver, type, content, reply_to, file_name, file_size } = data;
       const res = await client.execute({
-        sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?)",
-        args: [user.id, receiver, type, content, reply_to || null, new Date().toISOString()]
+        sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
+        args: [user.id, receiver, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
       });
-      const newMsgRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [res.lastInsertRowid] });
-      const newMsg = { ...newMsgRes.rows[0], reactions: [] };
+      const newMsgRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+      let replyMsg = null;
+      if (reply_to) {
+        const refRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [reply_to] });
+        if (refRes.rows.length > 0) {
+          const refUser = await getUser(refRes.rows[0].sender as number);
+          replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
+        }
+      }
+      const sUser = await getUser(user.id);
+      const newMsg = { 
+        ...newMsgRes.rows[0], 
+        reactions: [],
+        sender_name: sUser?.username,
+        sender_avatar: sUser?.avatar,
+        sender_color: sUser?.color,
+        reply_message: replyMsg,
+        file_name: newMsgRes.rows[0].file_name,
+        file_size: newMsgRes.rows[0].file_size
+      };
       
       const targetSocket = onlineUsers.get(receiver);
       if (targetSocket) io.to(targetSocket).emit("new_message", newMsg);
@@ -551,7 +697,9 @@ async function startServer() {
         sender_name: sUser?.username, 
         sender_avatar: sUser?.avatar, 
         sender_color: sUser?.color, 
-        reply_message: replyMsg 
+        reply_message: replyMsg,
+        file_name: m.file_name,
+        file_size: m.file_size
       };
     };
 
@@ -563,12 +711,12 @@ async function startServer() {
     });
 
     socket.on("send_global_message", async (data) => {
-      const { type, content, reply_to } = data;
+      const { type, content, reply_to, file_name, file_size } = data;
       const res = await client.execute({
-        sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, created_at) VALUES (?, ?, ?, ?, '[]', ?)",
-        args: [user.id, type, content, reply_to || null, new Date().toISOString()]
+        sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, '[]', ?, ?, ?)",
+        args: [user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
       });
-      const newMsgRes = await client.execute({ sql: "SELECT * FROM global_messages WHERE id = ?", args: [res.lastInsertRowid] });
+      const newMsgRes = await client.execute({ sql: "SELECT * FROM global_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const popMsg = await populateMessage(newMsgRes.rows[0], "global");
       io.emit("new_global_message", popMsg);
     });
@@ -590,7 +738,7 @@ async function startServer() {
         sql: "INSERT INTO groups (name, creator, members, created_at) VALUES (?, ?, ?, ?)",
         args: [name, user.id, JSON.stringify(allMembers), new Date().toISOString()]
       });
-      const newGroupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [res.lastInsertRowid] });
+      const newGroupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const newGroup = { ...newGroupRes.rows[0], members: JSON.parse(newGroupRes.rows[0].members as string || "[]") };
       
       allMembers.forEach(async (memberId: number) => {
@@ -611,17 +759,17 @@ async function startServer() {
     });
 
     socket.on("send_group_message", async (data) => {
-      const { group_id, type, content, reply_to } = data;
+      const { group_id, type, content, reply_to, file_name, file_size } = data;
       const res = await client.execute({
-        sql: "INSERT INTO group_messages (group_id, sender, type, content, reply_to, reactions, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?)",
-        args: [group_id, user.id, type, content, reply_to || null, new Date().toISOString()]
+        sql: "INSERT INTO group_messages (group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
+        args: [group_id, user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
       });
       
       const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [group_id] });
       if (groupRes.rows.length > 0) {
         const group = groupRes.rows[0];
         const members = JSON.parse(group.members as string || "[]");
-        const newMsgRes = await client.execute({ sql: "SELECT * FROM group_messages WHERE id = ?", args: [res.lastInsertRowid] });
+        const newMsgRes = await client.execute({ sql: "SELECT * FROM group_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
         const popMsg = await populateMessage(newMsgRes.rows[0], "group");
         members.forEach(async (memberId: number) => {
           const targetSocket = onlineUsers.get(memberId);

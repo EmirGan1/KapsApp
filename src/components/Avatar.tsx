@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface AvatarProps {
   url?: string | null;
@@ -9,12 +9,16 @@ interface AvatarProps {
 }
 
 export default function Avatar({ url, name, color, size = 10, className = "" }: AvatarProps) {
-  if (url && url !== "null") {
+  const [hasError, setHasError] = useState(false);
+
+  if (url && url !== "null" && !hasError) {
     return (
       <img 
         src={url} 
-        alt="avatar" 
-        className={`w-${size} h-${size} rounded-full object-cover ${className}`} 
+        alt={name || "avatar"} 
+        referrerPolicy="no-referrer"
+        onError={() => setHasError(true)}
+        className={`rounded-full object-cover ${className}`} 
         style={{ width: `${size * 0.25}rem`, height: `${size * 0.25}rem` }}
       />
     );
@@ -30,12 +34,17 @@ export default function Avatar({ url, name, color, size = 10, className = "" }: 
     }
   }
 
-  const bgColor = color || 'bg-slate-300';
+  const bgColor = color || 'bg-slate-400';
   
   return (
     <div 
-      className={`${bgColor.startsWith('bg-') ? bgColor : ''} text-white rounded-full flex items-center justify-center font-bold ${className}`}
-      style={{ width: `${size * 0.25}rem`, height: `${size * 0.25}rem`, fontSize: `${size * 0.1}rem`, backgroundColor: bgColor.startsWith('#') ? bgColor : undefined }}
+      className={`${bgColor.startsWith('bg-') ? bgColor : ''} text-white rounded-full flex items-center justify-center font-bold flex-shrink-0 ${className}`}
+      style={{ 
+        width: `${size * 0.25}rem`, 
+        height: `${size * 0.25}rem`, 
+        fontSize: `${Math.max(size * 0.1, 0.75)}rem`, 
+        backgroundColor: bgColor.startsWith('#') ? bgColor : undefined 
+      }}
     >
       {initials}
     </div>

@@ -3,7 +3,17 @@ import { Socket } from "socket.io-client";
 import { User, Friend } from "../types";
 import { Search, UserPlus, Check, Clock, UserRound } from "lucide-react";
 
-export default function Friends({ socket, onlineUsers, currentUsername }: { socket: Socket | null, onlineUsers: number[], currentUsername: string }) {
+export default function Friends({ 
+  socket, 
+  onlineUsers, 
+  currentUsername, 
+  onUserClick 
+}: { 
+  socket: Socket | null, 
+  onlineUsers: number[], 
+  currentUsername: string,
+  onUserClick?: (id: number) => void
+}) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<User[]>([]);
@@ -126,13 +136,13 @@ export default function Friends({ socket, onlineUsers, currentUsername }: { sock
               {acceptedFriends.map(friend => {
                 const isOnline = onlineUsers.includes(friend.id);
                 return (
-                  <div key={friend.id} className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                  <div key={friend.id} className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100 hover:border-slate-300 transition-all cursor-pointer" onClick={() => onUserClick && onUserClick(friend.id)}>
                     <div className="relative">
                       {friend.avatar ? <img src={friend.avatar} className="w-12 h-12 rounded-full object-cover" /> : <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center"><UserRound size={24} className="text-slate-400" /></div>}
                       {isOnline && <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full"></div>}
                     </div>
                     <div>
-                      <h3 className="font-semibold text-slate-800">{friend.username}</h3>
+                      <h3 className="font-semibold text-slate-800 hover:text-blue-600 transition-colors">{friend.username}</h3>
                       <p className="text-xs text-slate-500">{isOnline ? "Çevrimiçi" : "Çevrimdışı"}</p>
                     </div>
                   </div>

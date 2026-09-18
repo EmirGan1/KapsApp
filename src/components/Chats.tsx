@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
-import { Friend, Message } from "../types";
-import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile } from "lucide-react";
+import { Friend, Message, MediaModalData } from "../types";
+import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile, FileText, Download, Paperclip, Maximize2 } from "lucide-react";
 import Avatar from "./Avatar";
+import MediaModal from "./MediaModal";
 
 type Group = {
   id: number;
@@ -34,6 +35,8 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
   const [readReceipts, setReadReceipts] = useState<{[userId: number]: number}>({});
   const [users, setUsers] = useState<any[]>([]);
+
+  const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -148,25 +151,67 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
     setReplyTo(null);
   };
 
-  const handleSendImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0] || !activeChat || !socket) return;
+  const formatBytes = (bytes: number, decimals = 1) => {
+    if (!bytes || bytes === 0) return "0 B";
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeChat || !socket) return;
     const formData = new FormData();
-    formData.append("file", e.target.files[0]);
+    formData.append("file", file);
     try {
       const res = await fetch("/api/upload", { method: "POST", body: formData });
       const data = await res.json();
       if (res.ok) {
+        const payload = {
+          type: data.media_type,
+          content: data.url,
+          file_name: data.original_name,
+          file_size: formatBytes(data.size),
+          reply_to: replyTo?.id
+        };
         if (activeTab === "friends") {
-          socket.emit("send_message", { receiver: activeChat.id, type: "image", content: data.url, reply_to: replyTo?.id });
+          socket.emit("send_message", { receiver: activeChat.id, ...payload });
         } else {
-          socket.emit("send_group_message", { group_id: activeChat.id, type: "image", content: data.url, reply_to: replyTo?.id });
+          socket.emit("send_group_message", { group_id: activeChat.id, ...payload });
         }
         setReplyTo(null);
       }
-    } catch (err) { console.error(err); }
-    finally {
+    } catch (err) { 
+      console.error("File upload error:", err); 
+    } finally {
       e.target.value = '';
     }
+  };
+
+  const openMediaModal = (msg: any) => {
+    const isMine = msg.sender === currentUserId;
+    let senderName = msg.sender_name;
+    let senderAvatar = msg.sender_avatar;
+    let senderColor = msg.sender_color;
+    if (isMine) {
+      senderName = "Sen";
+    } else if (activeTab === "friends") {
+      senderName = (activeChat as Friend).username;
+      senderAvatar = (activeChat as Friend).avatar;
+      senderColor = (activeChat as Friend).color;
+    }
+    setActiveModalData({
+      url: msg.content,
+      type: msg.type === "video" ? "video" : "image",
+      authorName: senderName || "Kullanıcı",
+      authorAvatar: senderAvatar,
+      authorColor: senderColor,
+      authorId: msg.sender,
+      caption: msg.file_name || undefined,
+      timestamp: msg.created_at,
+    });
   };
 
   const startRecording = async () => {
@@ -375,7 +420,50 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                         )}
 
                         {msg.type === 'text' && <p className="text-[15px] text-slate-800 leading-relaxed break-words">{msg.content}</p>}
-                        {msg.type === 'image' && <img src={msg.content} className="max-w-full rounded-lg" />}
+                        {msg.type === 'image' && (
+                          <div className="relative group cursor-pointer overflow-hidden rounded-xl max-w-xs md:max-w-sm" onClick={() => openMediaModal(msg)}>
+                            <img src={msg.content} referrerPolicy="no-referrer" alt="Fotoğraf" className="w-full object-cover rounded-xl hover:opacity-95 transition-opacity" />
+                            <button className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Maximize2 size={14} />
+                            </button>
+                          </div>
+                        )}
+                        {msg.type === 'video' && (
+                          <div className="relative group overflow-hidden rounded-xl max-w-xs md:max-w-sm bg-black">
+                            <video src={msg.content} controls playsInline className="w-full rounded-xl" />
+                            <button 
+                              onClick={() => openMediaModal(msg)}
+                              className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                              title="Büyüt ve Bilgileri Gör"
+                            >
+                              <Maximize2 size={14} />
+                            </button>
+                          </div>
+                        )}
+                        {msg.type === 'file' && (
+                          <a 
+                            href={msg.content} 
+                            download={msg.file_name || "dosya"} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${
+                              isMine 
+                                ? 'bg-green-700/10 hover:bg-green-700/20 border-green-300 text-green-950' 
+                                : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                            }`}
+                          >
+                            <div className="p-2.5 bg-blue-100 text-blue-600 rounded-lg shrink-0">
+                              <FileText size={22} />
+                            </div>
+                            <div className="flex-1 min-w-0 pr-2">
+                              <p className="font-semibold text-sm truncate">{msg.file_name || "Belge / Dosya"}</p>
+                              {msg.file_size && <p className="text-xs opacity-70">{msg.file_size}</p>}
+                            </div>
+                            <div className="p-1.5 rounded-full hover:bg-black/5 text-slate-500 shrink-0">
+                              <Download size={18} />
+                            </div>
+                          </a>
+                        )}
                         {msg.type === 'voice' && <audio src={msg.content} controls className="h-10 max-w-[200px]" />}
                         
                         {/* Reactions */}
@@ -443,10 +531,14 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                    <button onClick={() => setReplyTo(null)} className="text-slate-400 hover:text-red-500 font-bold px-2">&times;</button>
                 </div>
               )}
-              <div className="p-3 flex items-center gap-2">
-                <label className="p-3 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-full cursor-pointer transition-colors">
+              <div className="p-3 flex items-center gap-1">
+                <label className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-slate-200/70 rounded-full cursor-pointer transition-colors" title="Fotoğraf veya Video Gönder">
                   <ImageIcon size={22} />
-                  <input type="file" accept="image/*" className="hidden" onChange={handleSendImage} />
+                  <input type="file" accept="image/*,video/*" className="hidden" onChange={handleFileUpload} />
+                </label>
+                <label className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-slate-200/70 rounded-full cursor-pointer transition-colors" title="Belge / Dosya Gönder">
+                  <Paperclip size={22} />
+                  <input type="file" accept="*/*" className="hidden" onChange={handleFileUpload} />
                 </label>
                 <form onSubmit={handleSendText} className="flex-1 relative">
                   <input 
@@ -536,6 +628,14 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
             </div>
           </div>
         </div>
+      )}
+      {/* Instagram-style Media Modal */}
+      {activeModalData && (
+        <MediaModal
+          data={activeModalData}
+          onClose={() => setActiveModalData(null)}
+          onUserClick={onUserClick}
+        />
       )}
     </div>
   );

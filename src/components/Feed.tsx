@@ -1,19 +1,32 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
-import { Post, Story } from "../types";
-import { Heart, MessageCircle, ImagePlus, Plus, Send } from "lucide-react";
+import { Post, Story, MediaModalData } from "../types";
+import { Heart, MessageCircle, ImagePlus, Plus, Send, Film, Maximize2 } from "lucide-react";
 import Avatar from "./Avatar";
+import MediaModal from "./MediaModal";
 
-export default function Feed({ socket, currentUserId, onUserClick }: { socket: Socket | null, currentUserId: number, onUserClick?: (id: number) => void }) {
+export default function Feed({
+  socket,
+  currentUserId,
+  onUserClick,
+}: {
+  socket: Socket | null;
+  currentUserId: number;
+  onUserClick?: (id: number) => void;
+}) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
-  
+
   const [newPostCaption, setNewPostCaption] = useState("");
-  const [newPostImage, setNewPostImage] = useState<File | null>(null);
-  
+  const [newPostMedia, setNewPostMedia] = useState<File | null>(null);
+  const [newPostMediaType, setNewPostMediaType] = useState<"image" | "video">("image");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<number | null>(null);
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState("");
+
+  const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -24,7 +37,7 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
     loadData();
     socket.on("feed_updated", loadData);
     socket.on("stories_updated", loadData);
-    
+
     return () => {
       socket.off("feed_updated", loadData);
       socket.off("stories_updated", loadData);
@@ -40,26 +53,72 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
         }
       };
       socket.on("comments_updated", onCommentsUpdated);
-      return () => { socket.off("comments_updated", onCommentsUpdated); };
+      return () => {
+        socket.off("comments_updated", onCommentsUpdated);
+      };
     }
   }, [activeCommentsPostId, socket]);
 
+  // Keep active modal comments & likes in sync with live data
+  useEffect(() => {
+    if (activeModalData && activeModalData.postId) {
+      const currentPost = posts.find((p) => p.id === activeModalData.postId);
+      if (currentPost) {
+        setActiveModalData((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            likesCount: currentPost.likes_count,
+            isLiked: currentPost.is_liked,
+            comments: prev.postId === activeCommentsPostId ? comments : prev.comments,
+          };
+        });
+      }
+    }
+  }, [posts, comments, activeCommentsPostId]);
+
+  const handleMediaSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setNewPostMedia(file);
+    if (file.type.startsWith("video/")) {
+      setNewPostMediaType("video");
+    } else {
+      setNewPostMediaType("image");
+    }
+  };
+
   const handlePostSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPostCaption && !newPostImage) return;
-    let imageUrl = null;
-    if (newPostImage) {
+    if (!newPostCaption && !newPostMedia) return;
+    setIsSubmitting(true);
+    let mediaUrl = null;
+    let finalMediaType = newPostMediaType;
+
+    if (newPostMedia) {
       const formData = new FormData();
-      formData.append("file", newPostImage);
+      formData.append("file", newPostMedia);
       try {
         const res = await fetch("/api/upload", { method: "POST", body: formData });
         const data = await res.json();
-        imageUrl = data.url;
-      } catch (err) { console.error(err); return; }
+        mediaUrl = data.url;
+        if (data.media_type === "video") finalMediaType = "video";
+      } catch (err) {
+        console.error(err);
+        setIsSubmitting(false);
+        return;
+      }
     }
-    socket?.emit("create_post", { image: imageUrl, caption: newPostCaption });
+
+    socket?.emit("create_post", {
+      image: mediaUrl,
+      media_type: finalMediaType,
+      caption: newPostCaption,
+    });
+
     setNewPostCaption("");
-    setNewPostImage(null);
+    setNewPostMedia(null);
+    setIsSubmitting(false);
   };
 
   const handleStoryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -70,9 +129,10 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
       const res = await fetch("/api/upload", { method: "POST", body: formData });
       const data = await res.json();
       socket.emit("create_story", data.url);
-    } catch (err) { console.error(err); }
-    finally {
-      e.target.value = '';
+    } catch (err) {
+      console.error(err);
+    } finally {
+      e.target.value = "";
     }
   };
 
@@ -96,6 +156,46 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
     setNewComment("");
   };
 
+  const openPostModal = (post: Post) => {
+    if (!post.image) return;
+    setActiveCommentsPostId(post.id);
+    socket?.emit("get_comments", post.id, (loadedComments: any[]) => {
+      setComments(loadedComments);
+      setActiveModalData({
+        url: post.image!,
+        type: post.media_type === "video" ? "video" : "image",
+        authorName: post.username,
+        authorAvatar: post.avatar,
+        authorColor: post.color,
+        authorId: post.user_id,
+        caption: post.caption,
+        timestamp: post.created_at,
+        postId: post.id,
+        likesCount: post.likes_count,
+        isLiked: post.is_liked,
+        comments: loadedComments,
+        onLike: () => handleLike(post.id),
+        onAddComment: (text: string) => {
+          socket?.emit("add_comment", { postId: post.id, content: text });
+        },
+      });
+    });
+  };
+
+  const openStoryModal = (story: Story) => {
+    const isVideo = story.image.endsWith(".mp4") || story.image.endsWith(".webm") || story.media_type === "video";
+    setActiveModalData({
+      url: story.image,
+      type: isVideo ? "video" : "image",
+      authorName: story.username,
+      authorAvatar: story.avatar,
+      authorColor: story.color,
+      authorId: story.user_id,
+      caption: "Hikaye",
+      timestamp: story.created_at,
+    });
+  };
+
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50">
       <div className="max-w-xl mx-auto pb-20">
@@ -105,16 +205,38 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
           <div className="flex flex-col items-center gap-1 min-w-[72px]">
             <div className="relative w-16 h-16 rounded-full bg-slate-100 border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-500 transition-colors">
               <Plus size={24} className="text-slate-400" />
-              <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleStoryUpload} />
+              <input
+                type="file"
+                accept="image/*,video/*"
+                className="absolute inset-0 opacity-0 cursor-pointer"
+                onChange={handleStoryUpload}
+              />
             </div>
             <span className="text-xs font-medium text-slate-500">Hikaye Ekle</span>
           </div>
-          {stories.map(story => (
-            <div key={story.id} className="flex flex-col items-center gap-1 min-w-[72px] cursor-pointer" onClick={() => onUserClick && onUserClick(story.user_id)}>
-              <div className="w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-yellow-400 to-fuchsia-600">
-                <img src={story.image} className="w-full h-full rounded-full object-cover border-2 border-white bg-white" />
+          {stories.map((story) => (
+            <div
+              key={story.id}
+              className="flex flex-col items-center gap-1 min-w-[72px] cursor-pointer group"
+              onClick={() => openStoryModal(story)}
+            >
+              <div className="w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-yellow-400 to-fuchsia-600 transition-transform group-hover:scale-105">
+                {story.image.endsWith(".mp4") || story.image.endsWith(".webm") ? (
+                  <div className="w-full h-full rounded-full border-2 border-white bg-black flex items-center justify-center overflow-hidden">
+                    <Film size={20} className="text-white" />
+                  </div>
+                ) : (
+                  <img
+                    src={story.image}
+                    referrerPolicy="no-referrer"
+                    alt={story.username}
+                    className="w-full h-full rounded-full object-cover border-2 border-white bg-white"
+                  />
+                )}
               </div>
-              <span className="text-xs font-medium text-slate-700 truncate w-full text-center hover:underline">{story.username}</span>
+              <span className="text-xs font-medium text-slate-700 truncate w-full text-center group-hover:underline">
+                {story.username}
+              </span>
             </div>
           ))}
         </div>
@@ -122,92 +244,220 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
         {/* Create Post */}
         <div className="bg-white p-4 my-4 shadow-sm border border-slate-100 md:rounded-2xl mx-0 md:mx-4 lg:mx-0">
           <form onSubmit={handlePostSubmit}>
-            <textarea 
-              placeholder="Ne düşünüyorsun?"
-              className="w-full border-none focus:ring-0 resize-none mb-3 text-slate-700 placeholder-slate-400 outline-none p-2 text-lg"
+            <textarea
+              placeholder="Ne düşünüyorsun? Fotoğraf veya video paylaş..."
+              className="w-full border-none focus:ring-0 resize-none mb-3 text-slate-700 placeholder-slate-400 outline-none p-2 text-base md:text-lg"
               rows={2}
               value={newPostCaption}
-              onChange={e => setNewPostCaption(e.target.value)}
+              onChange={(e) => setNewPostCaption(e.target.value)}
             />
-            {newPostImage && (
-              <div className="relative mb-3">
-                <img src={URL.createObjectURL(newPostImage)} className="rounded-xl max-h-64 object-cover" />
-                <button type="button" onClick={() => setNewPostImage(null)} className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1 text-xs hover:bg-black/70 transition-colors">X</button>
+
+            {/* Media Preview */}
+            {newPostMedia && (
+              <div className="relative mb-3 bg-black rounded-xl overflow-hidden max-h-72 flex items-center justify-center">
+                {newPostMediaType === "video" ? (
+                  <video
+                    src={URL.createObjectURL(newPostMedia)}
+                    controls
+                    className="max-h-72 w-full object-contain"
+                  />
+                ) : (
+                  <img
+                    src={URL.createObjectURL(newPostMedia)}
+                    alt="Önizleme"
+                    className="max-h-72 w-full object-contain"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => setNewPostMedia(null)}
+                  className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white rounded-full p-1.5 text-xs transition-colors cursor-pointer"
+                >
+                  ✕
+                </button>
               </div>
             )}
+
             <div className="flex items-center justify-between border-t border-slate-50 pt-3">
-              <label className="text-blue-500 hover:bg-blue-50 p-2 rounded-full cursor-pointer transition-colors flex items-center gap-2">
-                <ImagePlus size={20} />
-                <span className="text-sm font-medium">Fotoğraf</span>
-                <input type="file" accept="image/*" className="hidden" onChange={e => setNewPostImage(e.target.files?.[0] || null)} />
-              </label>
-              <button 
-                type="submit" 
-                disabled={!newPostCaption && !newPostImage}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-full shadow-md transition-colors"
+              <div className="flex items-center gap-1">
+                <label className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-full cursor-pointer transition-colors flex items-center gap-2">
+                  <ImagePlus size={20} />
+                  <span className="text-sm font-medium">Fotoğraf / Video</span>
+                  <input
+                    type="file"
+                    accept="image/*,video/*"
+                    className="hidden"
+                    onChange={handleMediaSelect}
+                  />
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={(!newPostCaption && !newPostMedia) || isSubmitting}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-full shadow-md transition-colors cursor-pointer"
               >
-                Paylaş
+                {isSubmitting ? "Yükleniyor..." : "Paylaş"}
               </button>
             </div>
           </form>
         </div>
 
-        {/* Posts */}
+        {/* Posts List */}
         <div className="space-y-4 md:px-0 mx-0 md:mx-4 lg:mx-0">
-          {posts.map(post => (
-            <div key={post.id} className="bg-white border-y md:border border-slate-100 md:rounded-2xl shadow-sm">
+          {posts.map((post) => (
+            <div
+              key={post.id}
+              className="bg-white border-y md:border border-slate-100 md:rounded-2xl shadow-sm overflow-hidden"
+            >
+              {/* Post Header */}
               <div className="p-4 flex items-center gap-3">
-                <div className="cursor-pointer" onClick={() => onUserClick && onUserClick(post.user_id)}>
+                <div
+                  className="cursor-pointer"
+                  onClick={() => onUserClick && onUserClick(post.user_id)}
+                >
                   <Avatar url={post.avatar} name={post.username} color={post.color} size={10} />
                 </div>
-                <div>
-                  <h3 className="font-bold text-slate-800 text-[15px] leading-tight cursor-pointer hover:underline" onClick={() => onUserClick && onUserClick(post.user_id)}>{post.username}</h3>
-                  <p className="text-xs text-slate-400">{new Date(post.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</p>
+                <div className="flex-1">
+                  <h3
+                    className="font-bold text-slate-800 text-[15px] leading-tight cursor-pointer hover:underline inline-block"
+                    onClick={() => onUserClick && onUserClick(post.user_id)}
+                  >
+                    {post.username}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {new Date(post.created_at).toLocaleString("tr-TR", {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    })}
+                  </p>
                 </div>
               </div>
-              
-              {post.caption && <p className="px-4 pb-3 text-slate-800 text-[15px]">{post.caption}</p>}
-              {post.image && <img src={post.image} className="w-full max-h-[500px] object-cover bg-slate-50" />}
-              
-              <div className="px-4 py-3 border-t border-slate-50 flex items-center gap-6">
-                <button onClick={() => handleLike(post.id)} className={`flex items-center gap-2 transition-colors ${post.is_liked ? 'text-red-500' : 'text-slate-500 hover:text-red-500'}`}>
-                  <Heart size={22} fill={post.is_liked ? 'currentColor' : 'none'} />
-                  <span className="font-medium text-sm">{post.likes_count}</span>
-                </button>
-                <button onClick={() => toggleComments(post.id)} className={`flex items-center gap-2 transition-colors ${activeCommentsPostId === post.id ? 'text-blue-500' : 'text-slate-500 hover:text-blue-500'}`}>
-                  <MessageCircle size={22} />
-                  <span className="font-medium text-sm">Yorum</span>
-                </button>
+
+              {/* Caption */}
+              {post.caption && (
+                <p className="px-4 pb-3 text-slate-800 text-[15px] leading-relaxed whitespace-pre-wrap">
+                  {post.caption}
+                </p>
+              )}
+
+              {/* Media (Image or Video) with Instagram Lightbox Trigger */}
+              {post.image && (
+                <div className="relative group bg-slate-900 overflow-hidden cursor-pointer">
+                  {post.media_type === "video" ? (
+                    <video
+                      src={post.image}
+                      controls
+                      playsInline
+                      className="w-full max-h-[500px] object-contain bg-black"
+                    />
+                  ) : (
+                    <img
+                      src={post.image}
+                      alt={post.caption || "Gönderi"}
+                      referrerPolicy="no-referrer"
+                      className="w-full max-h-[500px] object-cover bg-slate-50 transition-transform duration-300 group-hover:scale-[1.01]"
+                      onClick={() => openPostModal(post)}
+                    />
+                  )}
+
+                  {/* Expand button (Instagram style trigger) */}
+                  <button
+                    onClick={() => openPostModal(post)}
+                    className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                    title="Büyüt ve Bilgileri Gör"
+                  >
+                    <Maximize2 size={16} />
+                  </button>
+                </div>
+              )}
+
+              {/* Action Bar */}
+              <div className="px-4 py-3 border-t border-slate-50 flex items-center justify-between">
+                <div className="flex items-center gap-6">
+                  <button
+                    onClick={() => handleLike(post.id)}
+                    className={`flex items-center gap-2 transition-colors cursor-pointer ${
+                      post.is_liked ? "text-red-500" : "text-slate-500 hover:text-red-500"
+                    }`}
+                  >
+                    <Heart
+                      size={22}
+                      fill={post.is_liked ? "currentColor" : "none"}
+                      className="transition-transform active:scale-125"
+                    />
+                    <span className="font-medium text-sm">{post.likes_count}</span>
+                  </button>
+
+                  <button
+                    onClick={() => toggleComments(post.id)}
+                    className={`flex items-center gap-2 transition-colors cursor-pointer ${
+                      activeCommentsPostId === post.id
+                        ? "text-blue-500"
+                        : "text-slate-500 hover:text-blue-500"
+                    }`}
+                  >
+                    <MessageCircle size={22} />
+                    <span className="font-medium text-sm">Yorum</span>
+                  </button>
+                </div>
+
+                {post.image && (
+                  <button
+                    onClick={() => openPostModal(post)}
+                    className="text-xs text-slate-400 hover:text-blue-600 flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Maximize2 size={14} />
+                    <span>Detaylar</span>
+                  </button>
+                )}
               </div>
 
+              {/* Comments Section */}
               {activeCommentsPostId === post.id && (
                 <div className="border-t border-slate-100 bg-slate-50 p-4 rounded-b-2xl">
                   <div className="space-y-3 mb-4 max-h-48 overflow-y-auto">
                     {comments.length === 0 ? (
-                      <p className="text-center text-xs text-slate-400 py-2">Henüz yorum yok. İlk yorumu sen yap!</p>
+                      <p className="text-center text-xs text-slate-400 py-2">
+                        Henüz yorum yok. İlk yorumu sen yap!
+                      </p>
                     ) : (
-                      comments.map(c => (
+                      comments.map((c) => (
                         <div key={c.id} className="flex gap-2">
-                           <div className="cursor-pointer" onClick={() => onUserClick && onUserClick(c.user_id)}>
-                             <Avatar url={c.avatar} name={c.username} color={c.color} size={6} />
-                           </div>
-                           <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100 flex-1">
-                             <div className="font-semibold text-xs text-slate-800 cursor-pointer hover:underline inline-block" onClick={() => onUserClick && onUserClick(c.user_id)}>{c.username}</div>
-                             <div className="text-sm text-slate-600 break-words">{c.content}</div>
-                           </div>
+                          <div
+                            className="cursor-pointer"
+                            onClick={() => onUserClick && onUserClick(c.user_id)}
+                          >
+                            <Avatar url={c.avatar} name={c.username} color={c.color} size={6} />
+                          </div>
+                          <div className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 flex-1">
+                            <div
+                              className="font-semibold text-xs text-slate-800 cursor-pointer hover:underline inline-block"
+                              onClick={() => onUserClick && onUserClick(c.user_id)}
+                            >
+                              {c.username}
+                            </div>
+                            <div className="text-sm text-slate-600 break-words leading-relaxed">
+                              {c.content}
+                            </div>
+                          </div>
                         </div>
                       ))
                     )}
                   </div>
                   <form onSubmit={handleAddComment} className="flex gap-2">
-                    <input 
-                      type="text" 
-                      placeholder="Yorum ekle..." 
-                      className="flex-1 rounded-full border-none shadow-sm px-4 py-2 focus:ring-2 focus:ring-blue-500 text-sm outline-none"
+                    <input
+                      type="text"
+                      placeholder="Yorum ekle..."
+                      className="flex-1 rounded-full border border-slate-200 bg-white shadow-sm px-4 py-2 focus:ring-2 focus:ring-blue-500 text-sm outline-none"
                       value={newComment}
                       onChange={(e) => setNewComment(e.target.value)}
                     />
-                    <button type="submit" disabled={!newComment.trim()} className="bg-blue-600 text-white rounded-full p-2 disabled:opacity-50 hover:bg-blue-700 transition-colors shadow-sm">
+                    <button
+                      type="submit"
+                      disabled={!newComment.trim()}
+                      className="bg-blue-600 text-white rounded-full p-2 disabled:opacity-50 hover:bg-blue-700 transition-colors shadow-sm cursor-pointer"
+                    >
                       <Send size={16} />
                     </button>
                   </form>
@@ -215,15 +465,23 @@ export default function Feed({ socket, currentUserId, onUserClick }: { socket: S
               )}
             </div>
           ))}
-          
+
           {posts.length === 0 && (
             <div className="p-8 text-center text-slate-400 bg-white md:rounded-2xl border-y md:border border-slate-100 shadow-sm">
               Henüz gönderi yok.
             </div>
           )}
         </div>
-
       </div>
+
+      {/* Instagram-Style Modal */}
+      {activeModalData && (
+        <MediaModal
+          data={activeModalData}
+          onClose={() => setActiveModalData(null)}
+          onUserClick={onUserClick}
+        />
+      )}
     </div>
   );
 }

@@ -1,38 +1,41 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
-import { Camera, LogOut, Heart, MessageCircle, ArrowLeft } from "lucide-react";
+import { Camera, LogOut, Heart, MessageCircle, ArrowLeft, Maximize2 } from "lucide-react";
 import Avatar from "./Avatar";
+import MediaModal from "./MediaModal";
+import { MediaModalData } from "../types";
 
-export default function Profile({ 
-  socket, 
-  currentUserId, 
+export default function Profile({
+  socket,
+  currentUserId,
   viewingUserId,
-  username: currentUsername, 
-  avatar: currentAvatar, 
-  color: currentColor, 
-  onLogout, 
+  username: currentUsername,
+  avatar: currentAvatar,
+  color: currentColor,
+  onLogout,
   onAvatarUpdated,
-  onUserClick
-}: { 
-  socket: Socket | null, 
-  currentUserId: number, 
-  viewingUserId: number,
-  username: string, 
-  avatar: string | null, 
-  color?: string, 
-  onLogout: () => void, 
-  onAvatarUpdated: (url: string) => void,
-  onUserClick: (id: number) => void
+  onUserClick,
+}: {
+  socket: Socket | null;
+  currentUserId: number;
+  viewingUserId: number;
+  username: string;
+  avatar: string | null;
+  color?: string;
+  onLogout: () => void;
+  onAvatarUpdated: (url: string) => void;
+  onUserClick: (id: number) => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [userPosts, setUserPosts] = useState<any[]>([]);
+  const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
 
   const isMe = currentUserId === viewingUserId;
 
   useEffect(() => {
     if (!socket) return;
-    
+
     if (isMe) {
       setUserProfile({
         id: currentUserId,
@@ -46,9 +49,18 @@ export default function Profile({
       });
     }
 
-    socket.emit("get_user_posts", viewingUserId, (posts: any[]) => {
-      setUserPosts(posts);
-    });
+    const loadPosts = () => {
+      socket.emit("get_user_posts", viewingUserId, (posts: any[]) => {
+        setUserPosts(posts);
+      });
+    };
+
+    loadPosts();
+    socket.on("feed_updated", loadPosts);
+
+    return () => {
+      socket.off("feed_updated", loadPosts);
+    };
   }, [socket, currentUserId, viewingUserId, currentUsername, currentAvatar, currentColor, isMe]);
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -68,8 +80,34 @@ export default function Profile({
       console.error(err);
     } finally {
       setUploading(false);
-      e.target.value = '';
+      e.target.value = "";
     }
+  };
+
+  const handleLike = (postId: number) => {
+    socket?.emit("like_post", postId);
+  };
+
+  const openPostModal = (post: any) => {
+    if (!post.image) return;
+    setActiveModalData({
+      url: post.image,
+      type: post.media_type === "video" ? "video" : "image",
+      authorName: userProfile.username,
+      authorAvatar: userProfile.avatar,
+      authorColor: userProfile.color,
+      authorId: userProfile.id,
+      caption: post.caption,
+      timestamp: post.created_at,
+      postId: post.id,
+      likesCount: post.likes_count,
+      isLiked: post.is_liked,
+      comments: post.comments || [],
+      onLike: () => handleLike(post.id),
+      onAddComment: (text: string) => {
+        socket?.emit("add_comment", { postId: post.id, content: text });
+      },
+    });
   };
 
   if (!userProfile) return <div className="flex-1 bg-slate-50"></div>;
@@ -78,30 +116,45 @@ export default function Profile({
     <div className="flex-1 overflow-y-auto bg-slate-50 flex flex-col items-center">
       <div className="w-full max-w-2xl bg-white md:mt-8 md:rounded-t-3xl shadow-sm border-x border-t border-slate-100 p-8 pb-4 flex flex-col items-center relative">
         {!isMe && (
-          <button onClick={() => onUserClick(currentUserId)} className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-50 rounded-full transition-colors">
+          <button
+            onClick={() => onUserClick(currentUserId)}
+            className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-50 rounded-full transition-colors cursor-pointer"
+            title="Geri"
+          >
             <ArrowLeft size={20} />
           </button>
         )}
-        
+
         <div className="relative mb-4 mt-4">
           <div className="w-28 h-28 md:w-32 md:h-32 rounded-full overflow-hidden bg-slate-100 border-4 border-white shadow-lg flex items-center justify-center">
-            <Avatar url={userProfile.avatar} name={userProfile.username} color={userProfile.color} size={32} />
+            <Avatar
+              url={userProfile.avatar}
+              name={userProfile.username}
+              color={userProfile.color}
+              size={32}
+            />
           </div>
           {isMe && (
             <label className="absolute bottom-0 right-0 w-10 h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-full flex items-center justify-center cursor-pointer shadow-md shadow-blue-500/20 transition-colors">
               <Camera size={20} />
-              <input type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} disabled={uploading} />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleAvatarChange}
+                disabled={uploading}
+              />
             </label>
           )}
         </div>
-        
+
         <h2 className="text-2xl font-bold text-slate-800 mb-1">{userProfile.username}</h2>
         <p className="text-slate-500 text-sm mb-6">{userPosts.length} Gönderi</p>
 
         {isMe && (
-          <button 
+          <button
             onClick={onLogout}
-            className="w-full md:w-auto px-8 flex items-center justify-center gap-2 py-3 bg-red-50 hover:bg-red-100 text-red-600 font-semibold rounded-xl transition-colors mb-4"
+            className="w-full md:w-auto px-8 flex items-center justify-center gap-2 py-3 bg-red-50 hover:bg-red-100 text-red-600 font-semibold rounded-xl transition-colors mb-4 cursor-pointer"
           >
             <LogOut size={18} />
             Çıkış Yap
@@ -116,33 +169,112 @@ export default function Profile({
             Henüz gönderi yok.
           </div>
         ) : (
-          userPosts.map(post => (
-            <div key={post.id} className="bg-white border border-slate-100 rounded-2xl shadow-sm">
+          userPosts.map((post) => (
+            <div
+              key={post.id}
+              className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden"
+            >
               <div className="p-4 flex items-center gap-3">
-                <Avatar url={userProfile.avatar} name={userProfile.username} color={userProfile.color} size={10} />
+                <Avatar
+                  url={userProfile.avatar}
+                  name={userProfile.username}
+                  color={userProfile.color}
+                  size={10}
+                />
                 <div>
-                  <h3 className="font-bold text-slate-800 text-[15px] leading-tight">{userProfile.username}</h3>
-                  <p className="text-xs text-slate-400">{new Date(post.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</p>
+                  <h3 className="font-bold text-slate-800 text-[15px] leading-tight">
+                    {userProfile.username}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {new Date(post.created_at).toLocaleString([], {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    })}
+                  </p>
                 </div>
               </div>
-              
-              {post.caption && <p className="px-4 pb-3 text-slate-800 text-[15px]">{post.caption}</p>}
-              {post.image && <img src={post.image} className="w-full max-h-[500px] object-cover bg-slate-50" />}
-              
-              <div className="px-4 py-3 border-t border-slate-50 flex items-center gap-6">
-                <div className="flex items-center gap-2 text-slate-500">
-                  <Heart size={20} fill={post.is_liked ? 'currentColor' : 'none'} className={post.is_liked ? 'text-red-500' : ''} />
-                  <span className="font-medium text-sm">{post.likes_count}</span>
+
+              {post.caption && (
+                <p className="px-4 pb-3 text-slate-800 text-[15px]">{post.caption}</p>
+              )}
+
+              {post.image && (
+                <div
+                  className="relative group bg-slate-900 cursor-pointer overflow-hidden"
+                  onClick={() => openPostModal(post)}
+                >
+                  {post.media_type === "video" ? (
+                    <video
+                      src={post.image}
+                      controls
+                      playsInline
+                      className="w-full max-h-[500px] object-contain bg-black"
+                    />
+                  ) : (
+                    <img
+                      src={post.image}
+                      alt={post.caption || "Gönderi"}
+                      referrerPolicy="no-referrer"
+                      className="w-full max-h-[500px] object-cover bg-slate-50 hover:opacity-95 transition-opacity"
+                    />
+                  )}
+                  <button
+                    onClick={() => openPostModal(post)}
+                    className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                    title="Büyüt ve Bilgileri Gör"
+                  >
+                    <Maximize2 size={16} />
+                  </button>
                 </div>
-                <div className="flex items-center gap-2 text-slate-500">
-                  <MessageCircle size={20} />
-                  <span className="font-medium text-sm">{post.comments?.length || 0} Yorum</span>
+              )}
+
+              <div className="px-4 py-3 border-t border-slate-50 flex items-center justify-between">
+                <div className="flex items-center gap-6">
+                  <button
+                    onClick={() => handleLike(post.id)}
+                    className={`flex items-center gap-2 transition-colors cursor-pointer ${
+                      post.is_liked ? "text-red-500" : "text-slate-500 hover:text-red-500"
+                    }`}
+                  >
+                    <Heart
+                      size={20}
+                      fill={post.is_liked ? "currentColor" : "none"}
+                      className="transition-transform active:scale-125"
+                    />
+                    <span className="font-medium text-sm">{post.likes_count}</span>
+                  </button>
+
+                  <div className="flex items-center gap-2 text-slate-500">
+                    <MessageCircle size={20} />
+                    <span className="font-medium text-sm">
+                      {post.comments?.length || 0} Yorum
+                    </span>
+                  </div>
                 </div>
+
+                {post.image && (
+                  <button
+                    onClick={() => openPostModal(post)}
+                    className="text-xs text-slate-400 hover:text-blue-600 flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Maximize2 size={14} />
+                    <span>Detaylar</span>
+                  </button>
+                )}
               </div>
             </div>
           ))
         )}
       </div>
+
+      {/* Instagram-style Media Modal */}
+      {activeModalData && (
+        <MediaModal
+          data={activeModalData}
+          onClose={() => setActiveModalData(null)}
+          onUserClick={onUserClick}
+        />
+      )}
     </div>
   );
 }
