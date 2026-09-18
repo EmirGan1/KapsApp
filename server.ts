@@ -173,16 +173,21 @@ async function startServer() {
         const buffer = Buffer.from(row.data as string, "base64");
         try {
           fs.writeFileSync(filePath, buffer);
+          // Now that it's on disk, use sendFile to support range requests and proper headers
+          return res.sendFile(filePath);
         } catch (e) {
           console.error("Cache write error:", e);
+          if (row.mimetype) {
+            res.setHeader("Content-Type", row.mimetype as string);
+          }
+          return res.send(buffer);
         }
-        if (row.mimetype) {
-          res.setHeader("Content-Type", row.mimetype as string);
-        }
-        return res.send(buffer);
+      } else {
+        return res.status(404).send("File not found");
       }
     } catch (err) {
       console.error("Error restoring file from cloud DB:", err);
+      return res.status(500).send("Internal Server Error");
     }
 
     // Never fall through to Vite SPA index.html for uploads!

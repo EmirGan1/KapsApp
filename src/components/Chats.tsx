@@ -399,7 +399,7 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                       <div className={`max-w-[75%] rounded-2xl p-2 px-3 shadow-sm relative ${isMine ? 'bg-[#DCF8C6] rounded-tr-none' : 'bg-white rounded-tl-none border border-slate-100'}`}>
                         
                         {/* Action Buttons (Reply/React) hidden by default, shown on hover */}
-                        <div className={`absolute top-0 ${isMine ? '-left-16' : '-right-16'} hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-10 before:content-[''] before:absolute ${isMine ? 'before:-right-4' : 'before:-left-4'} before:top-0 before:w-4 before:h-full`}>
+                        <div className={`absolute top-0 ${isMine ? '-left-20' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-10 before:content-[''] before:absolute ${isMine ? 'before:-right-12' : 'before:-left-12'} before:top-0 before:w-14 before:h-full`}>
                           <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500"><Reply size={14}/></button>
                           <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500"><Smile size={14}/></button>
                         </div>

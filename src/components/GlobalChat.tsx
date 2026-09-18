@@ -262,10 +262,10 @@ export default function GlobalChat({
                     {/* Floating Reaction & Reply buttons */}
                     <div
                       className={`absolute top-0 ${
-                        isMine ? "-left-16" : "-right-16"
+                        isMine ? "-left-20" : "-right-20"
                       } hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-10 before:content-[''] before:absolute ${
-                        isMine ? "before:-right-4" : "before:-left-4"
-                      } before:top-0 before:w-4 before:h-full`}
+                        isMine ? "before:-right-12" : "before:-left-12"
+                      } before:top-0 before:w-14 before:h-full`}
                     >
                       <button
                         onClick={() => setReplyTo(msg)}
