@@ -88,6 +88,12 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
       }
     };
 
+    const onMessageDeleted = (data: any) => {
+      if ((activeTab === "friends" && data.type === "private") || (activeTab === "groups" && data.type === "group")) {
+        setMessages(prev => prev.filter(m => m.id !== data.message_id));
+      }
+    };
+
     const onTyping = (data: any) => {
       if ((activeTab === "friends" && data.type === "private" && data.sender === activeChat.id) || 
           (activeTab === "groups" && data.type === "group" && data.group_id === activeChat.id)) {
@@ -109,11 +115,13 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
     
     socket.on(activeTab === "friends" ? "new_message" : "new_group_message", handleNewMsg);
     socket.on("message_reacted", onReacted);
+    socket.on("message_deleted", onMessageDeleted);
     socket.on("user_typing", onTyping);
     socket.on("chat_read_update", handleReadUpdate);
     return () => { 
       socket.off(activeTab === "friends" ? "new_message" : "new_group_message", handleNewMsg); 
       socket.off("message_reacted", onReacted);
+      socket.off("message_deleted", onMessageDeleted);
       socket.off("user_typing", onTyping);
       socket.off("chat_read_update", handleReadUpdate);
     };
@@ -399,9 +407,21 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                       <div className={`max-w-[75%] rounded-2xl p-2 px-3 shadow-sm relative ${isMine ? 'bg-[#DCF8C6] rounded-tr-none' : 'bg-white rounded-tl-none border border-slate-100'}`}>
                         
                         {/* Action Buttons (Reply/React) hidden by default, shown on hover */}
-                        <div className={`absolute top-0 ${isMine ? '-left-20' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-10 before:content-[''] before:absolute ${isMine ? 'before:-right-12' : 'before:-left-12'} before:top-0 before:w-14 before:h-full`}>
+                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-20`}>
                           <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500"><Reply size={14}/></button>
                           <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500"><Smile size={14}/></button>
+                          {isMine && (
+                            <button onClick={() => {
+                              if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+                                socket.emit("delete_message", { 
+                                  message_id: msg.id, 
+                                  type: activeTab === "friends" ? "private" : "group",
+                                  receiver: activeTab === "friends" ? activeChat.id : undefined,
+                                  group_id: activeTab === "groups" ? activeChat.id : undefined
+                                });
+                              }
+                            }} className="p-1 text-slate-400 hover:text-red-600"><X size={14}/></button>
+                          )}
                         </div>
 
                         {activeTab === "groups" && !isMine && (

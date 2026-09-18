@@ -48,6 +48,13 @@ export default function GlobalChat({
           );
         }
       };
+      
+      const onMessageDeleted = (data: any) => {
+        if (data.type === "global") {
+          setMessages((prev) => prev.filter(m => m.id !== data.message_id));
+        }
+      };
+
       const onTyping = (data: any) => {
         if (data.type === "global") {
           setTypingUsers((prev) => {
@@ -64,12 +71,14 @@ export default function GlobalChat({
 
       socket.on("new_global_message", onNewMsg);
       socket.on("message_reacted", onReacted);
+      socket.on("message_deleted", onMessageDeleted);
       socket.on("user_typing", onTyping);
       socket.on("global_read_update", onReadUpdate);
 
       return () => {
         socket.off("new_global_message", onNewMsg);
         socket.off("message_reacted", onReacted);
+        socket.off("message_deleted", onMessageDeleted);
         socket.off("user_typing", onTyping);
         socket.off("global_read_update", onReadUpdate);
       };
@@ -262,10 +271,8 @@ export default function GlobalChat({
                     {/* Floating Reaction & Reply buttons */}
                     <div
                       className={`absolute top-0 ${
-                        isMine ? "-left-20" : "-right-20"
-                      } hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-10 before:content-[''] before:absolute ${
-                        isMine ? "before:-right-12" : "before:-left-12"
-                      } before:top-0 before:w-14 before:h-full`}
+                        isMine ? "-left-28" : "-right-20"
+                      } hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-20`}
                     >
                       <button
                         onClick={() => setReplyTo(msg)}
@@ -281,6 +288,22 @@ export default function GlobalChat({
                       >
                         <Smile size={14} />
                       </button>
+                      {isMine && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+                              socket.emit("delete_message", { 
+                                message_id: msg.id, 
+                                type: "global"
+                              });
+                            }
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-600"
+                          title="Sil"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                        </button>
+                      )}
                     </div>
 
                     {!isMine && (

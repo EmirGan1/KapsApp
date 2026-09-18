@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
-import { Camera, LogOut, Heart, MessageCircle, ArrowLeft, Maximize2 } from "lucide-react";
+import { Camera, LogOut, Heart, MessageCircle, ArrowLeft, Maximize2, Lock, X } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { MediaModalData } from "../types";
@@ -30,6 +30,13 @@ export default function Profile({
   const [userProfile, setUserProfile] = useState<any>(null);
   const [userPosts, setUserPosts] = useState<any[]>([]);
   const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
+  
+  // Password Change State
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
 
   const isMe = currentUserId === viewingUserId;
 
@@ -110,6 +117,26 @@ export default function Profile({
     });
   };
 
+  const handleChangePassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError("");
+    setPasswordSuccess(false);
+    if (!oldPassword || !newPassword) {
+      setPasswordError("Lütfen tüm alanları doldurun.");
+      return;
+    }
+    socket?.emit("change_password", { oldPassword, newPassword }, (res: any) => {
+      if (res.error) {
+        setPasswordError(res.error);
+      } else {
+        setPasswordSuccess(true);
+        setOldPassword("");
+        setNewPassword("");
+        setTimeout(() => setShowPasswordModal(false), 2000);
+      }
+    });
+  };
+
   if (!userProfile) return <div className="flex-1 bg-slate-50"></div>;
 
   return (
@@ -152,13 +179,26 @@ export default function Profile({
         <p className="text-slate-500 text-sm mb-6">{userPosts.length} Gönderi</p>
 
         {isMe && (
-          <button
-            onClick={onLogout}
-            className="w-full md:w-auto px-8 flex items-center justify-center gap-2 py-3 bg-red-50 hover:bg-red-100 text-red-600 font-semibold rounded-xl transition-colors mb-4 cursor-pointer"
-          >
-            <LogOut size={18} />
-            Çıkış Yap
-          </button>
+          <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto mb-4">
+            <button
+              onClick={() => {
+                setShowPasswordModal(true);
+                setPasswordSuccess(false);
+                setPasswordError("");
+              }}
+              className="px-6 flex items-center justify-center gap-2 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-colors cursor-pointer"
+            >
+              <Lock size={18} />
+              Şifre Değiştir
+            </button>
+            <button
+              onClick={onLogout}
+              className="px-6 flex items-center justify-center gap-2 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 font-semibold rounded-xl transition-colors cursor-pointer"
+            >
+              <LogOut size={18} />
+              Çıkış Yap
+            </button>
+          </div>
         )}
       </div>
 
@@ -274,6 +314,64 @@ export default function Profile({
           onClose={() => setActiveModalData(null)}
           onUserClick={onUserClick}
         />
+      )}
+
+      {/* Change Password Modal */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl relative animate-in zoom-in-95 duration-200">
+            <button
+              onClick={() => setShowPasswordModal(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+            >
+              <X size={20} />
+            </button>
+            <div className="flex justify-center mb-4">
+              <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center">
+                <Lock size={24} />
+              </div>
+            </div>
+            <h2 className="text-xl font-bold text-center text-slate-800 mb-6">Şifre Değiştir</h2>
+            
+            {passwordSuccess ? (
+              <div className="text-center p-4 bg-green-50 text-green-700 rounded-xl font-medium">
+                Şifreniz başarıyla değiştirildi!
+              </div>
+            ) : (
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                {passwordError && (
+                  <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl text-center">
+                    {passwordError}
+                  </div>
+                )}
+                <div>
+                  <input
+                    type="password"
+                    placeholder="Eski Şifre"
+                    value={oldPassword}
+                    onChange={(e) => setOldPassword(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="password"
+                    placeholder="Yeni Şifre"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md shadow-blue-500/20 transition-all active:scale-[0.98]"
+                >
+                  Şifreyi Güncelle
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

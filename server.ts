@@ -143,6 +143,7 @@ async function initDb() {
   try { await client.execute("ALTER TABLE global_messages ADD COLUMN file_name TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE global_messages ADD COLUMN file_size TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE posts ADD COLUMN media_type TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE posts ADD COLUMN subject TEXT"); } catch(e){}
 }
 
 async function startServer() {
@@ -428,9 +429,18 @@ async function startServer() {
     });
 
     // Feeds
-    socket.on("get_feed", async (cb) => {
+    socket.on("get_feed", async (subjectFilter, cb) => {
+      if (typeof subjectFilter === "function") {
+        cb = subjectFilter;
+        subjectFilter = null;
+      }
       try {
-        const postsRes = await client.execute("SELECT * FROM posts ORDER BY created_at DESC");
+        let postsRes;
+        if (subjectFilter) {
+          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject = ? ORDER BY created_at DESC", args: [subjectFilter] });
+        } else {
+          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC", args: [] });
+        }
         const likesRes = await client.execute("SELECT * FROM likes");
         const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
           const pUser = await getUser(p.user_id as number);
@@ -461,8 +471,8 @@ async function startServer() {
         mediaType = ["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image";
       }
       await client.execute({
-        sql: "INSERT INTO posts (user_id, image, caption, media_type, created_at) VALUES (?, ?, ?, ?, ?)",
-        args: [user.id, data.image, data.caption, mediaType || "image", new Date().toISOString()]
+        sql: "INSERT INTO posts (user_id, image, caption, media_type, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        args: [user.id, data.image, data.caption, mediaType || "image", data.subject || null, new Date().toISOString()]
       });
       io.emit("feed_updated");
       if(cb) cb();
@@ -801,6 +811,35 @@ async function startServer() {
         }
       } else if (data.type === 'global') {
         socket.broadcast.emit("user_typing", { type: 'global', sender: user.id });
+      }
+    });
+
+    socket.on("change_password", async (data, cb) => {
+      try {
+        const u = await getUser(user.id);
+        if (!u) return cb({ error: "User not found" });
+        const isMatch = await bcrypt.compare(data.oldPassword, u.password as string);
+        if (!isMatch) return cb({ error: "Eski şifre yanlış." });
+        const newHash = await bcrypt.hash(data.newPassword, 10);
+        await client.execute({ sql: "UPDATE users SET password = ? WHERE id = ?", args: [newHash, user.id] });
+        cb({ success: true });
+      } catch (err) {
+        cb({ error: "Bir hata oluştu." });
+      }
+    });
+
+    socket.on("delete_message", async (data) => {
+      let table = "";
+      if (data.type === 'private') table = "messages";
+      else if (data.type === 'group') table = "group_messages";
+      else if (data.type === 'global') table = "global_messages";
+      
+      if (table) {
+        const msgRes = await client.execute({ sql: `SELECT sender FROM ${table} WHERE id = ?`, args: [data.message_id] });
+        if (msgRes.rows.length > 0 && msgRes.rows[0].sender === user.id) {
+          await client.execute({ sql: `DELETE FROM ${table} WHERE id = ?`, args: [data.message_id] });
+          io.emit("message_deleted", { type: data.type, message_id: data.message_id, group_id: data.group_id, receiver: data.receiver });
+        }
       }
     });
 

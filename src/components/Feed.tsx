@@ -9,10 +9,12 @@ export default function Feed({
   socket,
   currentUserId,
   onUserClick,
+  activeSubject
 }: {
   socket: Socket | null;
   currentUserId: number;
   onUserClick?: (id: number) => void;
+  activeSubject?: string | null;
 }) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
@@ -31,7 +33,7 @@ export default function Feed({
   useEffect(() => {
     if (!socket) return;
     const loadData = () => {
-      socket.emit("get_feed", (data: Post[]) => setPosts(data));
+      socket.emit("get_feed", activeSubject || null, (data: Post[]) => setPosts(data));
       socket.emit("get_stories", (data: Story[]) => setStories(data));
     };
     loadData();
@@ -42,7 +44,7 @@ export default function Feed({
       socket.off("feed_updated", loadData);
       socket.off("stories_updated", loadData);
     };
-  }, [socket]);
+  }, [socket, activeSubject]);
 
   useEffect(() => {
     if (activeCommentsPostId && socket) {
@@ -114,6 +116,7 @@ export default function Feed({
       image: mediaUrl,
       media_type: finalMediaType,
       caption: newPostCaption,
+      subject: activeSubject || null
     });
 
     setNewPostCaption("");
@@ -197,56 +200,68 @@ export default function Feed({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-50">
+    <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 transition-colors duration-200">
       <div className="max-w-xl mx-auto pb-20">
         
-        {/* Stories */}
-        <div className="bg-white p-4 border-b border-slate-100 flex gap-4 overflow-x-auto shadow-sm sticky top-0 z-10 scrollbar-hide">
-          <div className="flex flex-col items-center gap-1 min-w-[72px]">
-            <div className="relative w-16 h-16 rounded-full bg-slate-100 border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-500 transition-colors">
-              <Plus size={24} className="text-slate-400" />
-              <input
-                type="file"
-                accept="image/*,video/*"
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                onChange={handleStoryUpload}
-              />
-            </div>
-            <span className="text-xs font-medium text-slate-500">Hikaye Ekle</span>
+        {/* Subject Header */}
+        {activeSubject && (
+          <div className="bg-white dark:bg-slate-900 px-6 py-4 border-b border-slate-100 dark:border-slate-800 shadow-sm sticky top-0 z-20 transition-colors duration-200">
+            <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+              <span className="text-blue-500">#</span> {activeSubject}
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Discussions and files for {activeSubject}</p>
           </div>
-          {stories.map((story) => (
-            <div
-              key={story.id}
-              className="flex flex-col items-center gap-1 min-w-[72px] cursor-pointer group"
-              onClick={() => openStoryModal(story)}
-            >
-              <div className="w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-yellow-400 to-fuchsia-600 transition-transform group-hover:scale-105">
-                {story.image.endsWith(".mp4") || story.image.endsWith(".webm") ? (
-                  <div className="w-full h-full rounded-full border-2 border-white bg-black flex items-center justify-center overflow-hidden">
-                    <Film size={20} className="text-white" />
-                  </div>
-                ) : (
-                  <img
-                    src={story.image}
-                    referrerPolicy="no-referrer"
-                    alt={story.username}
-                    className="w-full h-full rounded-full object-cover border-2 border-white bg-white"
-                  />
-                )}
+        )}
+
+        {/* Stories - Only show if not in a subject feed */}
+        {!activeSubject && (
+          <div className="bg-white dark:bg-slate-900 p-4 border-b border-slate-100 dark:border-slate-800 flex gap-4 overflow-x-auto shadow-sm sticky top-0 z-10 scrollbar-hide transition-colors duration-200">
+            <div className="flex flex-col items-center gap-1 min-w-[72px]">
+              <div className="relative w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-center overflow-hidden cursor-pointer hover:border-blue-500 transition-colors">
+                <Plus size={24} className="text-slate-400 dark:text-slate-500" />
+                <input
+                  type="file"
+                  accept="image/*,video/*"
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  onChange={handleStoryUpload}
+                />
               </div>
-              <span className="text-xs font-medium text-slate-700 truncate w-full text-center group-hover:underline">
-                {story.username}
-              </span>
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Hikaye Ekle</span>
             </div>
-          ))}
-        </div>
+            {stories.map((story) => (
+              <div
+                key={story.id}
+                className="flex flex-col items-center gap-1 min-w-[72px] cursor-pointer group"
+                onClick={() => openStoryModal(story)}
+              >
+                <div className="w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-yellow-400 to-fuchsia-600 transition-transform group-hover:scale-105">
+                  {story.image.endsWith(".mp4") || story.image.endsWith(".webm") ? (
+                    <div className="w-full h-full rounded-full border-2 border-white dark:border-slate-900 bg-black flex items-center justify-center overflow-hidden">
+                      <Film size={20} className="text-white" />
+                    </div>
+                  ) : (
+                    <img
+                      src={story.image}
+                      referrerPolicy="no-referrer"
+                      alt={story.username}
+                      className="w-full h-full rounded-full object-cover border-2 border-white dark:border-slate-900 bg-white dark:bg-slate-900"
+                    />
+                  )}
+                </div>
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate w-full text-center group-hover:underline">
+                  {story.username}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Create Post */}
-        <div className="bg-white p-4 my-4 shadow-sm border border-slate-100 md:rounded-2xl mx-0 md:mx-4 lg:mx-0">
+        <div className="bg-white dark:bg-slate-900 p-4 my-4 shadow-sm border border-slate-100 dark:border-slate-800 md:rounded-2xl mx-0 md:mx-4 lg:mx-0 transition-colors duration-200">
           <form onSubmit={handlePostSubmit}>
             <textarea
               placeholder="Ne düşünüyorsun? Fotoğraf veya video paylaş..."
-              className="w-full border-none focus:ring-0 resize-none mb-3 text-slate-700 placeholder-slate-400 outline-none p-2 text-base md:text-lg"
+              className="w-full bg-transparent border-none focus:ring-0 resize-none mb-3 text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 outline-none p-2 text-base md:text-lg"
               rows={2}
               value={newPostCaption}
               onChange={(e) => setNewPostCaption(e.target.value)}
@@ -278,9 +293,9 @@ export default function Feed({
               </div>
             )}
 
-            <div className="flex items-center justify-between border-t border-slate-50 pt-3">
+            <div className="flex items-center justify-between border-t border-slate-50 dark:border-slate-800 pt-3">
               <div className="flex items-center gap-1">
-                <label className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-full cursor-pointer transition-colors flex items-center gap-2">
+                <label className="text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 px-3 py-2 rounded-full cursor-pointer transition-colors flex items-center gap-2">
                   <ImagePlus size={20} />
                   <span className="text-sm font-medium">Fotoğraf / Video</span>
                   <input
@@ -308,7 +323,7 @@ export default function Feed({
           {posts.map((post) => (
             <div
               key={post.id}
-              className="bg-white border-y md:border border-slate-100 md:rounded-2xl shadow-sm overflow-hidden"
+              className="bg-white dark:bg-slate-900 border-y md:border border-slate-100 dark:border-slate-800 md:rounded-2xl shadow-sm overflow-hidden transition-colors duration-200"
             >
               {/* Post Header */}
               <div className="p-4 flex items-center gap-3">
@@ -320,12 +335,12 @@ export default function Feed({
                 </div>
                 <div className="flex-1">
                   <h3
-                    className="font-bold text-slate-800 text-[15px] leading-tight cursor-pointer hover:underline inline-block"
+                    className="font-bold text-slate-800 dark:text-slate-200 text-[15px] leading-tight cursor-pointer hover:underline inline-block"
                     onClick={() => onUserClick && onUserClick(post.user_id)}
                   >
                     {post.username}
                   </h3>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
                     {new Date(post.created_at).toLocaleString("tr-TR", {
                       dateStyle: "short",
                       timeStyle: "short",
@@ -336,7 +351,7 @@ export default function Feed({
 
               {/* Caption */}
               {post.caption && (
-                <p className="px-4 pb-3 text-slate-800 text-[15px] leading-relaxed whitespace-pre-wrap">
+                <p className="px-4 pb-3 text-slate-800 dark:text-slate-200 text-[15px] leading-relaxed whitespace-pre-wrap">
                   {post.caption}
                 </p>
               )}
@@ -373,12 +388,12 @@ export default function Feed({
               )}
 
               {/* Action Bar */}
-              <div className="px-4 py-3 border-t border-slate-50 flex items-center justify-between">
+              <div className="px-4 py-3 border-t border-slate-50 dark:border-slate-800 flex items-center justify-between transition-colors duration-200">
                 <div className="flex items-center gap-6">
                   <button
                     onClick={() => handleLike(post.id)}
                     className={`flex items-center gap-2 transition-colors cursor-pointer ${
-                      post.is_liked ? "text-red-500" : "text-slate-500 hover:text-red-500"
+                      post.is_liked ? "text-red-500" : "text-slate-500 dark:text-slate-400 hover:text-red-500"
                     }`}
                   >
                     <Heart
@@ -394,7 +409,7 @@ export default function Feed({
                     className={`flex items-center gap-2 transition-colors cursor-pointer ${
                       activeCommentsPostId === post.id
                         ? "text-blue-500"
-                        : "text-slate-500 hover:text-blue-500"
+                        : "text-slate-500 dark:text-slate-400 hover:text-blue-500"
                     }`}
                   >
                     <MessageCircle size={22} />
@@ -405,7 +420,7 @@ export default function Feed({
                 {post.image && (
                   <button
                     onClick={() => openPostModal(post)}
-                    className="text-xs text-slate-400 hover:text-blue-600 flex items-center gap-1 cursor-pointer transition-colors"
+                    className="text-xs text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     <Maximize2 size={14} />
                     <span>Detaylar</span>
@@ -415,10 +430,10 @@ export default function Feed({
 
               {/* Comments Section */}
               {activeCommentsPostId === post.id && (
-                <div className="border-t border-slate-100 bg-slate-50 p-4 rounded-b-2xl">
+                <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 p-4 rounded-b-2xl transition-colors duration-200">
                   <div className="space-y-3 mb-4 max-h-48 overflow-y-auto">
                     {comments.length === 0 ? (
-                      <p className="text-center text-xs text-slate-400 py-2">
+                      <p className="text-center text-xs text-slate-400 dark:text-slate-500 py-2">
                         Henüz yorum yok. İlk yorumu sen yap!
                       </p>
                     ) : (
@@ -430,14 +445,14 @@ export default function Feed({
                           >
                             <Avatar url={c.avatar} name={c.username} color={c.color} size={6} />
                           </div>
-                          <div className="bg-white p-2.5 rounded-xl shadow-sm border border-slate-100 flex-1">
+                          <div className="bg-white dark:bg-slate-800 p-2.5 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex-1 transition-colors duration-200">
                             <div
-                              className="font-semibold text-xs text-slate-800 cursor-pointer hover:underline inline-block"
+                              className="font-semibold text-xs text-slate-800 dark:text-slate-200 cursor-pointer hover:underline inline-block"
                               onClick={() => onUserClick && onUserClick(c.user_id)}
                             >
                               {c.username}
                             </div>
-                            <div className="text-sm text-slate-600 break-words leading-relaxed">
+                            <div className="text-sm text-slate-600 dark:text-slate-300 break-words leading-relaxed">
                               {c.content}
                             </div>
                           </div>
@@ -449,7 +464,7 @@ export default function Feed({
                     <input
                       type="text"
                       placeholder="Yorum ekle..."
-                      className="flex-1 rounded-full border border-slate-200 bg-white shadow-sm px-4 py-2 focus:ring-2 focus:ring-blue-500 text-sm outline-none"
+                      className="flex-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm px-4 py-2 focus:ring-2 focus:ring-blue-500 text-sm outline-none transition-colors duration-200"
                       value={newComment}
                       onChange={(e) => setNewComment(e.target.value)}
                     />
@@ -467,7 +482,7 @@ export default function Feed({
           ))}
 
           {posts.length === 0 && (
-            <div className="p-8 text-center text-slate-400 bg-white md:rounded-2xl border-y md:border border-slate-100 shadow-sm">
+            <div className="p-8 text-center text-slate-400 dark:text-slate-500 bg-white dark:bg-slate-900 md:rounded-2xl border-y md:border border-slate-100 dark:border-slate-800 shadow-sm transition-colors duration-200">
               Henüz gönderi yok.
             </div>
           )}
