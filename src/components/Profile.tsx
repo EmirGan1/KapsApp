@@ -137,15 +137,15 @@ export default function Profile({
     });
   };
 
-  if (!userProfile) return <div className="flex-1 bg-slate-50"></div>;
+  if (!userProfile) return <div className="flex-1 bg-slate-50 dark:bg-slate-950 transition-colors duration-200"></div>;
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-50 flex flex-col items-center">
-      <div className="w-full max-w-2xl bg-white md:mt-8 md:rounded-t-3xl shadow-sm border-x border-t border-slate-100 p-8 pb-4 flex flex-col items-center relative">
+    <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col items-center transition-colors duration-200">
+      <div className="w-full max-w-2xl bg-white dark:bg-slate-900 md:mt-8 md:rounded-t-3xl shadow-sm border-x border-t border-slate-100 dark:border-slate-800 p-8 pb-4 flex flex-col items-center relative transition-colors duration-200">
         {!isMe && (
           <button
             onClick={() => onUserClick(currentUserId)}
-            className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 bg-slate-50 rounded-full transition-colors cursor-pointer"
+            className="absolute top-4 left-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 bg-slate-50 dark:bg-slate-800 rounded-full transition-colors cursor-pointer"
             title="Geri"
           >
             <ArrowLeft size={20} />
@@ -153,7 +153,7 @@ export default function Profile({
         )}
 
         <div className="relative mb-4 mt-4">
-          <div className="w-28 h-28 md:w-32 md:h-32 rounded-full overflow-hidden bg-slate-100 border-4 border-white shadow-lg flex items-center justify-center">
+          <div className="w-28 h-28 md:w-32 md:h-32 rounded-full overflow-hidden bg-slate-100 dark:bg-slate-800 border-4 border-white dark:border-slate-900 shadow-lg flex items-center justify-center transition-colors">
             <Avatar
               url={userProfile.avatar}
               name={userProfile.username}
@@ -175,8 +175,8 @@ export default function Profile({
           )}
         </div>
 
-        <h2 className="text-2xl font-bold text-slate-800 mb-1">{userProfile.username}</h2>
-        <p className="text-slate-500 text-sm mb-6">{userPosts.length} Gönderi</p>
+        <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-1">{userProfile.username}</h2>
+        <p className="text-slate-500 dark:text-slate-400 text-sm mb-6">{userPosts.length} Gönderi</p>
 
         {isMe && (
           <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto mb-4">
@@ -186,14 +186,14 @@ export default function Profile({
                 setPasswordSuccess(false);
                 setPasswordError("");
               }}
-              className="px-6 flex items-center justify-center gap-2 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-colors cursor-pointer"
+              className="px-6 flex items-center justify-center gap-2 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold rounded-xl transition-colors cursor-pointer"
             >
               <Lock size={18} />
               Şifre Değiştir
             </button>
             <button
               onClick={onLogout}
-              className="px-6 flex items-center justify-center gap-2 py-2.5 bg-red-50 hover:bg-red-100 text-red-600 font-semibold rounded-xl transition-colors cursor-pointer"
+              className="px-6 flex items-center justify-center gap-2 py-2.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-semibold rounded-xl transition-colors cursor-pointer"
             >
               <LogOut size={18} />
               Çıkış Yap
@@ -202,40 +202,55 @@ export default function Profile({
         )}
       </div>
 
-      <div className="w-full max-w-2xl bg-slate-50 p-4 space-y-4">
-        <h3 className="font-bold text-slate-700 px-2 text-lg">Gönderiler</h3>
+      <div className="w-full max-w-2xl bg-slate-50 dark:bg-slate-950 p-4 space-y-4 transition-colors duration-200">
+        <h3 className="font-bold text-slate-700 dark:text-slate-300 px-2 text-lg">Gönderiler</h3>
         {userPosts.length === 0 ? (
-          <div className="text-center text-slate-400 p-8 bg-white rounded-2xl border border-slate-100 shadow-sm">
+          <div className="text-center text-slate-400 dark:text-slate-500 p-8 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm transition-colors duration-200">
             Henüz gönderi yok.
           </div>
         ) : (
           userPosts.map((post) => (
             <div
               key={post.id}
-              className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden"
+              className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden transition-colors duration-200"
             >
-              <div className="p-4 flex items-center gap-3">
-                <Avatar
-                  url={userProfile.avatar}
-                  name={userProfile.username}
-                  color={userProfile.color}
-                  size={10}
-                />
-                <div>
-                  <h3 className="font-bold text-slate-800 text-[15px] leading-tight">
-                    {userProfile.username}
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    {new Date(post.created_at).toLocaleString([], {
-                      dateStyle: "short",
-                      timeStyle: "short",
-                    })}
-                  </p>
+              <div className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Avatar
+                    url={userProfile.avatar}
+                    name={userProfile.username}
+                    color={userProfile.color}
+                    size={10}
+                  />
+                  <div>
+                    <h3 className="font-bold text-slate-800 dark:text-slate-100 text-[15px] leading-tight">
+                      {userProfile.username}
+                    </h3>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">
+                      {new Date(post.created_at).toLocaleString([], {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}
+                    </p>
+                  </div>
                 </div>
+                {isMe && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
+                        socket?.emit("delete_post", post.id);
+                      }
+                    }}
+                    className="p-2 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors cursor-pointer"
+                    title="Gönderiyi Sil"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                  </button>
+                )}
               </div>
 
               {post.caption && (
-                <p className="px-4 pb-3 text-slate-800 text-[15px]">{post.caption}</p>
+                <p className="px-4 pb-3 text-slate-800 dark:text-slate-200 text-[15px] leading-relaxed whitespace-pre-wrap">{post.caption}</p>
               )}
 
               {post.image && (
@@ -246,9 +261,11 @@ export default function Profile({
                   {post.media_type === "video" ? (
                     <video
                       src={post.image}
-                      controls
+                      autoPlay
+                      muted
+                      loop
                       playsInline
-                      className="w-full max-h-[500px] object-contain bg-black"
+                      className="w-full max-h-[500px] object-contain bg-black pointer-events-none"
                     />
                   ) : (
                     <img
@@ -258,22 +275,22 @@ export default function Profile({
                       className="w-full max-h-[500px] object-cover bg-slate-50 hover:opacity-95 transition-opacity"
                     />
                   )}
-                  <button
-                    onClick={() => openPostModal(post)}
-                    className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                  <div
+                    className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm flex items-center gap-1 cursor-pointer"
                     title="Büyüt ve Bilgileri Gör"
                   >
                     <Maximize2 size={16} />
-                  </button>
+                    {post.media_type === "video" && <span className="text-xs pr-1 font-medium">Sesli İzle</span>}
+                  </div>
                 </div>
               )}
 
-              <div className="px-4 py-3 border-t border-slate-50 flex items-center justify-between">
+              <div className="px-4 py-3 border-t border-slate-50 dark:border-slate-800 flex items-center justify-between transition-colors duration-200">
                 <div className="flex items-center gap-6">
                   <button
                     onClick={() => handleLike(post.id)}
                     className={`flex items-center gap-2 transition-colors cursor-pointer ${
-                      post.is_liked ? "text-red-500" : "text-slate-500 hover:text-red-500"
+                      post.is_liked ? "text-red-500" : "text-slate-500 dark:text-slate-400 hover:text-red-500"
                     }`}
                   >
                     <Heart
@@ -284,7 +301,7 @@ export default function Profile({
                     <span className="font-medium text-sm">{post.likes_count}</span>
                   </button>
 
-                  <div className="flex items-center gap-2 text-slate-500">
+                  <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
                     <MessageCircle size={20} />
                     <span className="font-medium text-sm">
                       {post.comments?.length || 0} Yorum
@@ -295,7 +312,7 @@ export default function Profile({
                 {post.image && (
                   <button
                     onClick={() => openPostModal(post)}
-                    className="text-xs text-slate-400 hover:text-blue-600 flex items-center gap-1 cursor-pointer transition-colors"
+                    className="text-xs text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     <Maximize2 size={14} />
                     <span>Detaylar</span>

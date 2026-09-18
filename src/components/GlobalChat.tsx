@@ -218,19 +218,19 @@ export default function GlobalChat({
   });
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-slate-50 relative">
+    <div className="flex-1 flex overflow-hidden bg-slate-50 dark:bg-slate-950 relative transition-colors duration-200">
       {/* Messages Feed */}
-      <div className="flex-1 flex flex-col h-full bg-white shadow-sm border-r border-slate-200">
-        <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between shadow-sm z-10">
+      <div className="flex-1 flex flex-col h-full bg-white dark:bg-slate-950 shadow-sm border-r border-slate-200 dark:border-slate-800 transition-colors duration-200">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-10 transition-colors duration-200">
           <div>
-            <h1 className="font-bold text-slate-800 text-lg">Genel Sohbet</h1>
-            <p className="text-xs text-slate-500">
+            <h1 className="font-bold text-slate-800 dark:text-slate-100 text-lg">Genel Sohbet</h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               Herkesle anlık iletişim kur, fotoğraf, video ve dosya paylaş
             </p>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
-            <span className="text-xs font-semibold text-slate-600">
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
               {onlineUsers.length} Çevrimiçi
             </span>
           </div>
@@ -265,7 +265,7 @@ export default function GlobalChat({
                     className={`relative rounded-2xl p-3.5 shadow-sm transition-all ${
                       isMine
                         ? "bg-blue-600 text-white rounded-br-none"
-                        : "bg-slate-100 text-slate-800 rounded-bl-none"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-100 dark:border-slate-700"
                     }`}
                   >
                     {/* Floating Reaction & Reply buttons */}
@@ -317,7 +317,7 @@ export default function GlobalChat({
                           color={msg.sender_color}
                           size={5}
                         />
-                        <span className="text-xs font-semibold text-blue-600 hover:underline">
+                        <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
                           {msg.sender_name}
                         </span>
                       </div>
@@ -329,7 +329,7 @@ export default function GlobalChat({
                         className={`mb-2 p-2 rounded-lg text-sm border-l-4 ${
                           isMine
                             ? "bg-blue-700/50 border-white text-white/90"
-                            : "bg-slate-200 border-blue-500 text-slate-700"
+                            : "bg-slate-200 dark:bg-slate-700/50 border-blue-500 text-slate-700 dark:text-slate-300"
                         }`}
                       >
                         <div className="font-semibold text-xs mb-1">
@@ -371,15 +371,15 @@ export default function GlobalChat({
 
                     {/* Video Message */}
                     {msg.type === "video" && (
-                      <div className="relative group overflow-hidden rounded-xl bg-black max-w-sm">
-                        <video src={msg.content} controls playsInline className="w-full rounded-xl" />
-                        <button
-                          onClick={() => openMediaModal(msg)}
-                          className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                      <div className="relative group overflow-hidden rounded-xl bg-black max-w-sm" onClick={() => openMediaModal(msg)}>
+                        <video src={msg.content} autoPlay muted loop playsInline className="w-full rounded-xl pointer-events-none" />
+                        <div
+                          className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10 flex items-center gap-1 cursor-pointer"
                           title="Büyüt ve Bilgileri Gör"
                         >
                           <Maximize2 size={14} />
-                        </button>
+                          <span className="text-xs pr-1 font-medium">Sesli İzle</span>
+                        </div>
                       </div>
                     )}
 

@@ -510,6 +510,23 @@ async function startServer() {
       io.emit("feed_updated");
     });
 
+    socket.on("delete_post", async (postId, cb) => {
+      // First verify ownership
+      const postRes = await client.execute({
+        sql: "SELECT user_id FROM posts WHERE id = ?",
+        args: [postId]
+      });
+      if (postRes.rows.length > 0 && postRes.rows[0].user_id === user.id) {
+        await client.execute({ sql: "DELETE FROM posts WHERE id = ?", args: [postId] });
+        await client.execute({ sql: "DELETE FROM likes WHERE post_id = ?", args: [postId] });
+        await client.execute({ sql: "DELETE FROM comments WHERE post_id = ?", args: [postId] });
+        io.emit("feed_updated");
+        if(cb) cb({ success: true });
+      } else {
+        if(cb) cb({ error: "Unauthorized" });
+      }
+    });
+
     socket.on("get_comments", async (postId, cb) => {
       const commentsRes = await client.execute({
         sql: "SELECT * FROM comments WHERE post_id = ? ORDER BY created_at ASC",

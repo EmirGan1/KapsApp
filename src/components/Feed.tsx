@@ -347,6 +347,19 @@ export default function Feed({
                     })}
                   </p>
                 </div>
+                {post.user_id === currentUserId && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
+                        socket?.emit("delete_post", post.id);
+                      }
+                    }}
+                    className="p-2 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors cursor-pointer"
+                    title="Gönderiyi Sil"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                  </button>
+                )}
               </div>
 
               {/* Caption */}
@@ -358,13 +371,15 @@ export default function Feed({
 
               {/* Media (Image or Video) with Instagram Lightbox Trigger */}
               {post.image && (
-                <div className="relative group bg-slate-900 overflow-hidden cursor-pointer">
+                <div className="relative group bg-slate-900 overflow-hidden cursor-pointer" onClick={() => openPostModal(post)}>
                   {post.media_type === "video" ? (
                     <video
                       src={post.image}
-                      controls
+                      autoPlay
+                      muted
+                      loop
                       playsInline
-                      className="w-full max-h-[500px] object-contain bg-black"
+                      className="w-full max-h-[500px] object-contain bg-black pointer-events-none"
                     />
                   ) : (
                     <img
@@ -372,18 +387,17 @@ export default function Feed({
                       alt={post.caption || "Gönderi"}
                       referrerPolicy="no-referrer"
                       className="w-full max-h-[500px] object-cover bg-slate-50 transition-transform duration-300 group-hover:scale-[1.01]"
-                      onClick={() => openPostModal(post)}
                     />
                   )}
 
                   {/* Expand button (Instagram style trigger) */}
-                  <button
-                    onClick={() => openPostModal(post)}
-                    className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                  <div
+                    className="absolute top-3 right-3 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm flex items-center gap-1"
                     title="Büyüt ve Bilgileri Gör"
                   >
                     <Maximize2 size={16} />
-                  </button>
+                    {post.media_type === "video" && <span className="text-xs pr-1 font-medium">Sesli İzle</span>}
+                  </div>
                 </div>
               )}
 

@@ -56,7 +56,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
       </button>
 
       {/* Modal Container */}
-      <div className="bg-black md:bg-white text-slate-800 w-full h-full md:h-[88vh] md:max-w-5xl md:rounded-2xl overflow-hidden shadow-2xl flex flex-col md:flex-row border border-white/10 md:border-slate-200">
+      <div className="bg-black md:bg-white dark:md:bg-slate-900 text-slate-800 dark:text-slate-200 w-full h-full md:h-[88vh] md:max-w-5xl md:rounded-2xl overflow-hidden shadow-2xl flex flex-col md:flex-row border border-white/10 md:border-slate-200 dark:md:border-slate-800 transition-colors duration-200">
         
         {/* Media Section (Left/Center) */}
         <div className="flex-1 bg-black flex items-center justify-center relative overflow-hidden min-h-[45vh] md:min-h-0">
@@ -98,10 +98,10 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
         </div>
 
         {/* Sidebar / Info Details (Instagram Style Right Panel) */}
-        <div className="w-full md:w-[380px] lg:w-[420px] bg-white flex flex-col h-full flex-shrink-0 border-t md:border-t-0 md:border-l border-slate-200">
+        <div className="w-full md:w-[380px] lg:w-[420px] bg-white dark:bg-slate-900 flex flex-col h-full flex-shrink-0 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 transition-colors duration-200">
           
           {/* Header */}
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
                 className={data.authorId ? "cursor-pointer" : ""}
@@ -121,7 +121,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
               </div>
               <div>
                 <h3
-                  className={`font-bold text-slate-800 text-[15px] leading-tight ${
+                  className={`font-bold text-slate-800 dark:text-slate-100 text-[15px] leading-tight ${
                     data.authorId ? "cursor-pointer hover:underline" : ""
                   }`}
                   onClick={() => {
@@ -134,7 +134,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
                   {data.authorName || "Kullanıcı"}
                 </h3>
                 {formattedDate && (
-                  <div className="flex items-center gap-1 text-xs text-slate-400 mt-0.5">
+                  <div className="flex items-center gap-1 text-xs text-slate-400 dark:text-slate-500 mt-0.5">
                     <Calendar size={11} />
                     <span>{formattedDate}</span>
                   </div>
@@ -147,7 +147,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
               download={data.fileName || `kapsapp-${Date.now()}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
               title="Medya İndir"
             >
               <Download size={18} />
@@ -158,14 +158,14 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
           <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
             {/* Author Caption */}
             {data.caption && (
-              <div className="flex items-start gap-3 pb-3 border-b border-slate-100">
+              <div className="flex items-start gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
                 <Avatar
                   url={data.authorAvatar}
                   name={data.authorName}
                   color={data.authorColor}
                   size={8}
                 />
-                <div className="flex-1 text-slate-800">
+                <div className="flex-1 text-slate-800 dark:text-slate-200">
                   <span className="font-bold mr-2">{data.authorName}</span>
                   <span className="leading-relaxed whitespace-pre-wrap">{data.caption}</span>
                 </div>
@@ -174,8 +174,8 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
 
             {/* If Chat Message Details */}
             {data.fileName && (
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1 text-xs text-slate-600">
-                <div className="font-semibold text-slate-700">Dosya Bilgisi:</div>
+              <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl border border-slate-100 dark:border-slate-700 space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                <div className="font-semibold text-slate-700 dark:text-slate-300">Dosya Bilgisi:</div>
                 <div className="truncate font-mono">{data.fileName}</div>
                 {data.fileSize && <div>Boyut: {data.fileSize}</div>}
               </div>
@@ -184,7 +184,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
             {/* Reactions if chat message */}
             {data.reactions && data.reactions.length > 0 && (
               <div className="space-y-1.5 pt-1">
-                <div className="text-xs font-semibold text-slate-500">Tepkiler</div>
+                <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">Tepkiler</div>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(
                     data.reactions.reduce((acc: any, r: any) => {
@@ -194,7 +194,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
                   ).map(([emoji, count]: any) => (
                     <div
                       key={emoji}
-                      className="bg-slate-100 border border-slate-200 text-xs rounded-full px-2.5 py-1 text-slate-700 flex items-center gap-1 font-medium"
+                      className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs rounded-full px-2.5 py-1 text-slate-700 dark:text-slate-300 flex items-center gap-1 font-medium"
                     >
                       <span>{emoji}</span>
                       <span>{count}</span>
@@ -207,7 +207,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
             {/* Comments List (For Feed Posts) */}
             {data.comments && (
               <div className="space-y-3">
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                <div className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
                   Yorumlar ({data.comments.length})
                 </div>
                 {data.comments.length === 0 ? (
@@ -233,9 +233,9 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
                           size={7}
                         />
                       </div>
-                      <div className="flex-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                      <div className="flex-1 bg-slate-50 dark:bg-slate-800 p-2.5 rounded-xl border border-slate-100 dark:border-slate-700">
                         <span
-                          className="font-bold text-xs text-slate-800 mr-2 cursor-pointer hover:underline"
+                          className="font-bold text-xs text-slate-800 dark:text-slate-200 mr-2 cursor-pointer hover:underline"
                           onClick={() => {
                             if (c.user_id && onUserClick) {
                               onClose();
@@ -245,11 +245,11 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
                         >
                           {c.username}
                         </span>
-                        <span className="text-xs text-slate-700 break-words leading-relaxed">
+                        <span className="text-xs text-slate-700 dark:text-slate-300 break-words leading-relaxed">
                           {c.content}
                         </span>
                         {c.created_at && (
-                          <div className="text-[10px] text-slate-400 mt-1">
+                          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
                             {new Date(c.created_at).toLocaleTimeString([], {
                               hour: "2-digit",
                               minute: "2-digit",
@@ -265,13 +265,13 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
           </div>
 
           {/* Action Bar (Likes & Comment Count for Feed) */}
-          <div className="p-4 border-t border-slate-100 bg-white">
+          <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 transition-colors duration-200">
             {data.onLike && (
               <div className="flex items-center gap-4 mb-3">
                 <button
                   onClick={data.onLike}
                   className={`flex items-center gap-1.5 transition-colors cursor-pointer ${
-                    data.isLiked ? "text-red-500" : "text-slate-600 hover:text-red-500"
+                    data.isLiked ? "text-red-500" : "text-slate-600 dark:text-slate-400 hover:text-red-500"
                   }`}
                 >
                   <Heart
@@ -283,7 +283,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
                 </button>
 
                 {data.comments && (
-                  <div className="flex items-center gap-1.5 text-slate-500">
+                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
                     <MessageCircle size={20} />
                     <span className="font-semibold text-sm">{data.comments.length}</span>
                   </div>
@@ -299,7 +299,7 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
                   placeholder="Yorum ekle..."
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
-                  className="flex-1 bg-slate-50 rounded-full px-4 py-2 text-sm border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                  className="flex-1 bg-slate-50 dark:bg-slate-800 rounded-full px-4 py-2 text-sm border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white dark:focus:bg-slate-900 placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-colors"
                 />
                 <button
                   type="submit"

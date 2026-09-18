@@ -362,35 +362,35 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
       </div>
 
       {/* Chat Area */}
-      <div className={`flex-1 flex flex-col bg-[#F0F2F5] relative ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`flex-1 flex flex-col bg-[#F0F2F5] dark:bg-slate-950 relative transition-colors duration-200 ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
         {!activeChat ? (
           <div className="flex-1 flex items-center justify-center text-slate-400 flex-col gap-4">
-            <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center">
-              <Send size={32} className="text-slate-300 ml-1" />
+            <div className="w-20 h-20 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center transition-colors">
+              <Send size={32} className="text-slate-300 dark:text-slate-600 ml-1" />
             </div>
             <p>Sohbet etmek için bir {activeTab === "friends" ? "arkadaş" : "grup"} seçin</p>
           </div>
         ) : (
           <>
             {/* Chat Header */}
-            <div className="bg-white px-6 py-3 border-b border-slate-200 flex items-center gap-3 shadow-sm z-10">
-              <button className="md:hidden p-2 -ml-2 text-blue-600" onClick={() => setActiveChat(null)}>Geri</button>
+            <div className="bg-white dark:bg-slate-900 px-6 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3 shadow-sm z-10 transition-colors duration-200">
+              <button className="md:hidden p-2 -ml-2 text-blue-600 dark:text-blue-400" onClick={() => setActiveChat(null)}>Geri</button>
               
               {activeTab === "friends" ? (
                 <div className="relative">
                   <Avatar url={(activeChat as Friend).avatar} name={(activeChat as Friend).username} color={(activeChat as Friend).color} size={10} />
-                  {onlineUsers.includes(activeChat.id) && <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></div>}
+                  {onlineUsers.includes(activeChat.id) && <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-slate-900 rounded-full"></div>}
                 </div>
               ) : (
-                <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center"><Users size={20} /></div>
+                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center"><Users size={20} /></div>
               )}
               
               <div>
-                <h3 className="font-bold text-slate-800 leading-tight">{(activeChat as Friend).username || (activeChat as Group).name}</h3>
+                <h3 className="font-bold text-slate-800 dark:text-slate-100 leading-tight">{(activeChat as Friend).username || (activeChat as Group).name}</h3>
                 {activeTab === "friends" ? (
-                  <span className="text-xs text-slate-500">{onlineUsers.includes(activeChat.id) ? 'Çevrimiçi' : 'Çevrimdışı'}</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{onlineUsers.includes(activeChat.id) ? 'Çevrimiçi' : 'Çevrimdışı'}</span>
                 ) : (
-                  <span className="text-xs text-slate-500">{(activeChat as Group).members.length} Üye</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{(activeChat as Group).members.length} Üye</span>
                 )}
               </div>
             </div>
@@ -449,15 +449,15 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                           </div>
                         )}
                         {msg.type === 'video' && (
-                          <div className="relative group overflow-hidden rounded-xl max-w-xs md:max-w-sm bg-black">
-                            <video src={msg.content} controls playsInline className="w-full rounded-xl" />
-                            <button 
-                              onClick={() => openMediaModal(msg)}
-                              className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                          <div className="relative group overflow-hidden rounded-xl max-w-xs md:max-w-sm bg-black" onClick={() => openMediaModal(msg)}>
+                            <video src={msg.content} autoPlay muted loop playsInline className="w-full rounded-xl pointer-events-none" />
+                            <div 
+                              className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10 flex items-center gap-1 cursor-pointer"
                               title="Büyüt ve Bilgileri Gör"
                             >
                               <Maximize2 size={14} />
-                            </button>
+                              <span className="text-xs pr-1 font-medium">Sesli İzle</span>
+                            </div>
                           </div>
                         )}
                         {msg.type === 'file' && (
