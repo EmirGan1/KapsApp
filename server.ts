@@ -135,6 +135,14 @@ async function initDb() {
     created_at TEXT
   )`);
 
+  await client.execute(`CREATE TABLE IF NOT EXISTS followers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    follower_id INTEGER NOT NULL,
+    following_id INTEGER NOT NULL,
+    created_at TEXT,
+    UNIQUE(follower_id, following_id)
+  )`);
+  
   // Migrations for existing tables
   try { await client.execute("ALTER TABLE messages ADD COLUMN file_name TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE messages ADD COLUMN file_size TEXT"); } catch(e){}
@@ -333,6 +341,27 @@ async function startServer() {
   const onlineUsers = new Map();
   const globalRead = new Map<number, number>();
   const chatRead = new Map<number, Map<number, number>>();
+  
+  const okeyRooms = new Map<string, any>();
+  
+  const generateDeck = () => {
+    const colors = ['red', 'blue', 'black', 'yellow'];
+    const deck = [];
+    let idCounter = 1;
+    for (const color of colors) {
+      for (let num = 1; num <= 13; num++) {
+        deck.push({ id: `t${idCounter++}`, number: num, color });
+        deck.push({ id: `t${idCounter++}`, number: num, color });
+      }
+    }
+    deck.push({ id: `t${idCounter++}`, number: 0, color: 'fake' });
+    deck.push({ id: `t${idCounter++}`, number: 0, color: 'fake' });
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  };
 
   io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
@@ -385,10 +414,52 @@ async function startServer() {
     socket.on("get_user_profile", async (targetId, cb) => {
       const u = await getUser(targetId);
       if (u) {
-        cb({ id: u.id, username: u.username, avatar: u.avatar, color: u.color });
+        // Get followers and following counts
+        const followersRes = await client.execute({ sql: "SELECT COUNT(*) as count FROM followers WHERE following_id = ?", args: [targetId] });
+        const followingRes = await client.execute({ sql: "SELECT COUNT(*) as count FROM followers WHERE follower_id = ?", args: [targetId] });
+        
+        let isFollowing = false;
+        if (targetId !== user.id) {
+           const checkRes = await client.execute({ sql: "SELECT * FROM followers WHERE follower_id = ? AND following_id = ?", args: [user.id, targetId] });
+           isFollowing = checkRes.rows.length > 0;
+        }
+
+        cb({ 
+          id: u.id, 
+          username: u.username, 
+          avatar: u.avatar, 
+          color: u.color,
+          followersCount: Number(followersRes.rows[0]?.count || 0),
+          followingCount: Number(followingRes.rows[0]?.count || 0),
+          isFollowing
+        });
       } else {
         cb(null);
       }
+    });
+
+    socket.on("toggle_follow", async (targetId) => {
+      if (targetId === user.id) return;
+      const checkRes = await client.execute({ sql: "SELECT id FROM followers WHERE follower_id = ? AND following_id = ?", args: [user.id, targetId] });
+      
+      if (checkRes.rows.length > 0) {
+        // Unfollow
+        await client.execute({ sql: "DELETE FROM followers WHERE follower_id = ? AND following_id = ?", args: [user.id, targetId] });
+      } else {
+        // Follow
+        await client.execute({ sql: "INSERT INTO followers (follower_id, following_id, created_at) VALUES (?, ?, ?)", args: [user.id, targetId, new Date().toISOString()] });
+        
+        // Notify
+        await client.execute({
+          sql: "INSERT INTO notifications (user_id, type, content, created_at) VALUES (?, ?, ?, ?)",
+          args: [targetId, 'follow', `${user.username} seni takip etmeye başladı.`, new Date().toISOString()]
+        });
+        io.to(onlineUsers.get(Number(targetId))).emit("notifications_updated");
+      }
+      
+      // Update both users
+      io.to(socket.id).emit("profile_updated", targetId);
+      io.to(onlineUsers.get(Number(targetId))).emit("profile_updated", user.id);
     });
 
     socket.on("get_user_posts", async (targetId, cb) => {
@@ -912,7 +983,129 @@ async function startServer() {
       io.emit("friends_updated");
     });
 
+    // --- Okey Game Logic ---
+    const emitRooms = () => {
+      const roomList = Array.from(okeyRooms.entries()).map(([id, room]) => ({
+        id,
+        name: room.name,
+        gameMode: room.gameMode,
+        players: room.players.length,
+        status: room.status
+      }));
+      io.emit("okey_rooms_list", roomList);
+    };
+
+    socket.on("get_okey_rooms", () => {
+      emitRooms();
+    });
+
+    socket.on("create_okey_room", ({ name, gameMode }) => {
+      const roomId = `room_${Date.now()}`;
+      okeyRooms.set(roomId, {
+        id: roomId,
+        name,
+        gameMode,
+        players: [],
+        deck: [],
+        discardPile: [],
+        indicator: null,
+        centerMelds: [],
+        status: 'waiting'
+      });
+      emitRooms();
+      socket.emit("okey_room_created", roomId);
+    });
+
+    socket.on("join_okey", (roomId) => {
+      if (!roomId) roomId = "global"; // fallback
+      let room = okeyRooms.get(roomId);
+      if (!room && roomId === "global") {
+        room = {
+          id: "global",
+          name: "Genel Masa",
+          gameMode: "101",
+          players: [],
+          deck: [],
+          discardPile: [],
+          indicator: null,
+          centerMelds: [],
+          status: 'waiting'
+        };
+        okeyRooms.set("global", room);
+      }
+      if (room && !room.players.find((p: any) => p.id === user.id) && room.players.length < 4) {
+        room.players.push({
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          color: user.color
+        });
+        socket.join(`okey_${roomId}`);
+        socket.data.currentOkeyRoom = roomId;
+        io.to(`okey_${roomId}`).emit("okey_state", room);
+        emitRooms();
+      }
+    });
+
+    socket.on("start_okey_game", (roomId) => {
+      const room = okeyRooms.get(roomId);
+      if (room && room.players.length > 1 && room.status === 'waiting') {
+        room.status = 'playing';
+        room.deck = generateDeck();
+        room.discardPile = [];
+        room.indicator = room.deck.pop();
+        
+        // Deal tiles (skip in pure UI mockup, but let's send event)
+        io.to(`okey_${roomId}`).emit("okey_game_started", room);
+        io.to(`okey_${roomId}`).emit("okey_state", room);
+        emitRooms();
+      }
+    });
+
+    socket.on("leave_okey", () => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (roomId) {
+        socket.leave(`okey_${roomId}`);
+        const room = okeyRooms.get(roomId);
+        if (room) {
+          room.players = room.players.filter((p: any) => p.id !== user.id);
+          if (room.players.length === 0) {
+            okeyRooms.delete(roomId);
+          } else {
+            io.to(`okey_${roomId}`).emit("okey_state", room);
+          }
+          emitRooms();
+        }
+        socket.data.currentOkeyRoom = null;
+      }
+    });
+
+    socket.on("okey_discard", (tile) => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (roomId) {
+        const room = okeyRooms.get(roomId);
+        if (room) {
+          room.discardPile.push(tile);
+          io.to(`okey_${roomId}`).emit("okey_state", room);
+        }
+      }
+    });
+
     socket.on("disconnect", async () => {
+      const roomId = socket.data.currentOkeyRoom;
+      if (roomId) {
+        const room = okeyRooms.get(roomId);
+        if (room) {
+          room.players = room.players.filter((p: any) => p.id !== user.id);
+          if (room.players.length === 0) {
+            okeyRooms.delete(roomId);
+          } else {
+            io.to(`okey_${roomId}`).emit("okey_state", room);
+          }
+          emitRooms();
+        }
+      }
+      
       await client.execute({
         sql: "UPDATE users SET last_seen = ? WHERE id = ?",
         args: [new Date().toISOString(), user.id]

@@ -43,18 +43,23 @@ export default function Profile({
   useEffect(() => {
     if (!socket) return;
 
-    if (isMe) {
-      setUserProfile({
-        id: currentUserId,
-        username: currentUsername,
-        avatar: currentAvatar,
-        color: currentColor,
-      });
-    } else {
+    const loadProfile = () => {
       socket.emit("get_user_profile", viewingUserId, (profile: any) => {
-        setUserProfile(profile);
+        if (profile) {
+          setUserProfile(profile);
+        } else if (isMe) {
+          // fallback
+          setUserProfile({
+            id: currentUserId,
+            username: currentUsername,
+            avatar: currentAvatar,
+            color: currentColor,
+            followersCount: 0,
+            followingCount: 0
+          });
+        }
       });
-    }
+    };
 
     const loadPosts = () => {
       socket.emit("get_user_posts", viewingUserId, (posts: any[]) => {
@@ -62,11 +67,18 @@ export default function Profile({
       });
     };
 
+    loadProfile();
     loadPosts();
     socket.on("feed_updated", loadPosts);
+    socket.on("profile_updated", (targetId) => {
+      if (targetId === viewingUserId) {
+        loadProfile();
+      }
+    });
 
     return () => {
       socket.off("feed_updated", loadPosts);
+      socket.off("profile_updated");
     };
   }, [socket, currentUserId, viewingUserId, currentUsername, currentAvatar, currentColor, isMe]);
 
@@ -176,7 +188,26 @@ export default function Profile({
         </div>
 
         <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-1">{userProfile.username}</h2>
-        <p className="text-slate-500 dark:text-slate-400 text-sm mb-6">{userPosts.length} Gönderi</p>
+        <div className="flex gap-4 text-slate-500 dark:text-slate-400 text-sm mb-4">
+          <span className="font-semibold text-slate-800 dark:text-slate-200">{userPosts.length} <span className="font-normal text-slate-500">Gönderi</span></span>
+          <span className="font-semibold text-slate-800 dark:text-slate-200">{userProfile.followersCount || 0} <span className="font-normal text-slate-500">Takipçi</span></span>
+          <span className="font-semibold text-slate-800 dark:text-slate-200">{userProfile.followingCount || 0} <span className="font-normal text-slate-500">Takip</span></span>
+        </div>
+
+        {!isMe && (
+          <div className="flex gap-2 w-full md:w-auto mb-6">
+            <button
+              onClick={() => socket?.emit("toggle_follow", userProfile.id)}
+              className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl font-semibold transition-colors ${
+                userProfile.isFollowing
+                  ? "bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  : "bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20"
+              }`}
+            >
+              {userProfile.isFollowing ? "Takibi Bırak" : "Takip Et"}
+            </button>
+          </div>
+        )}
 
         {isMe && (
           <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto mb-4">
