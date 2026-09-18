@@ -198,7 +198,7 @@ export default function App() {
         {activeTab === 'subject' && <Feed socket={socket} currentUserId={currentUserId} onUserClick={handleUserClick} activeSubject={activeSubject} />}
         {activeTab === 'friends' && <Friends socket={socket} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
         {activeTab === 'notifications' && <Notifications socket={socket} />}
-        {activeTab === 'games' && <Games />}
+        {activeTab === 'games' && <Games socket={socket} currentUserId={currentUserId} username={username} avatar={avatar} color={color} />}
         {activeTab === 'profile' && <Profile socket={socket} currentUserId={currentUserId} viewingUserId={viewingUserId} username={username} avatar={avatar} color={color} onLogout={handleLogout} onAvatarUpdated={handleAvatarUpdated} onUserClick={handleUserClick} />}
       </div>
 

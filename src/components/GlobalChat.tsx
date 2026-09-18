@@ -291,7 +291,7 @@ export default function GlobalChat({
                       {isMine && (
                         <button
                           onClick={() => {
-                            if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+                            if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
                               socket.emit("delete_message", { 
                                 message_id: msg.id, 
                                 type: "global"

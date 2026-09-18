@@ -467,8 +467,8 @@ async function startServer() {
         const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", args: [targetId] });
         const postIds = postsRes.rows.map((p: any) => p.id);
         
-        let likesRes = { rows: [] };
-        let commentsRes = { rows: [] };
+        let likesRes: any = { rows: [] };
+        let commentsRes: any = { rows: [] };
         if (postIds.length > 0) {
           const placeholders = postIds.map(() => "?").join(",");
           likesRes = await client.execute({ sql: `SELECT * FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
@@ -520,7 +520,7 @@ async function startServer() {
           postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 50", args: [] });
         }
         const postIds = postsRes.rows.map((p: any) => p.id);
-        let likesRes = { rows: [] };
+        let likesRes: any = { rows: [] };
         if (postIds.length > 0) {
           const placeholders = postIds.map(() => "?").join(",");
           likesRes = await client.execute({ sql: `SELECT * FROM likes WHERE post_id IN (${placeholders})`, args: postIds });

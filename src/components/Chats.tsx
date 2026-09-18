@@ -412,7 +412,7 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                           <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500"><Smile size={14}/></button>
                           {isMine && (
                             <button onClick={() => {
-                              if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+                              if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
                                 socket.emit("delete_message", { 
                                   message_id: msg.id, 
                                   type: activeTab === "friends" ? "private" : "group",

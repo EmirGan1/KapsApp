@@ -20,12 +20,12 @@ const INITIAL_RACK_SIZE = 30; // 2 rows of 15 slots
 export default function Games({ 
   socket, currentUserId, username, avatar, color 
 }: { 
-  socket: Socket | null; currentUserId: number; username: string; avatar?: string; color?: string; 
+  socket: Socket | null; currentUserId: number; username: string; avatar?: string | null; color?: string | null; 
 }) {
   const [rooms, setRooms] = useState<any[]>([]);
   const [currentRoom, setCurrentRoom] = useState<any | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [newRoomName, setNewRoomName] = useState('');
+  const [newRoomName, setNewRoomName] = useState('Eğlencelik Masa');
   const [newRoomMode, setNewRoomMode] = useState<'classic'|'101'>('101');
 
   const [rack, setRack] = useState<RackSlot[]>(Array.from({ length: INITIAL_RACK_SIZE }, (_, i) => ({ index: i, tile: null })));
@@ -43,10 +43,15 @@ export default function Games({
     socket.on("okey_state", (state: any) => {
       setCurrentRoom(state);
     });
+    
+    socket.on("okey_room_created", (roomId: string) => {
+      socket.emit("join_okey", roomId);
+    });
 
     return () => {
       socket.off("okey_rooms_list");
       socket.off("okey_state");
+      socket.off("okey_room_created");
     };
   }, [socket]);
 
@@ -55,7 +60,7 @@ export default function Games({
     if (!newRoomName.trim() || !socket) return;
     socket.emit("create_okey_room", { name: newRoomName, gameMode: newRoomMode });
     setIsCreating(false);
-    setNewRoomName('');
+    setNewRoomName('Eğlencelik Masa');
   };
 
   const joinRoom = (roomId: string) => {
