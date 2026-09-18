@@ -358,6 +358,7 @@ async function startServer() {
       name: room.name,
       gameMode: 'classic',
       status: room.status,
+      hostId: room.hostId || room.creatorId,
       creatorId: room.creatorId,
       players: room.players.map((p: any) => ({
         id: p.id,
@@ -387,10 +388,14 @@ async function startServer() {
     io.to(`okey_${roomId}`).emit("okey_state", publicState);
     for (const p of room.players) {
       if (!p.isBot) {
-        const sockId = onlineUsers.get(Number(p.id));
-        if (sockId) {
-          io.to(sockId).emit("okey_hand", p.hand || []);
-        }
+        const targetSockets = new Set<string>();
+        if (p.socketId) targetSockets.add(p.socketId);
+        const globalSock = onlineUsers.get(Number(p.id));
+        if (globalSock) targetSockets.add(globalSock);
+        
+        targetSockets.forEach(sId => {
+          io.to(sId).emit("okey_hand", p.hand || []);
+        });
       }
     }
   };
@@ -958,6 +963,9 @@ async function startServer() {
 
     socket.on("clear_global_chat", async () => {
       try {
+        if (!user.username || user.username.trim().toLowerCase() !== 'emirgan') {
+          return socket.emit("error_message", "Genel sohbeti temizleme yetkiniz bulunmuyor.");
+        }
         await client.execute("DELETE FROM global_messages");
         io.emit("global_chat_cleared");
       } catch (err) {
@@ -1150,11 +1158,12 @@ async function startServer() {
         if (room) {
           socket.data.currentOkeyRoom = targetRoomId;
           socket.join(`okey_${targetRoomId}`);
-          socket.emit("okey_state", getSanitizedRoom(room));
           const player = room.players.find((p: any) => p.id === user.id);
           if (player) {
+            player.socketId = socket.id;
             socket.emit("okey_hand", player.hand || []);
           }
+          socket.emit("okey_state", getSanitizedRoom(room));
         }
       }
     });
@@ -1166,12 +1175,14 @@ async function startServer() {
         name: name || "Klasik Okey Masası",
         gameMode: "classic",
         status: "waiting",
+        hostId: user.id,
         creatorId: user.id,
         players: [{
           id: user.id,
           username: user.username,
           avatar: user.avatar,
           color: user.color,
+          socketId: socket.id,
           isBot: false,
           hand: [],
           discardPile: [],
@@ -1205,11 +1216,20 @@ async function startServer() {
           username: user.username,
           avatar: user.avatar,
           color: user.color,
+          socketId: socket.id,
           isBot: false,
           hand: [],
           discardPile: [],
           score: 0
         });
+        if (!room.hostId) {
+          room.hostId = user.id;
+        }
+      } else if (existingPlayer) {
+        existingPlayer.socketId = socket.id;
+        if (room.status === 'playing') {
+          socket.emit("okey_hand", existingPlayer.hand || []);
+        }
       }
 
       socket.join(`okey_${roomId}`);
@@ -1221,6 +1241,11 @@ async function startServer() {
     socket.on("start_okey_game", (roomId) => {
       const room = okeyRooms.get(roomId);
       if (!room || room.status !== 'waiting') return;
+
+      // Only table host can deal tiles and start game
+      if (room.hostId && room.hostId !== user.id) {
+        return socket.emit("okey_error", "Yalnızca masa yöneticisi (Host) taşları dağıtabilir.");
+      }
 
       // Auto-fill empty seats with Bots up to 4 players so game can always start
       const botNames = [
@@ -1254,7 +1279,7 @@ async function startServer() {
       room.turnPhase = 'discard'; // Starting player starts with 15 tiles and throws first!
       room.winnerId = null;
       room.winningReason = null;
-      room.lastActionMessage = `Oyun başladı! Gösterge: ${indicator.number} (${indicator.color}). Okey: ${okeyTile.number} (${okeyTile.color}). Sıra ${room.players[0].username} oyuncusunda.`;
+      room.lastActionMessage = `Taşlar dağıtıldı! Gösterge: ${indicator.number} (${indicator.color}). Okey: ${okeyTile.number} (${okeyTile.color}). Sıra ${room.players[0].username} oyuncusunda.`;
 
       // Strictly deal 15 tiles to 1st player, 14 tiles to other 3 players
       for (let i = 0; i < room.players.length; i++) {
@@ -1387,11 +1412,20 @@ async function startServer() {
         socket.leave(`okey_${roomId}`);
         const room = okeyRooms.get(roomId);
         if (room) {
+          const wasHost = room.hostId === user.id;
           room.players = room.players.filter((p: any) => p.id !== user.id);
           if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
             clearTimeout(room.botTimeout);
             okeyRooms.delete(roomId);
           } else {
+            if (wasHost) {
+              const nextRealPlayer = room.players.find((p: any) => !p.isBot);
+              if (nextRealPlayer) {
+                room.hostId = nextRealPlayer.id;
+                room.creatorId = nextRealPlayer.id;
+                room.lastActionMessage = `Masa yöneticisi ayrıldı. Yeni yönetici: ${nextRealPlayer.username}`;
+              }
+            }
             broadcastOkeyRoom(roomId);
           }
           emitRooms();
@@ -1406,10 +1440,19 @@ async function startServer() {
         const room = okeyRooms.get(roomId);
         // Only remove player if waiting in lobby, NOT if actively playing!
         if (room && room.status === 'waiting') {
+          const wasHost = room.hostId === user.id;
           room.players = room.players.filter((p: any) => p.id !== user.id);
-          if (room.players.length === 0) {
+          if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
             okeyRooms.delete(roomId);
           } else {
+            if (wasHost) {
+              const nextRealPlayer = room.players.find((p: any) => !p.isBot);
+              if (nextRealPlayer) {
+                room.hostId = nextRealPlayer.id;
+                room.creatorId = nextRealPlayer.id;
+                room.lastActionMessage = `Masa yöneticisi ayrıldı. Yeni yönetici: ${nextRealPlayer.username}`;
+              }
+            }
             broadcastOkeyRoom(roomId);
           }
           emitRooms();

@@ -24,6 +24,7 @@ export interface OkeyRoomState {
   name: string;
   gameMode: 'classic';
   status: 'waiting' | 'playing' | 'ended';
+  hostId: number;
   creatorId: number;
   players: OkeyPlayer[];
   deckCount: number;

@@ -192,7 +192,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col relative w-full max-w-full overflow-hidden">
-        {activeTab === 'global' && <GlobalChat socket={socket} currentUserId={currentUserId} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
+        {activeTab === 'global' && <GlobalChat socket={socket} currentUserId={currentUserId} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
         {activeTab === 'chats' && <Chats socket={socket} currentUserId={currentUserId} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
         {activeTab === 'feed' && <Feed socket={socket} currentUserId={currentUserId} onUserClick={handleUserClick} />}
         {activeTab === 'subject' && <Feed socket={socket} currentUserId={currentUserId} onUserClick={handleUserClick} activeSubject={activeSubject} />}

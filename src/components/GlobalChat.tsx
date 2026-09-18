@@ -8,11 +8,13 @@ import { MediaModalData } from "../types";
 export default function GlobalChat({
   socket,
   currentUserId,
+  currentUsername,
   onlineUsers,
   onUserClick,
 }: {
   socket: Socket | null;
   currentUserId: number;
+  currentUsername?: string;
   onlineUsers: number[];
   onUserClick?: (id: number) => void;
 }) {
@@ -238,17 +240,19 @@ export default function GlobalChat({
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                if (window.confirm("Genel sohbeti sıfırlamak istediğinize emin misiniz? Tüm mesajlar silinecektir.")) {
-                  socket?.emit("clear_global_chat");
-                }
-              }}
-              className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-900/50 transition-colors"
-              title="Genel Sohbeti Temizle"
-            >
-              Sohbeti Sıfırla
-            </button>
+            {currentUsername?.trim().toLowerCase() === 'emirgan' && (
+              <button
+                onClick={() => {
+                  if (window.confirm("Genel sohbeti sıfırlamak istediğinize emin misiniz? Tüm mesajlar silinecektir.")) {
+                    socket?.emit("clear_global_chat");
+                  }
+                }}
+                className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-900/50 transition-colors font-medium"
+                title="Genel Sohbeti Temizle (Yönetici)"
+              >
+                Sohbeti Sıfırla
+              </button>
+            )}
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
               <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">

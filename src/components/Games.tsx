@@ -401,8 +401,13 @@ export default function Games({
 
   const currentTurnPlayer = tablePlayers[currentRoom.currentTurn];
 
+  // Determine host of the table
+  const hostId = currentRoom.hostId ?? currentRoom.creatorId;
+  const isHost = hostId === currentUserId;
+  const hostPlayer = tablePlayers.find(p => p.id === hostId);
+
   return (
-    <div className="flex-1 flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative selection:bg-transparent">
+    <div className="flex-1 flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative selection:bg-transparent touch-manipulation">
       
       {/* Toast Feedback */}
       {errorMessage && (
@@ -413,14 +418,14 @@ export default function Games({
 
       {/* Top Header Bar */}
       <div className="px-3 py-1.5 sm:py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between shrink-0 z-20 backdrop-blur-md">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 bg-emerald-600 rounded-lg flex items-center justify-center shadow">
+        <div className="flex items-center gap-2 sm:gap-2.5">
+          <div className="w-7 h-7 bg-emerald-600 rounded-lg flex items-center justify-center shadow shrink-0">
             <Gamepad2 className="text-white w-4 h-4" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="font-bold text-xs sm:text-sm text-emerald-400">{currentRoom.name}</h2>
-              <span className="text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 px-1.5 py-0.5 rounded font-medium">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h2 className="font-bold text-xs sm:text-sm text-emerald-400 truncate max-w-[120px] sm:max-w-[200px]">{currentRoom.name}</h2>
+              <span className="text-[9px] sm:text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-800/60 px-1.5 py-0.2 rounded font-medium">
                 Klasik Okey
               </span>
             </div>
@@ -433,12 +438,20 @@ export default function Games({
         {/* Header Actions */}
         <div className="flex items-center gap-2">
           {currentRoom.status === 'waiting' && (
-            <button 
-              onClick={startGame}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-md transition-colors animate-pulse"
-            >
-              <Play size={14} fill="currentColor" /> Başlat (Botlarla Doldur)
-            </button>
+            isHost ? (
+              <button 
+                onClick={startGame}
+                className="flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg ring-2 sm:ring-4 ring-emerald-400/50 transition-all animate-pulse active:scale-95 cursor-pointer"
+                title="Taşları dağıt ve oyunu başlat"
+              >
+                <Play size={14} fill="currentColor" /> Taşları Dağıt
+              </button>
+            ) : (
+              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-amber-950/70 border border-amber-800/60 text-amber-300 rounded-lg text-[11px] font-medium">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                <span>Host bekleniyor ({hostPlayer?.username || 'Host'})</span>
+              </div>
+            )
           )}
 
           <button 
@@ -469,8 +482,13 @@ export default function Games({
                 )}
               </div>
               <div className="text-left">
-                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate">
+                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate flex items-center gap-0.5">
                   {leftOpponent.username}
+                  {leftOpponent.id === hostId && (
+                    <span title="Masa Yöneticisi (Host)">
+                      <Crown size={10} className="text-amber-400 shrink-0 inline" />
+                    </span>
+                  )}
                 </p>
                 <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
                   🀄 {leftOpponent.tileCount} taş
@@ -500,8 +518,13 @@ export default function Games({
                 )}
               </div>
               <div className="text-left">
-                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate">
+                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate flex items-center gap-0.5">
                   {topOpponent.username}
+                  {topOpponent.id === hostId && (
+                    <span title="Masa Yöneticisi (Host)">
+                      <Crown size={10} className="text-amber-400 shrink-0 inline" />
+                    </span>
+                  )}
                 </p>
                 <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
                   🀄 {topOpponent.tileCount} taş
@@ -531,8 +554,13 @@ export default function Games({
                 )}
               </div>
               <div className="text-left">
-                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate">
+                <p className="text-[10px] font-bold text-slate-200 leading-tight max-w-[70px] sm:max-w-[100px] truncate flex items-center gap-0.5">
                   {rightOpponent.username}
+                  {rightOpponent.id === hostId && (
+                    <span title="Masa Yöneticisi (Host)">
+                      <Crown size={10} className="text-amber-400 shrink-0 inline" />
+                    </span>
+                  )}
                 </p>
                 <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
                   🀄 {rightOpponent.tileCount} taş
@@ -575,7 +603,9 @@ export default function Games({
                     : `⏳ ${currentTurnPlayer?.username || 'Oyuncu'} taş atıyor...`
                 )
               ) : (
-                "Oyunun başlaması için yukarıdaki 'Başlat' butonuna basın."
+                isHost 
+                  ? "👑 Masa Yöneticisisiniz. Hazır olduğunuzda 'Taşları Dağıt' butonuna basın." 
+                  : `⏳ Masa Yöneticisinin (${hostPlayer?.username || 'Host'}) taşları dağıtması bekleniyor...`
               )}
             </span>
           </div>
@@ -584,92 +614,134 @@ export default function Games({
         {/* Center Board Station: Deck, Indicator, Okey Badge, Discards */}
         <div className="my-auto flex flex-col items-center justify-center gap-3 w-full max-w-2xl mx-auto z-10">
           
-          {/* Deck, Indicator, and Neighbor Discard Row */}
-          <div className="flex items-center justify-center gap-3 sm:gap-6 flex-wrap">
-            
-            {/* Draw Deck (Kapalı Deste) */}
-            <div className="flex flex-col items-center gap-1">
-              <button 
-                onClick={handleDrawFromDeck}
-                disabled={!canDraw}
-                className={`relative w-11 h-16 sm:w-13 sm:h-18 bg-[#fefae0] rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
-                  canDraw 
-                    ? 'ring-4 ring-emerald-400 hover:scale-105 border-emerald-500 cursor-pointer animate-pulse' 
-                    : 'border-slate-300 opacity-90 cursor-default'
-                }`}
-                title={canDraw ? "Ortadan Taş Çek" : "Kapalı Deste"}
-              >
-                <div className="w-6 h-6 rounded-full border-2 border-red-700/70 flex items-center justify-center">
-                  <span className="text-[9px] font-black text-red-700">OKEY</span>
+          {currentRoom.status === 'waiting' ? (
+            isHost ? (
+              <div className="bg-slate-900/95 border-2 border-emerald-500/60 shadow-2xl p-4 sm:p-6 rounded-2xl text-center max-w-sm w-full backdrop-blur-md animate-in fade-in zoom-in">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
+                  <Crown size={28} />
                 </div>
-                <span className="text-[11px] font-extrabold text-slate-800 mt-1">
-                  {currentRoom.deckCount}
-                </span>
-                <span className={`absolute -top-2.5 px-1.5 py-0.2 rounded-full text-[9px] font-bold shadow ${
-                  canDraw ? 'bg-emerald-600 text-white animate-bounce' : 'bg-slate-900 text-white'
-                }`}>
-                  {canDraw ? 'Taş Çek' : 'Deste'}
-                </span>
-              </button>
-            </div>
-
-            {/* Indicator Tile (Gösterge) */}
-            <div className="flex flex-col items-center gap-1">
-              {currentRoom.indicator ? (
-                <div className="relative">
-                  <TileView tile={currentRoom.indicator} size="md" />
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
-                    Gösterge
-                  </span>
-                </div>
-              ) : (
-                <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
-                  Yok
-                </div>
-              )}
-            </div>
-
-            {/* Okey Tile Indicator Badge */}
-            {currentRoom.okeyTile && (
-              <div className="flex flex-col items-center gap-1">
-                <div className="relative">
-                  <TileView tile={currentRoom.okeyTile} size="md" isOkeyBadge />
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow flex items-center gap-0.5 whitespace-nowrap">
-                    <Sparkles size={10} /> OKEY
-                  </span>
-                </div>
+                <h3 className="text-base sm:text-lg font-black text-white">Masa Yöneticisisiniz</h3>
+                <p className="text-xs text-slate-300 mt-1 mb-4">
+                  Masa kuruldu ({tablePlayers.length}/4 oyuncu). Hazır olduğunuzda taşları dağıtıp oyunu başlatabilirsiniz!
+                </p>
+                <button
+                  onClick={startGame}
+                  className="w-full py-3 px-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-sm rounded-xl shadow-xl ring-4 ring-emerald-400/50 animate-pulse flex items-center justify-center gap-2 transition-transform active:scale-95 cursor-pointer"
+                >
+                  <Play size={18} fill="currentColor" /> Taşları Dağıt (Oyunu Başlat)
+                </button>
               </div>
-            )}
-
-            {/* Right Neighbor Discard (Yandan Çekilecek Taş) */}
-            <div className="flex flex-col items-center gap-1">
-              <button 
-                onClick={handleDrawFromDiscard}
-                disabled={!canDraw || !previousPlayerDiscard}
-                className={`relative rounded-lg transition-all ${
-                  canDraw && previousPlayerDiscard 
-                    ? 'ring-4 ring-blue-400 hover:scale-105 cursor-pointer animate-pulse' 
-                    : 'cursor-default opacity-80'
-                }`}
-                title={canDraw && previousPlayerDiscard ? "Yandan Atılan Taşı Al" : "Yandan Atılan"}
-              >
-                {previousPlayerDiscard ? (
-                  <>
-                    <TileView tile={previousPlayerDiscard} size="md" />
-                    <span className={`absolute -top-2.5 left-1/2 -translate-x-1/2 text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap ${
-                      canDraw ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
-                    }`}>
-                      {canDraw ? 'Yandan Al' : 'Yandaki'}
+            ) : (
+              <div className="bg-slate-900/90 border border-amber-500/40 shadow-2xl p-4 sm:p-6 rounded-2xl text-center max-w-sm w-full backdrop-blur-md animate-in fade-in zoom-in">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-3 animate-spin">
+                  <RefreshCcw size={26} />
+                </div>
+                <h3 className="text-base sm:text-lg font-black text-white">Masa Yöneticisi Bekleniyor</h3>
+                <p className="text-xs text-slate-300 mt-1">
+                  Masa yöneticisi <strong className="text-amber-300">{hostPlayer?.username || 'Host'}</strong> taşları dağıttığında oyun başlayacak.
+                </p>
+              </div>
+            )
+          ) : (
+            <>
+              {/* Deck, Indicator, and Neighbor Discard Row */}
+              <div className="flex items-center justify-center gap-3 sm:gap-6 flex-wrap">
+                
+                {/* Draw Deck (Kapalı Deste) */}
+                <div className="flex flex-col items-center gap-1">
+                  <button 
+                    onClick={handleDrawFromDeck}
+                    disabled={!canDraw}
+                    className={`relative w-11 h-16 sm:w-13 sm:h-18 bg-[#fefae0] rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
+                      canDraw 
+                        ? 'ring-4 ring-emerald-400 hover:scale-105 border-emerald-500 cursor-pointer animate-pulse' 
+                        : 'border-slate-300 opacity-90 cursor-default'
+                    }`}
+                    title={canDraw ? "Ortadan Taş Çek" : "Kapalı Deste"}
+                  >
+                    <div className="w-6 h-6 rounded-full border-2 border-red-700/70 flex items-center justify-center">
+                      <span className="text-[9px] font-black text-red-700">OKEY</span>
+                    </div>
+                    <span className="text-[11px] font-extrabold text-slate-800 mt-1">
+                      {currentRoom.deckCount}
                     </span>
-                  </>
-                ) : (
-                  <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
-                    Yan Boş
+                    <span className={`absolute -top-2.5 px-1.5 py-0.2 rounded-full text-[9px] font-bold shadow ${
+                      canDraw ? 'bg-emerald-600 text-white animate-bounce' : 'bg-slate-900 text-white'
+                    }`}>
+                      {canDraw ? 'Taş Çek' : 'Deste'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Indicator Tile (Gösterge) */}
+                <div className="flex flex-col items-center gap-1">
+                  {currentRoom.indicator ? (
+                    <div className="relative">
+                      <TileView tile={currentRoom.indicator} size="md" />
+                      <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
+                        Gösterge
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
+                      Yok
+                    </div>
+                  )}
+                </div>
+
+                {/* Okey Tile Indicator Badge */}
+                {currentRoom.okeyTile && (
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="relative">
+                      <TileView tile={currentRoom.okeyTile} size="md" isOkeyBadge />
+                      <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow flex items-center gap-0.5 whitespace-nowrap">
+                        <Sparkles size={10} /> OKEY
+                      </span>
+                    </div>
                   </div>
                 )}
-              </button>
-            </div>
-          </div>
+
+                {/* Right Neighbor Discard (Yandan Çekilecek Taş) */}
+                <div className="flex flex-col items-center gap-1">
+                  <button 
+                    onClick={handleDrawFromDiscard}
+                    disabled={!canDraw || !previousPlayerDiscard}
+                    className={`relative rounded-lg transition-all ${
+                      canDraw && previousPlayerDiscard 
+                        ? 'ring-4 ring-blue-400 hover:scale-105 cursor-pointer animate-pulse' 
+                        : 'cursor-default opacity-80'
+                    }`}
+                    title={canDraw && previousPlayerDiscard ? "Yandan Atılan Taşı Al" : "Yandan Atılan"}
+                  >
+                    {previousPlayerDiscard ? (
+                      <>
+                        <TileView tile={previousPlayerDiscard} size="md" />
+                        <span className={`absolute -top-2.5 left-1/2 -translate-x-1/2 text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap ${
+                          canDraw ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
+                        }`}>
+                          {canDraw ? 'Yandan Al' : 'Yandaki'}
+                        </span>
+                      </>
+                    ) : (
+                      <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
+                        Yan Boş
+                      </div>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Mobile Quick Discard Area: Tapping discards selected tile if canDiscard */}
+              {canDiscard && selectedSlot !== null && (
+                <button
+                  onClick={() => handleDiscard(selectedSlot)}
+                  className="px-4 py-2 bg-red-600/95 hover:bg-red-600 text-white rounded-xl text-xs sm:text-sm font-bold shadow-xl ring-4 ring-red-400/50 animate-bounce flex items-center gap-1.5 cursor-pointer mt-1"
+                >
+                  <ArrowDown size={16} /> Seçili Taşı Buraya At
+                </button>
+              )}
+            </>
+          )}
 
           {/* Game End Modal / Banner */}
           {currentRoom.status === 'ended' && (
@@ -677,12 +749,16 @@ export default function Games({
               <Trophy className="text-amber-400 w-12 h-12 mx-auto mb-2 animate-bounce" />
               <h3 className="text-lg font-black text-white">Tebrikler!</h3>
               <p className="text-xs text-slate-300 mt-1 mb-3">{currentRoom.winningReason}</p>
-              <button 
-                onClick={startGame}
-                className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow transition-colors"
-              >
-                Yeni El Başlat
-              </button>
+              {isHost ? (
+                <button 
+                  onClick={startGame}
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm shadow transition-colors animate-pulse cursor-pointer"
+                >
+                  Taşları Tekrar Dağıt
+                </button>
+              ) : (
+                <p className="text-xs text-amber-300">Masa yöneticisinin yeni eli başlatması bekleniyor...</p>
+              )}
             </div>
           )}
         </div>
@@ -711,7 +787,7 @@ export default function Games({
             {selectedSlot !== null && canDiscard && (
               <button 
                 onClick={() => handleDiscard(selectedSlot)}
-                className="px-3 sm:px-4 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] sm:text-xs font-bold rounded-lg shadow animate-pulse flex items-center gap-1"
+                className="px-3 sm:px-4 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] sm:text-xs font-bold rounded-lg shadow animate-pulse flex items-center gap-1 cursor-pointer"
               >
                 <ArrowDown size={13} /> Taşı At
               </button>
@@ -739,8 +815,8 @@ export default function Games({
         </div>
 
         {/* The Istaka (Player Rack) - 2 rows x 15 slots, Tablet & Mobile Scaled */}
-        <div className="w-full max-w-4xl mx-auto z-10 origin-bottom pt-1">
-          <div className="bg-gradient-to-b from-[#7a3e14] via-[#5c2b09] to-[#381a04] p-1 sm:p-2 rounded-t-2xl border-t-2 border-amber-600/80 shadow-2xl relative">
+        <div className="w-full max-w-4xl mx-auto z-10 origin-bottom pt-1 px-0.5 sm:px-1 touch-manipulation">
+          <div className="bg-gradient-to-b from-[#7a3e14] via-[#5c2b09] to-[#381a04] p-1 sm:p-2 rounded-t-xl sm:rounded-t-2xl border-t-2 border-amber-600/80 shadow-2xl relative">
             
             {/* Top Row of Istaka */}
             <div className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-0.5 sm:gap-1 pb-1 border-b border-[#381a04]">
@@ -807,8 +883,10 @@ function RackSlot({
       onClick={onClick}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      className={`aspect-[2/3] max-w-[44px] bg-[#3a1a03]/80 rounded-[3px] sm:rounded-sm border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-transform select-none ${
-        isSelected ? 'ring-2 ring-emerald-400 -translate-y-1.5 sm:-translate-y-2 z-20 shadow-xl' : ''
+      className={`aspect-[2/3] w-full min-w-0 max-w-[46px] bg-[#3a1a03]/90 rounded-[3px] sm:rounded-[5px] border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-all select-none touch-manipulation ${
+        isSelected 
+          ? 'ring-2 sm:ring-3 ring-emerald-400 -translate-y-1.5 sm:-translate-y-2 z-20 shadow-xl bg-[#4a2204]' 
+          : 'active:scale-95'
       }`}
     >
       {tile && (
@@ -857,7 +935,7 @@ function TileView({
   const sizeClasses = {
     sm: 'w-6 h-9 text-xs rounded-[2px]',
     md: 'w-11 h-16 sm:w-13 sm:h-18 text-base sm:text-xl rounded-md',
-    rack: 'w-full h-full text-[13px] xs:text-sm sm:text-base md:text-xl rounded-[2px] sm:rounded-sm'
+    rack: 'w-full h-full text-[11px] xs:text-xs sm:text-base md:text-lg rounded-[2px] sm:rounded-sm'
   }[size];
 
   if (tile.color === 'fake') {
