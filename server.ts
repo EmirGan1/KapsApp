@@ -865,10 +865,14 @@ async function startServer() {
       else if (data.type === 'global') table = "global_messages";
       
       if (table) {
-        const msgRes = await client.execute({ sql: `SELECT sender FROM ${table} WHERE id = ?`, args: [data.message_id] });
-        if (msgRes.rows.length > 0 && msgRes.rows[0].sender === user.id) {
-          await client.execute({ sql: `DELETE FROM ${table} WHERE id = ?`, args: [data.message_id] });
-          io.emit("message_deleted", { type: data.type, message_id: data.message_id, group_id: data.group_id, receiver: data.receiver });
+        try {
+          const msgRes = await client.execute({ sql: `SELECT sender FROM ${table} WHERE id = ?`, args: [data.message_id] });
+          if (msgRes.rows.length > 0 && String(msgRes.rows[0].sender) === String(user.id)) {
+            await client.execute({ sql: `DELETE FROM ${table} WHERE id = ?`, args: [data.message_id] });
+            io.emit("message_deleted", { type: data.type, message_id: data.message_id, group_id: data.group_id, receiver: data.receiver });
+          }
+        } catch (err) {
+          console.error("Delete message error:", err);
         }
       }
     });

@@ -51,7 +51,7 @@ export default function GlobalChat({
       
       const onMessageDeleted = (data: any) => {
         if (data.type === "global") {
-          setMessages((prev) => prev.filter(m => m.id !== data.message_id));
+          setMessages((prev) => prev.filter(m => String(m.id) !== String(data.message_id)));
         }
       };
 
@@ -393,12 +393,12 @@ export default function GlobalChat({
                         className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${
                           isMine
                             ? "bg-blue-700/40 hover:bg-blue-700/60 border-blue-400 text-white"
-                            : "bg-white hover:bg-slate-50 border-slate-200 text-slate-800"
+                            : "bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
                         }`}
                       >
                         <div
                           className={`p-2.5 rounded-lg shrink-0 ${
-                            isMine ? "bg-white/20 text-white" : "bg-blue-100 text-blue-600"
+                            isMine ? "bg-white/20 text-white" : "bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400"
                           }`}
                         >
                           <FileText size={22} />
@@ -413,7 +413,7 @@ export default function GlobalChat({
                         </div>
                         <div
                           className={`p-1.5 rounded-full shrink-0 ${
-                            isMine ? "hover:bg-white/10 text-white" : "hover:bg-slate-100 text-slate-500"
+                            isMine ? "hover:bg-white/10 text-white" : "hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
                           }`}
                         >
                           <Download size={18} />
@@ -440,7 +440,7 @@ export default function GlobalChat({
                             className={`border text-[11px] rounded-full px-1.5 py-0.5 shadow-sm cursor-pointer ${
                               isMine
                                 ? "bg-blue-700 border-blue-500 text-white"
-                                : "bg-white border-slate-200 text-slate-700"
+                                : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
                             }`}
                             onClick={() => handleReact(msg.id, emoji)}
                           >
@@ -605,9 +605,9 @@ export default function GlobalChat({
       </div>
 
       {/* User Sidebar */}
-      <div className="hidden lg:flex flex-col w-64 bg-white border-l border-slate-200">
-        <div className="p-4 border-b border-slate-200 bg-white shadow-sm z-10">
-          <h2 className="font-bold text-slate-800">Kullanıcılar — {users.length}</h2>
+      <div className="hidden lg:flex flex-col w-64 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 transition-colors duration-200">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm z-10 transition-colors duration-200">
+          <h2 className="font-bold text-slate-800 dark:text-slate-100">Kullanıcılar — {users.length}</h2>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {sortedUsers.map((u) => {
@@ -615,18 +615,18 @@ export default function GlobalChat({
             return (
               <div
                 key={u.id}
-                className="flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                className="flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                 onClick={() => onUserClick && onUserClick(u.id)}
               >
                 <div className="relative">
                   <Avatar url={u.avatar} name={u.username} color={u.color} size={10} />
                   {isOnline && (
-                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-slate-900 rounded-full transition-colors"></div>
                   )}
                 </div>
                 <div className="flex-1 overflow-hidden">
-                  <h4 className="font-semibold text-sm text-slate-800 truncate">{u.username}</h4>
-                  <p className="text-xs text-slate-500 truncate">
+                  <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-100 truncate">{u.username}</h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                     {isOnline ? "Çevrimiçi" : "Çevrimdışı"}
                   </p>
                 </div>

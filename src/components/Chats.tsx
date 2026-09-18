@@ -90,7 +90,7 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
 
     const onMessageDeleted = (data: any) => {
       if ((activeTab === "friends" && data.type === "private") || (activeTab === "groups" && data.type === "group")) {
-        setMessages(prev => prev.filter(m => m.id !== data.message_id));
+        setMessages(prev => prev.filter(m => String(m.id) !== String(data.message_id)));
       }
     };
 
@@ -279,32 +279,32 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-white">
+    <div className="flex-1 flex overflow-hidden bg-white dark:bg-slate-950 transition-colors duration-200">
       {/* Sidebar */}
-      <div className={`w-full md:w-80 border-r border-slate-100 flex flex-col bg-slate-50 ${activeChat ? 'hidden md:flex' : 'flex'}`}>
-        <div className="p-4 border-b border-slate-200 bg-white shadow-sm z-10 flex flex-col gap-3">
-          <h2 className="text-xl font-bold text-slate-800">Sohbetler</h2>
+      <div className={`w-full md:w-80 border-r border-slate-100 dark:border-slate-800 flex flex-col bg-slate-50 dark:bg-slate-900 transition-colors duration-200 ${activeChat ? 'hidden md:flex' : 'flex'}`}>
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm z-10 flex flex-col gap-3 transition-colors duration-200">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Sohbetler</h2>
           
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-lg">
+          <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg transition-colors">
             <button 
               onClick={() => { setActiveTab("friends"); setActiveChat(null); }} 
-              className={`flex-1 py-1 text-sm font-medium rounded-md ${activeTab === 'friends' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`flex-1 py-1 text-sm font-medium rounded-md transition-colors ${activeTab === 'friends' ? 'bg-white dark:bg-slate-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}
             >
               Kişiler
             </button>
             <button 
               onClick={() => { setActiveTab("groups"); setActiveChat(null); }} 
-              className={`flex-1 py-1 text-sm font-medium rounded-md ${activeTab === 'groups' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`flex-1 py-1 text-sm font-medium rounded-md transition-colors ${activeTab === 'groups' ? 'bg-white dark:bg-slate-700 shadow-sm text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}
             >
               Gruplar
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-100 relative">
+        <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 relative transition-colors duration-200">
           {activeTab === "friends" ? (
             friends.length === 0 ? (
-              <div className="p-6 text-center text-slate-400 text-sm">Arkadaş ekleyerek sohbete başlayın.</div>
+              <div className="p-6 text-center text-slate-400 dark:text-slate-500 text-sm">Arkadaş ekleyerek sohbete başlayın.</div>
             ) : (
               friends.map(f => {
                 const isOnline = onlineUsers.includes(f.id);
@@ -312,15 +312,15 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                   <button 
                     key={f.id} 
                     onClick={() => setActiveChat(f)}
-                    className={`w-full flex items-center gap-3 p-4 hover:bg-slate-100 transition-colors ${activeChat?.id === f.id ? 'bg-blue-50/50' : ''}`}
+                    className={`w-full flex items-center gap-3 p-4 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors ${activeChat?.id === f.id ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}
                   >
                     <div className="relative flex-shrink-0">
                       <Avatar url={f.avatar} name={f.username} color={f.color} size={12} />
-                      {isOnline && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>}
+                      {isOnline && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-slate-900 rounded-full transition-colors"></div>}
                     </div>
                     <div className="text-left overflow-hidden flex-1">
-                      <h3 className="font-semibold text-slate-800 truncate">{f.username}</h3>
-                      <p className="text-xs text-slate-500 truncate">{isOnline ? 'Çevrimiçi' : 'Çevrimdışı'}</p>
+                      <h3 className="font-semibold text-slate-800 dark:text-slate-100 truncate">{f.username}</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{isOnline ? 'Çevrimiçi' : 'Çevrimdışı'}</p>
                     </div>
                   </button>
                 )
@@ -329,20 +329,20 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
           ) : (
             <>
               {groups.length === 0 ? (
-                <div className="p-6 text-center text-slate-400 text-sm">Henüz hiçbir gruba katılmadınız.</div>
+                <div className="p-6 text-center text-slate-400 dark:text-slate-500 text-sm">Henüz hiçbir gruba katılmadınız.</div>
               ) : (
                 groups.map(g => (
                   <button 
                     key={g.id} 
                     onClick={() => setActiveChat(g)}
-                    className={`w-full flex items-center gap-3 p-4 hover:bg-slate-100 transition-colors ${activeChat?.id === g.id ? 'bg-blue-50/50' : ''}`}
+                    className={`w-full flex items-center gap-3 p-4 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors ${activeChat?.id === g.id ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}
                   >
                     <div className="relative flex-shrink-0">
-                      <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600"><Users size={24} /></div>
+                      <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/40 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-400 transition-colors"><Users size={24} /></div>
                     </div>
                     <div className="text-left overflow-hidden flex-1">
-                      <h3 className="font-semibold text-slate-800 truncate">{g.name}</h3>
-                      <p className="text-xs text-slate-500 truncate">{g.members.length} Üye</p>
+                      <h3 className="font-semibold text-slate-800 dark:text-slate-100 truncate">{g.name}</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{g.members.length} Üye</p>
                     </div>
                   </button>
                 ))
@@ -404,11 +404,11 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                 return (
                   <div key={msg.id || idx} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} mb-1`}>
                     <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} group w-full relative`}>
-                      <div className={`max-w-[75%] rounded-2xl p-2 px-3 shadow-sm relative ${isMine ? 'bg-[#DCF8C6] rounded-tr-none' : 'bg-white rounded-tl-none border border-slate-100'}`}>
+                      <div className={`max-w-[75%] rounded-2xl p-2 px-3 shadow-sm relative ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
                         
                         {/* Action Buttons (Reply/React) hidden by default, shown on hover */}
-                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white border border-slate-200 shadow-sm rounded-lg z-20`}>
-                          <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500"><Reply size={14}/></button>
+                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-20'} hidden group-hover:flex gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
+                          <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500 dark:hover:text-blue-400"><Reply size={14}/></button>
                           <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500"><Smile size={14}/></button>
                           {isMine && (
                             <button onClick={() => {
@@ -420,20 +420,20 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                                   group_id: activeTab === "groups" ? activeChat.id : undefined
                                 });
                               }
-                            }} className="p-1 text-slate-400 hover:text-red-600"><X size={14}/></button>
+                            }} className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400"><X size={14}/></button>
                           )}
                         </div>
 
                         {activeTab === "groups" && !isMine && (
                           <div className="flex items-center gap-2 mb-1 cursor-pointer" onClick={() => onUserClick && onUserClick(msg.sender)}>
                             <Avatar url={msg.sender_avatar} name={msg.sender_name} color={msg.sender_color} size={4} />
-                            <span className="text-[11px] font-semibold text-blue-600 hover:underline">{msg.sender_name}</span>
+                            <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline">{msg.sender_name}</span>
                           </div>
                         )}
                         
                         {/* Reply Context */}
                         {msg.reply_message && (
-                          <div className={`mb-2 p-2 rounded-lg text-sm border-l-4 ${isMine ? 'bg-green-700/20 border-green-600 text-green-900' : 'bg-slate-100 border-blue-500 text-slate-600'}`}>
+                          <div className={`mb-2 p-2 rounded-lg text-sm border-l-4 ${isMine ? 'bg-green-700/20 border-green-600 text-green-900 dark:text-green-100' : 'bg-slate-100 dark:bg-slate-700 border-blue-500 text-slate-600 dark:text-slate-300'}`}>
                             <div className="font-semibold text-xs mb-1">{msg.reply_message.sender_name}</div>
                             {msg.reply_message.type === 'text' ? <p className="truncate text-xs">{msg.reply_message.content}</p> : <span className="italic text-xs">Medya</span>}
                           </div>
@@ -468,18 +468,18 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                             rel="noreferrer"
                             className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${
                               isMine 
-                                ? 'bg-green-700/10 hover:bg-green-700/20 border-green-300 text-green-950' 
-                                : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                                ? 'bg-green-700/10 hover:bg-green-700/20 border-green-300 dark:border-green-700 text-green-950 dark:text-green-100' 
+                                : 'bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100'
                             }`}
                           >
-                            <div className="p-2.5 bg-blue-100 text-blue-600 rounded-lg shrink-0">
+                            <div className="p-2.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-lg shrink-0">
                               <FileText size={22} />
                             </div>
                             <div className="flex-1 min-w-0 pr-2">
                               <p className="font-semibold text-sm truncate">{msg.file_name || "Belge / Dosya"}</p>
                               {msg.file_size && <p className="text-xs opacity-70">{msg.file_size}</p>}
                             </div>
-                            <div className="p-1.5 rounded-full hover:bg-black/5 text-slate-500 shrink-0">
+                            <div className="p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-slate-500 dark:text-slate-400 shrink-0">
                               <Download size={18} />
                             </div>
                           </a>
@@ -493,7 +493,7 @@ export default function Chats({ socket, currentUserId, onlineUsers, onUserClick 
                                acc[r.emoji] = (acc[r.emoji] || 0) + 1;
                                return acc;
                             }, {})).map(([emoji, count]: any) => (
-                              <div key={emoji} className={`border text-[10px] rounded-full px-1.5 py-0.5 shadow-sm cursor-pointer ${isMine ? 'bg-[#DCF8C6] border-green-300 text-green-800' : 'bg-slate-50 border-slate-200 text-slate-700'}`} onClick={() => handleReact(msg.id, emoji)}>
+                              <div key={emoji} className={`border text-[10px] rounded-full px-1.5 py-0.5 shadow-sm cursor-pointer ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] border-green-300 dark:border-green-700 text-green-800 dark:text-green-100' : 'bg-slate-50 dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200'}`} onClick={() => handleReact(msg.id, emoji)}>
                                 {emoji} {count > 1 && count}
                               </div>
                             ))}
