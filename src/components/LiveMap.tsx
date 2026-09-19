@@ -358,24 +358,17 @@ export default function LiveMap({
   useEffect(() => {
     if (!socket) return;
 
-    // 1. Fetch current user locations on mount (both active and passive)
-    socket.emit("request_all_locations");
-    socket.emit("get_user_locations", (locations: UserLiveLocation[]) => {
-      if (Array.isArray(locations)) {
-        console.log("Soketten gelen kullanıcılar (initial):", locations);
-        setUsersLocations(locations);
-      }
-    });
-
     const handleUpdateUserLocations = (locations: UserLiveLocation[]) => {
       if (Array.isArray(locations)) {
-        console.log("Soketten gelen kullanıcılar:", locations);
         setUsersLocations(locations);
       }
     };
 
     socket.on("update_user_locations", handleUpdateUserLocations);
     socket.on("all_user_locations", handleUpdateUserLocations);
+
+    // Fetch current user locations on mount (single request)
+    socket.emit("request_all_locations");
 
     return () => {
       socket.off("update_user_locations", handleUpdateUserLocations);
