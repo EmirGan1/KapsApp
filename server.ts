@@ -196,6 +196,18 @@ async function initDb() {
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Last Known Locations Table for Cold-Start Persistence
+  await client.execute(`CREATE TABLE IF NOT EXISTS last_known_locations (
+    userId INTEGER PRIMARY KEY,
+    username TEXT,
+    avatar TEXT,
+    color TEXT,
+    lat REAL,
+    lng REAL,
+    status TEXT,
+    lastSeen INTEGER
+  )`);
+
   // High Performance DB Indexing for Turso/SQLite
   try {
     await client.execute("CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at)");
@@ -559,6 +571,8 @@ async function startServer() {
       await client.execute({ sql: "DELETE FROM messages WHERE sender = ? OR receiver = ?", args: [targetId, targetId] });
       await client.execute({ sql: "DELETE FROM stories WHERE user_id = ?", args: [targetId] });
       await client.execute({ sql: "DELETE FROM notifications WHERE user_id = ?", args: [targetId] });
+      await client.execute({ sql: "DELETE FROM last_known_locations WHERE userId = ?", args: [targetId] });
+      userLiveLocations.delete(targetId);
 
       const targetSocketId = onlineUsers.get(targetId);
       if (targetSocketId) {
@@ -599,6 +613,60 @@ async function startServer() {
     lastSeen?: number;
   }
   const userLiveLocations = new Map<number, UserLiveLocation>();
+
+  const saveLastLocationToDb = (loc: UserLiveLocation) => {
+    client.execute({
+      sql: `INSERT INTO last_known_locations (userId, username, avatar, color, lat, lng, status, lastSeen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(userId) DO UPDATE SET
+              username=excluded.username,
+              avatar=excluded.avatar,
+              color=excluded.color,
+              lat=excluded.lat,
+              lng=excluded.lng,
+              status=excluded.status,
+              lastSeen=excluded.lastSeen`,
+      args: [
+        loc.userId,
+        loc.username || "",
+        loc.avatar || null,
+        loc.color || "#3b82f6",
+        loc.lat,
+        loc.lng,
+        loc.status || "Konum Kapalı",
+        loc.lastSeen || Date.now()
+      ]
+    }).catch(err => console.error("Error saving last_known_location to Turso DB:", err));
+  };
+
+  const loadLastKnownLocationsFromDb = async () => {
+    try {
+      const res = await client.execute("SELECT userId, username, avatar, color, lat, lng, status, lastSeen FROM last_known_locations");
+      for (const row of res.rows) {
+        const uid = Number(row.userId);
+        if (uid && !userLiveLocations.has(uid)) {
+          userLiveLocations.set(uid, {
+            userId: uid,
+            username: String(row.username || "Kullanıcı"),
+            avatar: row.avatar ? String(row.avatar) : null,
+            color: String(row.color || "#3b82f6"),
+            lat: Number(row.lat),
+            lng: Number(row.lng),
+            status: String(row.status || "Konum Kapalı"),
+            updatedAt: Number(row.lastSeen || Date.now()),
+            isLocationActive: false, // Cold start loaded pins are passive/silik
+            lastSeen: Number(row.lastSeen || Date.now())
+          });
+        }
+      }
+      console.log(`Veritabanından ${res.rows.length} adet son bilinen konum (pasif) yüklendi.`);
+    } catch (err) {
+      console.error("Error loading last_known_locations from DB:", err);
+    }
+  };
+
+  // Load cold-start last known locations from DB
+  loadLastKnownLocationsFromDb();
 
   const emitUserLocations = () => {
     const locList = Array.from(userLiveLocations.values());
@@ -1482,7 +1550,7 @@ async function startServer() {
       const safeLat = data.lat + (Math.random() - 0.5) * 0.005;
       const safeLng = data.lng + (Math.random() - 0.5) * 0.005;
 
-      userLiveLocations.set(userIdNum, {
+      const locData: UserLiveLocation = {
         userId: userIdNum,
         username: user.username,
         avatar: user.avatar,
@@ -1493,9 +1561,12 @@ async function startServer() {
         updatedAt: Date.now(),
         isLocationActive: true,
         lastSeen: Date.now()
-      });
+      };
+
+      userLiveLocations.set(userIdNum, locData);
 
       emitUserLocations();
+      saveLastLocationToDb(locData);
     });
 
     socket.on("get_user_locations", (cb) => {
@@ -1520,6 +1591,7 @@ async function startServer() {
         existing.lastSeen = Date.now();
         existing.status = "Konum Kapalı";
         emitUserLocations();
+        saveLastLocationToDb(existing);
       }
     });
 
@@ -4142,6 +4214,7 @@ async function startServer() {
         existingLoc.lastSeen = Date.now();
         existingLoc.status = "Çevrimdışı";
         emitUserLocations();
+        saveLastLocationToDb(existingLoc);
       }
 
       try {
