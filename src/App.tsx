@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
-import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2, Radio, MapPin } from "lucide-react";
+import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2, Radio, MapPin, Megaphone } from "lucide-react";
 import Auth from "./components/Auth";
 import Feed from "./components/Feed";
 import Chats from "./components/Chats";
@@ -11,6 +11,8 @@ import Notifications from "./components/Notifications";
 import Games from "./components/Games";
 import VoiceChat from "./components/VoiceChat";
 import LiveMap from "./components/LiveMap";
+import Announcements, { AnnouncementItem } from "./components/Announcements";
+import AnnouncementModal from "./components/AnnouncementModal";
 import ToastContainer, { ToastItem } from "./components/ToastContainer";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
@@ -28,7 +30,7 @@ export default function App() {
   const [onlineUsers, setOnlineUsers] = useState<number[]>([]);
   const [currentUserId, setCurrentUserId] = useState<number>(Number(localStorage.getItem("lan_user_id")) || 0);
   
-  const [activeTab, setActiveTab] = useState<"global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map">("chats");
+  const [activeTab, setActiveTab] = useState<"announcements" | "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map">("chats");
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<number>(currentUserId);
   const [targetChatUserId, setTargetChatUserId] = useState<number | null>(null);
@@ -36,6 +38,11 @@ export default function App() {
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const [unreadGlobalCount, setUnreadGlobalCount] = useState(0);
   const [unreadDmCount, setUnreadDmCount] = useState(0);
+
+  // Announcements & Drop-down Modal State
+  const [hasUnreadAnnouncement, setHasUnreadAnnouncement] = useState(false);
+  const [activeAnnouncementModal, setActiveAnnouncementModal] = useState<AnnouncementItem | null>(null);
+  const latestAnnouncementIdRef = useRef<number>(0);
 
   // Real-time Floating Toast Notifications with Stacking / Grouping
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -223,6 +230,30 @@ export default function App() {
         }
       });
 
+      // Announcements socket listeners & initial unread checking
+      newSocket.on("new_announcement", (announcement: AnnouncementItem) => {
+        if (announcement && announcement.id) {
+          latestAnnouncementIdRef.current = Math.max(latestAnnouncementIdRef.current, Number(announcement.id));
+          const lastRead = Number(localStorage.getItem("latest_read_announcement_id") || 0);
+          if (Number(announcement.id) > lastRead) {
+            setHasUnreadAnnouncement(true);
+            setActiveAnnouncementModal(announcement);
+          }
+        }
+      });
+
+      // Initial check for unread announcements
+      newSocket.emit("get_announcements", (res: any) => {
+        if (res?.announcements && Array.isArray(res.announcements) && res.announcements.length > 0) {
+          const newestId = Math.max(...res.announcements.map((a: any) => Number(a.id)));
+          latestAnnouncementIdRef.current = newestId;
+          const lastRead = Number(localStorage.getItem("latest_read_announcement_id") || 0);
+          if (newestId > lastRead) {
+            setHasUnreadAnnouncement(true);
+          }
+        }
+      });
+
       // Handle mobile visibility change & window focus to immediately refresh presence and re-connect if needed
       const handleVisibilityChange = () => {
         if (document.visibilityState === "visible") {
@@ -298,8 +329,14 @@ export default function App() {
     return <Auth onAuthSuccess={handleAuthSuccess} />;
   }
 
-  const handleTabChange = (tab: "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map") => {
+  const handleTabChange = (tab: "announcements" | "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map") => {
     setActiveTab(tab);
+    if (tab === "announcements") {
+      setHasUnreadAnnouncement(false);
+      if (latestAnnouncementIdRef.current > 0) {
+        localStorage.setItem("latest_read_announcement_id", String(latestAnnouncementIdRef.current));
+      }
+    }
     if (tab === "global") {
       setUnreadGlobalCount(0);
     }
@@ -334,6 +371,26 @@ export default function App() {
         onClick={handleNotificationClick}
       />
 
+      {/* Screen-center dropping animated Announcement Modal */}
+      <AnnouncementModal
+        announcement={activeAnnouncementModal}
+        onClose={() => {
+          if (activeAnnouncementModal) {
+            localStorage.setItem("latest_read_announcement_id", String(activeAnnouncementModal.id));
+            setHasUnreadAnnouncement(false);
+          }
+          setActiveAnnouncementModal(null);
+        }}
+        onGoToAnnouncements={() => {
+          if (activeAnnouncementModal) {
+            localStorage.setItem("latest_read_announcement_id", String(activeAnnouncementModal.id));
+            setHasUnreadAnnouncement(false);
+          }
+          setActiveAnnouncementModal(null);
+          handleTabChange("announcements");
+        }}
+      />
+
       {/* Desktop Sidebar */}
       <div className="hidden md:flex w-24 lg:w-64 flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-colors duration-200">
         <div className="p-6">
@@ -342,6 +399,13 @@ export default function App() {
         </div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden">
           <nav className="px-4 space-y-2">
+            <NavItem 
+              icon={<Megaphone className="text-amber-500 dark:text-amber-400" />} 
+              label="Duyurular" 
+              active={activeTab === 'announcements'} 
+              dotBadge={hasUnreadAnnouncement} 
+              onClick={() => handleTabChange('announcements')} 
+            />
             <NavItem icon={<Globe />} label="Genel Sohbet" active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
             <NavItem icon={<MessageSquare />} label="Sohbetler" active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
             <NavItem icon={<LayoutGrid />} label="Akış" active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
@@ -374,19 +438,38 @@ export default function App() {
           </div>
         </div>
 
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800">
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-2">
            <button 
              onClick={() => setDarkMode(!darkMode)}
-             className="w-full flex items-center justify-center lg:justify-start gap-3 p-3 rounded-xl transition-all text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
+             className="w-full flex items-center justify-center lg:justify-start gap-3 p-3 rounded-xl transition-all text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
            >
              {darkMode ? <Sun size={20} className="text-amber-500" /> : <Moon size={20} className="text-indigo-500" />}
-             <span className="hidden lg:block font-medium">{darkMode ? "Light Mode" : "Dark Mode"}</span>
+             <span className="hidden lg:block font-medium">{darkMode ? "Açık Tema" : "Koyu Tema"}</span>
            </button>
+           
+           <div className="hidden lg:block px-3 py-1 text-[11px] text-slate-400 dark:text-slate-500 text-center">
+             <span>Uyar-Kaldır & Destek: </span>
+             <a href="mailto:destekkapsapp@gmail.com" className="text-blue-500 hover:underline font-semibold">
+               destekkapsapp@gmail.com
+             </a>
+           </div>
         </div>
       </div>
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col relative w-full max-w-full overflow-hidden">
+        {activeTab === 'announcements' && (
+          <Announcements 
+            socket={socket} 
+            username={username} 
+            currentUserId={currentUserId} 
+            onAnnouncementsRead={(latestId) => {
+              latestAnnouncementIdRef.current = latestId;
+              localStorage.setItem("latest_read_announcement_id", String(latestId));
+              setHasUnreadAnnouncement(false);
+            }}
+          />
+        )}
         {activeTab === 'global' && <GlobalChat socket={socket} currentUserId={currentUserId} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
         {activeTab === 'chats' && (
           <Chats 
@@ -451,6 +534,7 @@ export default function App() {
       {/* Mobile Bottom Nav */}
       <div className="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md pb-safe shrink-0 z-30">
         <nav className="flex items-center justify-around px-1 py-1.5 overflow-x-auto no-scrollbar">
+          <MobileNavItem icon={<Megaphone size={22} className="text-amber-500" />} active={activeTab === 'announcements'} dotBadge={hasUnreadAnnouncement} onClick={() => handleTabChange('announcements')} />
           <MobileNavItem icon={<Globe size={22} />} active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
           <MobileNavItem icon={<MessageSquare size={22} />} active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
           <MobileNavItem icon={<LayoutGrid size={22} />} active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
@@ -466,40 +550,45 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active, badge, onClick }: { icon: React.ReactNode, label: string, active: boolean, badge?: number, onClick: () => void }) {
+function NavItem({ icon, label, active, badge, dotBadge, onClick }: { icon: React.ReactNode, label: string, active: boolean, badge?: number, dotBadge?: boolean, onClick: () => void }) {
   return (
     <button 
       onClick={onClick}
-      className={`w-full flex items-center justify-between p-3 lg:px-4 rounded-xl transition-all relative ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+      className={`w-full flex items-center justify-between p-3 lg:px-4 rounded-xl transition-all relative cursor-pointer ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
     >
       <div className="flex items-center gap-4">
         <div className={`relative ${active ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-500'}`}>
           {icon}
           {badge && badge > 0 && <div className="lg:hidden absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border border-white dark:border-slate-900"></div>}
+          {dotBadge && !badge && <div className="lg:hidden absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border border-white dark:border-slate-900 animate-pulse"></div>}
         </div>
         <span className="hidden lg:block">{label}</span>
       </div>
-      {badge && badge > 0 && (
+      {badge && badge > 0 ? (
          <span className="hidden lg:flex px-1.5 min-w-[20px] h-5 bg-red-500 text-white text-[10px] items-center justify-center rounded-full font-bold shadow-sm">
            {badge > 99 ? '99+' : badge}
          </span>
-      )}
+      ) : dotBadge ? (
+        <span className="hidden lg:flex w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse shadow-sm shadow-red-500/50"></span>
+      ) : null}
     </button>
   );
 }
 
-function MobileNavItem({ icon, active, badge, onClick }: { icon: React.ReactNode, active: boolean, badge?: number, onClick: () => void }) {
+function MobileNavItem({ icon, active, badge, dotBadge, onClick }: { icon: React.ReactNode, active: boolean, badge?: number, dotBadge?: boolean, onClick: () => void }) {
   return (
     <button 
       onClick={onClick}
-      className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 rounded-xl transition-all relative ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}`}
+      className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 rounded-xl transition-all relative cursor-pointer ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}`}
     >
       {icon}
-      {badge && badge > 0 && (
+      {badge && badge > 0 ? (
         <span className="absolute top-1 right-1 px-1 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold flex items-center justify-center rounded-full border border-white dark:border-slate-900 leading-none shadow-sm">
           {badge > 99 ? '99+' : badge}
         </span>
-      )}
+      ) : dotBadge ? (
+        <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900 animate-pulse shadow-sm shadow-red-500/50"></span>
+      ) : null}
     </button>
   );
 }

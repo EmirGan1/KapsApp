@@ -34,11 +34,6 @@ export interface UserLiveLocation {
 
 function formatLastSeen(lastSeen?: number): string {
   if (!lastSeen) return "Bilinmiyor";
-  const now = Date.now();
-  const diffSec = Math.max(0, Math.floor((now - lastSeen) / 1000));
-  if (diffSec < 60) return "Az önce";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} dk önce`;
   const date = new Date(lastSeen);
   const hours = date.getHours().toString().padStart(2, "0");
   const minutes = date.getMinutes().toString().padStart(2, "0");
@@ -68,9 +63,9 @@ export default function LiveMap({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersRef = useRef<Map<number, L.Marker>>(new Map());
-  const watchIdRef = useRef<number | null>(null);
+  const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
 
-  const [isSharing, setIsSharing] = useState<boolean>(false);
+  const [isSharing, setIsSharing] = useState<boolean>(() => localStorage.getItem("isLocationActive") === "true");
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [permissionStatus, setPermissionStatus] = useState<"prompt" | "granted" | "denied">("prompt");
   const [geoError, setGeoError] = useState<string | null>(null);
@@ -96,11 +91,12 @@ export default function LiveMap({
     const initial = (user.username?.[0] || "U").toUpperCase();
 
     const avatarHtml = user.avatar
-      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full ${!isActive ? 'grayscale opacity-75' : ''}" />`
-      : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs ${!isActive ? 'grayscale opacity-75 bg-slate-600' : ''}" style="${isActive ? `background-color: ${user.color || '#6366f1'}` : ''}">${initial}</div>`;
+      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full" />`
+      : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs" style="background-color: ${isActive ? (user.color || '#6366f1') : '#475569'};">${initial}</div>`;
 
     const html = `
-      <div class="relative flex items-center justify-center group cursor-pointer ${!isActive ? 'opacity-80' : ''}" style="width: 48px; height: 48px;">
+      <div class="relative flex items-center justify-center group cursor-pointer" 
+           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.6; filter: grayscale(100%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
         ${isActive ? `
           <!-- Glowing Pulse Radar Effect -->
           <div class="absolute inset-0 rounded-full animate-ping opacity-60 pointer-events-none" style="background-color: ${glowColor};"></div>
@@ -108,7 +104,7 @@ export default function LiveMap({
         ` : ''}
         
         <!-- Main Avatar Circle -->
-        <div class="relative z-10 w-10 h-10 rounded-full p-0.5 shadow-xl border-2 transition-transform duration-200 transform hover:scale-110" 
+        <div class="relative z-10 w-10 h-10 rounded-full p-0.5 shadow-xl border-2 transition-all duration-300 transform hover:scale-110" 
              style="background-color: #0f172a; border-color: ${ringColor}; ${isActive ? `box-shadow: 0 0 14px ${glowColor};` : 'box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);'}">
           <div class="w-full h-full rounded-full overflow-hidden bg-slate-800">
             ${avatarHtml}
@@ -217,12 +213,13 @@ export default function LiveMap({
 
   // Stop location sharing (preserves pin in passive mode)
   const stopLocationSharing = useCallback(() => {
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
+    if (intervalIdRef.current !== null) {
+      clearInterval(intervalIdRef.current);
+      intervalIdRef.current = null;
     }
     setIsSharing(false);
     setIsLocating(false);
+    localStorage.setItem("isLocationActive", "false");
 
     // Inform server so it marks isLocationActive: false with lastSeen
     if (socket) {
@@ -230,15 +227,13 @@ export default function LiveMap({
     }
   }, [socket]);
 
-  // Start high-accuracy location tracking
-  const startLocationSharing = useCallback(() => {
+  // Fetch current position and send to server
+  const fetchAndSendPosition = useCallback((shouldFlyTo: boolean = false) => {
     if (!navigator.geolocation) {
       setGeoError("Tarayıcınız konum servisini (Geolocation API) desteklemiyor.");
+      setIsLocating(false);
       return;
     }
-
-    setIsLocating(true);
-    setGeoError(null);
 
     const geoOptions: PositionOptions = {
       enableHighAccuracy: true,
@@ -246,7 +241,6 @@ export default function LiveMap({
       maximumAge: 0
     };
 
-    // First do a one-shot fetch for rapid response
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
@@ -254,43 +248,23 @@ export default function LiveMap({
         setIsSharing(true);
         setIsLocating(false);
         setPermissionStatus("granted");
+        setGeoError(null);
 
-        // Center map on user
-        if (mapInstanceRef.current) {
+        // Center map on user if requested
+        if (shouldFlyTo && mapInstanceRef.current) {
           mapInstanceRef.current.flyTo([latitude, longitude], 14, {
             animate: true,
             duration: 1.2
           });
         }
 
-        // Share with server (activates isLocationActive: true)
+        // Share with server
         if (socket) {
           socket.emit("share_location", { lat: latitude, lng: longitude });
         }
-
-        // Setup continuous watcher
-        if (watchIdRef.current !== null) {
-          navigator.geolocation.clearWatch(watchIdRef.current);
-        }
-
-        watchIdRef.current = navigator.geolocation.watchPosition(
-          (watchPos) => {
-            const newLat = watchPos.coords.latitude;
-            const newLng = watchPos.coords.longitude;
-            setMyCoords({ lat: newLat, lng: newLng });
-            if (socket) {
-              socket.emit("share_location", { lat: newLat, lng: newLng });
-            }
-          },
-          (err) => {
-            console.warn("Geolocation watch update error:", err);
-          },
-          geoOptions
-        );
       },
       (err) => {
         setIsLocating(false);
-        setIsSharing(false);
         if (err.code === err.PERMISSION_DENIED) {
           setPermissionStatus("denied");
           setGeoError("Konum izni verilmedi; haritayı yalnızca izleyici olarak görüntülüyorsunuz.");
@@ -305,6 +279,31 @@ export default function LiveMap({
       geoOptions
     );
   }, [socket]);
+
+  // Start 1-minute interval location tracking
+  const startLocationSharing = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGeoError("Tarayıcınız konum servisini (Geolocation API) desteklemiyor.");
+      return;
+    }
+
+    setIsLocating(true);
+    setGeoError(null);
+    localStorage.setItem("isLocationActive", "true");
+    setIsSharing(true);
+
+    // 1. Initial immediate location fetch
+    fetchAndSendPosition(true);
+
+    // 2. Setup 60 seconds (1 minute) interval
+    if (intervalIdRef.current !== null) {
+      clearInterval(intervalIdRef.current);
+    }
+
+    intervalIdRef.current = setInterval(() => {
+      fetchAndSendPosition(false);
+    }, 60000);
+  }, [fetchAndSendPosition]);
 
   // Initialize Leaflet Map
   useEffect(() => {
@@ -331,18 +330,21 @@ export default function LiveMap({
     tileLayerRef.current = tileLayer;
     mapInstanceRef.current = map;
 
-    // Auto-request location on component mount
-    startLocationSharing();
+    // Restore location sharing state from localStorage
+    const savedActive = localStorage.getItem("isLocationActive");
+    if (savedActive === "true" || savedActive === null) {
+      startLocationSharing();
+    }
 
     return () => {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
+      if (intervalIdRef.current !== null) {
+        clearInterval(intervalIdRef.current);
+        intervalIdRef.current = null;
       }
       map.remove();
       mapInstanceRef.current = null;
     };
-  }, []); // Run once on mount
+  }, [startLocationSharing]);
 
   // Socket.io Real-time Location synchronization
   useEffect(() => {

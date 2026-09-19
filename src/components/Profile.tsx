@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
 import { 
   Camera, LogOut, Heart, MessageCircle, ArrowLeft, Maximize2, Lock, X, Trash2, 
-  UserX, AlertTriangle, Shield, Globe, UserPlus, UserMinus, UserCheck, MessageSquare, 
+  UserX, AlertTriangle, Shield, ShieldAlert, Globe, UserPlus, UserMinus, UserCheck, MessageSquare, 
   Users, Search, Check, Clock 
 } from "lucide-react";
 import Avatar from "./Avatar";
@@ -54,9 +54,10 @@ export default function Profile({
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState(false);
 
-  // Admin User Deletion State
+  // Admin User Moderation State
   const [showDeleteUserModal, setShowDeleteUserModal] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [isBanningUser, setIsBanningUser] = useState(false);
   const [deleteUserError, setDeleteUserError] = useState("");
 
   const isMe = currentUserId === viewingUserId;
@@ -442,17 +443,19 @@ export default function Profile({
             )}
 
             {isEmirgan && (
-              <button
-                onClick={() => {
-                  setDeleteUserError("");
-                  setShowDeleteUserModal(true);
-                }}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-md shadow-red-600/20 transition-all cursor-pointer text-sm"
-                title="Kullanıcıyı Sil / Kalıcı Olarak Banla (Yönetici)"
-              >
-                <UserX size={16} />
-                <span>Kullanıcıyı Sil</span>
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setDeleteUserError("");
+                    setShowDeleteUserModal(true);
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-md shadow-red-600/20 transition-all cursor-pointer text-sm"
+                  title="Kullanıcıyı Kalıcı Olarak Sil veya Banla (Yönetici)"
+                >
+                  <UserX size={16} />
+                  <span>Yönetici: Ban / Sil</span>
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -694,37 +697,66 @@ export default function Profile({
               <p className="text-xs text-red-600 font-semibold">{deleteUserError}</p>
             )}
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-col gap-2 pt-2">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={isDeletingUser || isBanningUser}
+                  onClick={() => {
+                    setIsBanningUser(true);
+                    setDeleteUserError("");
+                    if (socket) {
+                      socket.emit("ban_user", { userId: userProfile.id }, (res: any) => {
+                        setIsBanningUser(false);
+                        if (res?.error) {
+                          setDeleteUserError(res.error);
+                        } else {
+                          setShowDeleteUserModal(false);
+                          alert("Kullanıcı hesabı kural ihlali nedeniyle başarıyla banlandı.");
+                          loadProfile();
+                        }
+                      });
+                    }
+                  }}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold text-xs transition-colors cursor-pointer shadow-md shadow-amber-600/20 flex items-center justify-center gap-1.5"
+                >
+                  <ShieldAlert size={14} />
+                  {isBanningUser ? "Banlanıyor..." : "Hesabı Banla"}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isDeletingUser || isBanningUser}
+                  onClick={() => {
+                    setIsDeletingUser(true);
+                    setDeleteUserError("");
+                    if (socket) {
+                      socket.emit("admin_delete_user", { userId: userProfile.id }, (res: any) => {
+                        setIsDeletingUser(false);
+                        if (res?.error) {
+                          setDeleteUserError(res.error);
+                        } else {
+                          setShowDeleteUserModal(false);
+                          alert("Kullanıcı ve tüm verileri başarıyla silindi.");
+                          onUserClick(currentUserId);
+                        }
+                      });
+                    }
+                  }}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-xs transition-colors cursor-pointer shadow-md shadow-red-600/20 flex items-center justify-center gap-1.5"
+                >
+                  <UserX size={14} />
+                  {isDeletingUser ? "Siliniyor..." : "Tüm Verileri Sil"}
+                </button>
+              </div>
+
               <button
                 type="button"
-                disabled={isDeletingUser}
+                disabled={isDeletingUser || isBanningUser}
                 onClick={() => setShowDeleteUserModal(false)}
-                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                className="w-full py-2 px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
-                Vazgeç
-              </button>
-              <button
-                type="button"
-                disabled={isDeletingUser}
-                onClick={() => {
-                  setIsDeletingUser(true);
-                  setDeleteUserError("");
-                  if (socket) {
-                    socket.emit("admin_delete_user", { userId: userProfile.id }, (res: any) => {
-                      setIsDeletingUser(false);
-                      if (res?.error) {
-                        setDeleteUserError(res.error);
-                      } else {
-                        setShowDeleteUserModal(false);
-                        alert("Kullanıcı başarıyla silindi.");
-                        onUserClick(currentUserId);
-                      }
-                    });
-                  }
-                }}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition-colors cursor-pointer shadow-md shadow-red-600/20"
-              >
-                {isDeletingUser ? "Siliniyor..." : "Evet, Kalıcı Olarak Sil"}
+                İptal / Vazgeç
               </button>
             </div>
           </div>

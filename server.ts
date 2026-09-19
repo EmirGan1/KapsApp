@@ -171,11 +171,34 @@ async function initDb() {
   try { await client.execute("ALTER TABLE users ADD COLUMN uno_wins INTEGER DEFAULT 0"); } catch(e){}
   try { await client.execute("ALTER TABLE users ADD COLUMN signup_ip TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE users ADD COLUMN last_ip TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN isBanned INTEGER DEFAULT 0"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN locationConsent INTEGER DEFAULT 0"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0"); } catch(e){}
   try { await client.execute("ALTER TABLE notifications ADD COLUMN sender_id INTEGER"); } catch(e){}
   try { await client.execute("ALTER TABLE notifications ADD COLUMN target_id INTEGER"); } catch(e){}
 
+  // Announcements (Duyurular) Table
+  await client.execute(`CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    content TEXT NOT NULL,
+    author_id INTEGER,
+    author_username TEXT,
+    created_at TEXT
+  )`);
+
+  // 5651 Sayılı Kanun Traffic & IP Access Logs Table
+  await client.execute(`CREATE TABLE IF NOT EXISTS access_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER,
+    ipAddress TEXT,
+    action TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // High Performance DB Indexing for Turso/SQLite
   try {
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_direct ON messages(sender, receiver)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_global_messages_created ON global_messages(created_at)");
@@ -211,6 +234,14 @@ async function startServer() {
       return forwarded[0].split(",")[0].trim();
     }
     return req.ip || req.socket.remoteAddress || "Bilinmiyor";
+  };
+
+  // 5651 Sayılı Kanun Asynchronous Non-blocking IP & Traffic Access Logger
+  const logAccess = (userId: number | null, ipAddress: string, action: string) => {
+    client.execute({
+      sql: "INSERT INTO access_logs (userId, ipAddress, action, timestamp) VALUES (?, ?, ?, ?)",
+      args: [userId, ipAddress || "Bilinmiyor", action, new Date().toISOString()]
+    }).catch(err => console.error("Access log error:", err));
   };
   
   app.use(express.json({ limit: "50mb" }));
@@ -265,9 +296,16 @@ async function startServer() {
   // REST API Routes
   app.post("/api/register", async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const { username, password, locationConsent, kvkkAccepted, termsAccepted } = req.body;
       if (!username || !password) {
         return res.status(400).json({ error: "Eksik bilgi." });
+      }
+
+      // 5651 & KVKK Mandatory Terms Validation
+      if (kvkkAccepted !== true && termsAccepted !== true && kvkkAccepted !== "true" && termsAccepted !== "true") {
+        return res.status(400).json({ 
+          error: "Kullanım Koşulları ve KVKK Aydınlatma Metni'nin kabul edilmesi zorunludur." 
+        });
       }
       
       const existing = await client.execute({
@@ -310,12 +348,19 @@ async function startServer() {
 
       const lastSeen = new Date().toISOString();
       const clientIp = getClientIp(req);
-      const insertResult = await client.execute({
-        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp]
-      });
+      const locConsentValue = (locationConsent === true || locationConsent === 1) ? 1 : 0;
       
-      res.json({ token, username, id: Number(insertResult.lastInsertRowid), color: randomColor });
+      const insertResult = await client.execute({
+        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip, locationConsent, isBanned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp, locConsentValue]
+      });
+
+      const newUserId = Number(insertResult.lastInsertRowid);
+      
+      // Asynchronously log register traffic for 5651 compliance
+      logAccess(newUserId, clientIp, 'register');
+      
+      res.json({ token, username, id: newUserId, color: randomColor, locationConsent: locConsentValue === 1 });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -331,6 +376,12 @@ async function startServer() {
       
       if (userRes.rows.length > 0) {
         const user = userRes.rows[0];
+
+        // 5651 Moderation: Ban Check
+        if (Number(user.isBanned) === 1 || user.isBanned === "1") {
+          return res.status(403).json({ error: "Hesabınız kural ihlali nedeniyle askıya alınmıştır." });
+        }
+
         if (await bcrypt.compare(password, user.password as string)) {
           const token = crypto.randomUUID();
           let color = user.color;
@@ -343,7 +394,21 @@ async function startServer() {
             sql: "UPDATE users SET token = ?, color = ?, last_ip = ?, last_seen = ? WHERE id = ?",
             args: [token, color, clientIp, new Date().toISOString(), user.id]
           });
-          res.json({ token, username: user.username, avatar: user.avatar, id: user.id, color });
+
+          // Asynchronously log login traffic for 5651 compliance
+          logAccess(Number(user.id), clientIp, 'login');
+
+          const isAdmin = (user.username as string)?.toLowerCase() === "emirgan" || user.is_admin === 1;
+
+          res.json({ 
+            token, 
+            username: user.username, 
+            avatar: user.avatar, 
+            id: user.id, 
+            color, 
+            isAdmin,
+            locationConsent: user.locationConsent === 1 
+          });
         } else {
           res.status(401).json({ error: "Geçersiz giriş." });
         }
@@ -1284,6 +1349,11 @@ async function startServer() {
       });
       if (userRes.rows.length === 0) return next(new Error("Invalid token"));
       const userObj = userRes.rows[0];
+
+      // 5651 Moderation: Banned check on socket authentication
+      if (Number(userObj.isBanned) === 1 || userObj.isBanned === "1") {
+        return next(new Error("Hesabınız kural ihlali nedeniyle askıya alınmıştır."));
+      }
       
       // Update last_ip and last_seen on authenticated socket connection
       const clientIpHeader = socket.handshake.headers["x-forwarded-for"];
@@ -1307,6 +1377,8 @@ async function startServer() {
       }
 
       socket.data.user = userObj;
+      socket.data.ip = socketIp;
+      logAccess(Number(userObj.id), socketIp, 'connect');
       next();
     } catch(e) {
       next(new Error("DB error"));
@@ -1339,9 +1411,15 @@ async function startServer() {
       }
     });
 
-    // Real-time Geolocation Sync (RAM ONLY - Never saved to database)
-    socket.on("share_location", (data: { lat: number; lng: number }) => {
+    // Real-time Geolocation Sync (RAM ONLY - Jitter applied for 5651 & privacy protection)
+    socket.on("share_location", async (data: { lat: number; lng: number }) => {
       if (typeof data?.lat !== "number" || typeof data?.lng !== "number") return;
+
+      const dbUser = await getUser(userIdNum);
+      if (dbUser && dbUser.locationConsent === 0) {
+        // User opted out of location sharing consent
+        return;
+      }
 
       let userStatus = "Lobide";
       if (socket.data.currentOkeyRoom) {
@@ -1354,13 +1432,17 @@ async function startServer() {
         userStatus = "Sesli/Görüntülü Sohbette";
       }
 
+      // Security Jitter (200-500 meters noise offset) to protect exact location
+      const safeLat = data.lat + (Math.random() - 0.5) * 0.005;
+      const safeLng = data.lng + (Math.random() - 0.5) * 0.005;
+
       userLiveLocations.set(userIdNum, {
         userId: userIdNum,
         username: user.username,
         avatar: user.avatar,
         color: user.color || "#3b82f6",
-        lat: data.lat,
-        lng: data.lng,
+        lat: safeLat,
+        lng: safeLng,
         status: userStatus,
         updatedAt: Date.now(),
         isLocationActive: true,
@@ -1396,7 +1478,7 @@ async function startServer() {
       }
       try {
         const res = await client.execute({ 
-          sql: "SELECT id, username, avatar, color, okey_wins, uno_wins, signup_ip, last_ip FROM users WHERE id = ?", 
+          sql: "SELECT id, username, avatar, color, okey_wins, uno_wins, signup_ip, last_ip, isBanned, locationConsent, is_admin FROM users WHERE id = ?", 
           args: [numId] 
         });
         const u = res.rows.length > 0 ? res.rows[0] : null;
@@ -1986,6 +2068,129 @@ async function startServer() {
       } catch (err: any) {
         console.error("admin_delete_user error:", err);
         if (cb) cb({ error: "Kullanıcı silinirken bir hata oluştu." });
+      }
+    });
+
+    // 5651 Moderation: Admin Ban User Socket Event
+    socket.on("ban_user", async ({ userId }: { userId: number }, cb?: (res: any) => void) => {
+      const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
+      const isAdmin = isEmirgan || user.is_admin === 1;
+      if (!isAdmin) {
+        if (cb) cb({ error: "Yetkisiz işlem: Sadece yöneticiler kullanıcı banlayabilir." });
+        return;
+      }
+      try {
+        const targetId = Number(userId);
+        const targetRes = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [targetId] });
+        if (targetRes.rows.length === 0) {
+          if (cb) cb({ error: "Kullanıcı bulunamadı." });
+          return;
+        }
+        const targetUser = targetRes.rows[0];
+        if (targetUser.username && (targetUser.username as string).trim().toLowerCase() === 'emirgan') {
+          if (cb) cb({ error: "Yönetici hesabı banlanamaz." });
+          return;
+        }
+
+        // Set isBanned = 1 in database
+        await client.execute({ sql: "UPDATE users SET isBanned = 1 WHERE id = ?", args: [targetId] });
+        invalidateUserCache(targetId);
+
+        // Disconnect target user socket immediately
+        const targetSocketId = onlineUsers.get(targetId);
+        if (targetSocketId) {
+          const targetSocket = io.sockets.sockets.get(targetSocketId);
+          if (targetSocket) {
+            targetSocket.emit("account_banned", "Hesabınız kural ihlali nedeniyle askıya alınmıştır.");
+            targetSocket.disconnect(true);
+          }
+          onlineUsers.delete(targetId);
+          io.emit("online_users", Array.from(onlineUsers.keys()));
+        }
+
+        // Remove from active live map locations
+        userLiveLocations.delete(targetId);
+        emitUserLocations();
+
+        io.emit("user_banned", { userId: targetId, username: targetUser.username });
+        io.emit("feed_updated");
+        io.emit("friends_updated");
+        if (cb) cb({ success: true, userId: targetId });
+      } catch (err: any) {
+        console.error("ban_user error:", err);
+        if (cb) cb({ error: "Kullanıcı banlanırken bir hata oluştu." });
+      }
+    });
+
+    // Announcements (Duyurular) Socket Handlers
+    socket.on("get_announcements", async (cb?: (res: any) => void) => {
+      try {
+        const res = await client.execute({
+          sql: "SELECT * FROM announcements ORDER BY id DESC LIMIT 50"
+        });
+        if (cb) cb({ announcements: res.rows });
+      } catch (err: any) {
+        console.error("get_announcements error:", err);
+        if (cb) cb({ error: "Duyurular alınamadı." });
+      }
+    });
+
+    socket.on("create_announcement", async (data: { title?: string; content: string }, cb?: (res: any) => void) => {
+      const isEmirgan = user.username && (user.username as string).trim().toLowerCase() === 'emirgan';
+      if (!isEmirgan) {
+        if (cb) cb({ error: "Yetkisiz işlem: Sadece 'emirgan' kullanıcısı duyuru yayınlayabilir." });
+        return;
+      }
+      try {
+        const title = (data.title || "Sistem Duyurusu").trim();
+        const content = (data.content || "").trim();
+        if (!content) {
+          if (cb) cb({ error: "Duyuru içeriği boş olamaz." });
+          return;
+        }
+
+        const createdAt = new Date().toISOString();
+        const insertRes = await client.execute({
+          sql: "INSERT INTO announcements (title, content, author_id, author_username, created_at) VALUES (?, ?, ?, ?, ?)",
+          args: [title, content, Number(user.id), user.username as string, createdAt]
+        });
+
+        const newAnnouncement = {
+          id: Number(insertRes.lastInsertRowid),
+          title,
+          content,
+          author_id: Number(user.id),
+          author_username: user.username as string,
+          created_at: createdAt
+        };
+
+        // Real-time broadcast to all connected users
+        io.emit("new_announcement", newAnnouncement);
+
+        if (cb) cb({ success: true, announcement: newAnnouncement });
+      } catch (err: any) {
+        console.error("create_announcement error:", err);
+        if (cb) cb({ error: "Duyuru oluşturulurken bir hata oluştu." });
+      }
+    });
+
+    socket.on("delete_announcement", async ({ id }: { id: number }, cb?: (res: any) => void) => {
+      const isEmirgan = user.username && (user.username as string).trim().toLowerCase() === 'emirgan';
+      if (!isEmirgan) {
+        if (cb) cb({ error: "Yetkisiz işlem: Sadece yönetici duyuru silebilir." });
+        return;
+      }
+      try {
+        await client.execute({
+          sql: "DELETE FROM announcements WHERE id = ?",
+          args: [Number(id)]
+        });
+
+        io.emit("announcement_deleted", { id: Number(id) });
+        if (cb) cb({ success: true });
+      } catch (err: any) {
+        console.error("delete_announcement error:", err);
+        if (cb) cb({ error: "Duyuru silinirken bir hata oluştu." });
       }
     });
 
@@ -3876,6 +4081,9 @@ async function startServer() {
         sql: "UPDATE users SET last_seen = ? WHERE id = ?",
         args: [new Date().toISOString(), user.id]
       });
+
+      // 5651 Sayılı Kanun Traffic Log
+      logAccess(userIdNum, socket.data?.ip || "Bilinmiyor", 'disconnect');
 
       // Mobile network reconnection grace period:
       // Don't drop user from online status immediately on momentary disconnect (e.g. backgrounding tab, cellular handover)
