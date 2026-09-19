@@ -229,17 +229,17 @@ export default function GlobalChat({
   });
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-slate-50 dark:bg-slate-950 relative transition-colors duration-200">
+    <div className="flex-1 flex overflow-hidden w-full max-w-full bg-slate-50 dark:bg-slate-950 relative transition-colors duration-200">
       {/* Messages Feed */}
-      <div className="flex-1 flex flex-col h-full bg-white dark:bg-slate-950 shadow-sm border-r border-slate-200 dark:border-slate-800 transition-colors duration-200">
-        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-10 transition-colors duration-200">
-          <div>
-            <h1 className="font-bold text-slate-800 dark:text-slate-100 text-lg">Genel Sohbet</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Herkesle anlık iletişim kur, fotoğraf, video ve dosya paylaş
+      <div className="flex-1 flex flex-col h-full w-full min-w-0 max-w-full bg-white dark:bg-slate-950 shadow-sm border-r border-slate-200 dark:border-slate-800 transition-colors duration-200 overflow-hidden">
+        <div className="p-3 sm:p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-10 shrink-0 transition-colors duration-200">
+          <div className="min-w-0 pr-2">
+            <h1 className="font-bold text-slate-800 dark:text-slate-100 text-base sm:text-lg truncate">Genel Sohbet</h1>
+            <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+              Herkesle anlık iletişim kur, medya ve dosya paylaş
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {currentUsername?.trim().toLowerCase() === 'emirgan' && (
               <button
                 onClick={() => {
@@ -247,22 +247,22 @@ export default function GlobalChat({
                     socket?.emit("clear_global_chat");
                   }
                 }}
-                className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-900/50 transition-colors font-medium"
+                className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 px-2 py-1 rounded-lg border border-red-200 dark:border-red-900/50 transition-colors font-medium whitespace-nowrap cursor-pointer"
                 title="Genel Sohbeti Temizle (Yönetici)"
               >
-                Sohbeti Sıfırla
+                Sıfırla
               </button>
             )}
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                {onlineUsers.length} Çevrimiçi
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse shrink-0"></span>
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                {onlineUsers.length} <span className="hidden sm:inline">Çevrimiçi</span>
               </span>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 space-y-3 sm:space-y-4 min-w-0 overscroll-contain">
           {messages.map((msg, index) => {
             const isMine = msg.sender === currentUserId;
             const isEmirgan = currentUsername?.trim().toLowerCase() === 'emirgan';
@@ -285,12 +285,12 @@ export default function GlobalChat({
                 className={`flex flex-col ${isMine ? "items-end" : "items-start"} w-full min-w-0`}
               >
                 <div
-                  className={`flex gap-2 max-w-[88%] sm:max-w-[80%] md:max-w-[70%] min-w-0 group relative ${
+                  className={`flex gap-1.5 sm:gap-2 max-w-[92%] sm:max-w-[85%] md:max-w-[75%] min-w-0 group relative ${
                     isMine ? "flex-row-reverse" : "flex-row"
                   }`}
                 >
                   <div
-                    className={`relative rounded-2xl p-3.5 shadow-sm transition-all min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere] break-words break-all ${
+                    className={`relative rounded-2xl p-2.5 sm:p-3.5 shadow-sm transition-all min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere] break-words whitespace-normal select-text ${
                       isMine
                         ? "bg-blue-600 text-white rounded-br-none"
                         : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-100 dark:border-slate-700"
@@ -575,30 +575,30 @@ export default function GlobalChat({
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Bar */}
-        <div className="bg-white border-t border-slate-200 relative pb-safe">
+        {/* Input Bar - Sticky to bottom with safe-area padding for mobile virtual keyboards */}
+        <div className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 relative pb-safe shrink-0 z-10">
           {replyTo && (
-            <div className="absolute bottom-full left-0 w-full bg-slate-50 border-t border-slate-200 p-2 px-4 flex justify-between items-center text-sm shadow-md">
-              <div>
-                <span className="font-semibold text-blue-600">{replyTo.sender_name}</span> kişisine
+            <div className="absolute bottom-full left-0 w-full bg-slate-50 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 p-2 px-3 sm:px-4 flex justify-between items-center text-xs sm:text-sm shadow-md">
+              <div className="truncate pr-2">
+                <span className="font-semibold text-blue-600 dark:text-blue-400">{replyTo.sender_name}</span> kişisine
                 yanıtlanıyor:{" "}
-                <span className="text-slate-500 truncate max-w-xs inline-block align-bottom">
+                <span className="text-slate-500 dark:text-slate-400 truncate max-w-[150px] sm:max-w-xs inline-block align-bottom">
                   {replyTo.type === "text" ? replyTo.content : "Medya"}
                 </span>
               </div>
               <button
                 onClick={() => setReplyTo(null)}
-                className="text-slate-400 hover:text-red-500 font-bold px-2"
+                className="text-slate-400 hover:text-red-500 font-bold px-2 text-base shrink-0"
               >
                 &times;
               </button>
             </div>
           )}
 
-          <div className="p-3 flex items-center gap-2 max-w-4xl mx-auto">
+          <div className="p-2 sm:p-3 flex items-center gap-1.5 sm:gap-2 max-w-4xl mx-auto">
             {/* Media Upload */}
             <label
-              className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full cursor-pointer transition-colors"
+              className="p-2 sm:p-2.5 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-full cursor-pointer transition-colors shrink-0"
               title="Fotoğraf veya Video Gönder"
             >
               <input
@@ -607,12 +607,12 @@ export default function GlobalChat({
                 className="hidden"
                 onChange={handleFileUpload}
               />
-              <ImageIcon size={22} />
+              <ImageIcon size={20} className="sm:w-[22px] sm:h-[22px]" />
             </label>
 
             {/* Document / File Upload */}
             <label
-              className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full cursor-pointer transition-colors"
+              className="p-2 sm:p-2.5 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-full cursor-pointer transition-colors shrink-0"
               title="Belge veya Dosya Gönder"
             >
               <input
@@ -621,21 +621,21 @@ export default function GlobalChat({
                 className="hidden"
                 onChange={handleFileUpload}
               />
-              <Paperclip size={22} />
+              <Paperclip size={20} className="sm:w-[22px] sm:h-[22px]" />
             </label>
 
-            <div className="flex-1 flex items-center bg-slate-100 dark:bg-slate-800 rounded-full px-4 py-1.5 focus-within:ring-2 focus-within:ring-blue-500 min-w-0">
+            <div className="flex-1 flex items-center bg-slate-100 dark:bg-slate-800 rounded-full px-3 sm:px-4 py-1 sm:py-1.5 focus-within:ring-2 focus-within:ring-blue-500 min-w-0">
               <input
                 type="text"
-                placeholder="Mesaj yaz... (maks 1000 karakter)"
+                placeholder="Mesaj yaz... (maks 1000)"
                 value={newMessage}
                 maxLength={1000}
                 onChange={handleTyping}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                className="flex-1 bg-transparent border-none focus:outline-none text-[15px] py-1.5 text-slate-800 dark:text-slate-100 min-w-0"
+                className="flex-1 bg-transparent border-none focus:outline-none text-sm sm:text-[15px] py-1 text-slate-800 dark:text-slate-100 min-w-0"
               />
               {newMessage.length > 700 && (
-                <span className="text-[11px] text-slate-400 font-mono shrink-0 pl-1">
+                <span className="text-[10px] sm:text-[11px] text-slate-400 font-mono shrink-0 pl-1">
                   {1000 - newMessage.length}
                 </span>
               )}
@@ -644,9 +644,9 @@ export default function GlobalChat({
             {newMessage.trim() ? (
               <button
                 onClick={handleSend}
-                className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors shadow-md cursor-pointer"
+                className="p-2.5 sm:p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors shadow-md cursor-pointer shrink-0"
               >
-                <Send size={20} />
+                <Send size={18} className="sm:w-5 sm:h-5" />
               </button>
             ) : (
               <button
@@ -655,13 +655,13 @@ export default function GlobalChat({
                 onMouseLeave={stopRecording}
                 onTouchStart={startRecording}
                 onTouchEnd={stopRecording}
-                className={`p-3 rounded-full transition-all shadow-md cursor-pointer ${
+                className={`p-2.5 sm:p-3 rounded-full transition-all shadow-md cursor-pointer shrink-0 ${
                   isRecording
                     ? "bg-red-500 text-white scale-110 animate-pulse"
                     : "bg-blue-600 text-white hover:bg-blue-700"
                 }`}
               >
-                <Mic size={20} />
+                <Mic size={18} className="sm:w-5 sm:h-5" />
               </button>
             )}
           </div>

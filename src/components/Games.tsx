@@ -810,46 +810,46 @@ export default function Games({
                   {previousPlayerDiscard ? (
                     <div className="relative">
                       <TileView tile={previousPlayerDiscard} size="md" />
-                      <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap ${
+                      <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] xs:text-[9px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap ${
                         canDraw ? 'bg-blue-600 text-white animate-bounce' : 'bg-slate-800 text-slate-300'
                       }`}>
                         {canDraw ? 'Soldan Çek' : 'Atılan Taş'}
                       </span>
                     </div>
                   ) : (
-                    <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-900/60 rounded-lg border-2 border-dashed border-slate-700/80 flex flex-col items-center justify-center text-[10px] text-slate-500">
+                    <div className="w-9 h-13 xs:w-10 xs:h-15 sm:w-12 sm:h-18 bg-slate-900/60 rounded-lg border-2 border-dashed border-slate-700/80 flex flex-col items-center justify-center text-[9px] sm:text-[10px] text-slate-500">
                       <span>Boş</span>
                     </div>
                   )}
                 </button>
-                <span className="text-[9px] sm:text-[10px] text-slate-400 mt-1 max-w-[75px] sm:max-w-[100px] truncate text-center">
+                <span className="text-[8px] xs:text-[9px] sm:text-[10px] text-slate-400 mt-0.5 sm:mt-1 max-w-[65px] sm:max-w-[100px] truncate text-center">
                   {previousPlayer ? previousPlayer.username : 'Önceki Oyuncu'}
                 </span>
               </div>
 
               {/* 2. ORTA ALAN: Yalnızca Kapalı Deste ve Gösterge (ve Okey Rozeti) */}
               <div className="flex flex-col items-center justify-center shrink-0">
-                <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-2 sm:p-3 shadow-2xl flex items-center gap-3 sm:gap-6 backdrop-blur-sm">
+                <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-1.5 sm:p-3 shadow-2xl flex items-center gap-1.5 xs:gap-2.5 sm:gap-6 backdrop-blur-sm">
                   
                   {/* Kapalı Deste */}
                   <div className="flex flex-col items-center gap-1">
                     <button 
                       onClick={handleDrawFromDeck}
                       disabled={!canDraw}
-                      className={`relative w-11 h-16 sm:w-13 sm:h-18 bg-[#fefae0] rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
+                      className={`relative w-9 h-13 xs:w-10 xs:h-15 sm:w-12 sm:h-18 bg-[#fefae0] rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
                         canDraw 
                           ? 'ring-4 ring-emerald-400 hover:scale-105 border-emerald-500 cursor-pointer animate-pulse' 
                           : 'border-slate-300 opacity-90 cursor-default'
                       }`}
                       title={canDraw ? "Ortadan Kapalı Taş Çek" : "Kapalı Deste"}
                     >
-                      <div className="w-6 h-6 rounded-full border-2 border-red-700/70 flex items-center justify-center">
-                        <span className="text-[9px] font-black text-red-700">OKEY</span>
+                      <div className="w-4 h-4 xs:w-5 xs:h-5 sm:w-6 sm:h-6 rounded-full border-2 border-red-700/70 flex items-center justify-center">
+                        <span className="text-[7px] xs:text-[8px] sm:text-[9px] font-black text-red-700">OKEY</span>
                       </div>
-                      <span className="text-[11px] sm:text-xs font-black text-slate-900 mt-1">
+                      <span className="text-[10px] xs:text-[11px] sm:text-xs font-black text-slate-900 mt-0.5">
                         {currentRoom.deckCount}
                       </span>
-                      <span className={`absolute -top-2.5 px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-extrabold shadow-lg whitespace-nowrap ${
+                      <span className={`absolute -top-2.5 px-1.5 sm:px-2 py-0.5 rounded-full text-[8px] xs:text-[9px] sm:text-[10px] font-extrabold shadow-lg whitespace-nowrap ${
                         canDraw ? 'bg-emerald-600 text-white animate-bounce' : 'bg-slate-900 text-white'
                       }`}>
                         {canDraw ? 'Desteden Çek' : 'Deste'}
@@ -862,12 +862,12 @@ export default function Games({
                     {currentRoom.indicator ? (
                       <div className="relative">
                         <TileView tile={currentRoom.indicator} size="md" />
-                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap">
+                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[8px] xs:text-[9px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap">
                           Gösterge
                         </span>
                       </div>
                     ) : (
-                      <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-900/60 rounded-lg border border-dashed border-slate-700 flex items-center justify-center text-[10px] text-slate-500">
+                      <div className="w-9 h-13 xs:w-10 xs:h-15 sm:w-12 sm:h-18 bg-slate-900/60 rounded-lg border border-dashed border-slate-700 flex items-center justify-center text-[10px] text-slate-500">
                         Yok
                       </div>
                     )}
@@ -878,8 +878,8 @@ export default function Games({
                     <div className="flex flex-col items-center gap-1">
                       <div className="relative">
                         <TileView tile={currentRoom.okeyTile} size="md" isOkeyBadge />
-                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg flex items-center gap-0.5 whitespace-nowrap">
-                          <Sparkles size={10} /> OKEY
+                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[8px] xs:text-[9px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-full shadow-lg flex items-center gap-0.5 whitespace-nowrap">
+                          <Sparkles size={9} /> OKEY
                         </span>
                       </div>
                     </div>
@@ -901,7 +901,7 @@ export default function Games({
                   onDragLeave={handleDragLeaveDiscard}
                   onDrop={handleDropOnDiscard}
                   onClick={handleClickDiscardZone}
-                  className={`relative w-12 h-17 sm:w-15 sm:h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center p-1 ${
+                  className={`relative w-9 h-13 xs:w-10 xs:h-15 sm:w-12 sm:h-18 rounded-xl border-2 transition-all flex flex-col items-center justify-center p-0.5 sm:p-1 ${
                     canDiscard
                       ? isOverDiscardZone
                         ? 'border-emerald-400 ring-4 ring-emerald-400 bg-emerald-950/80 scale-105 shadow-2xl cursor-pointer'
@@ -913,28 +913,28 @@ export default function Games({
                   {myDiscard ? (
                     <div className="relative">
                       <TileView tile={myDiscard} size="md" />
-                      <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap ${
+                      <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[8px] xs:text-[9px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap ${
                         canDiscard ? 'bg-amber-500 text-slate-950 animate-bounce' : 'bg-slate-800 text-slate-300'
                       }`}>
                         {canDiscard ? 'Buraya At' : 'Son Attığın'}
                       </span>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center text-center p-1">
-                      <ArrowDown size={18} className={canDiscard ? 'text-amber-400 animate-bounce' : 'text-slate-500'} />
-                      <span className={`text-[9px] font-bold leading-tight mt-0.5 ${canDiscard ? 'text-amber-300' : 'text-slate-500'}`}>
-                        {canDiscard ? 'Taşı Buraya At' : 'Iskarta'}
+                    <div className="flex flex-col items-center justify-center text-center p-0.5">
+                      <ArrowDown size={16} className={canDiscard ? 'text-amber-400 animate-bounce' : 'text-slate-500'} />
+                      <span className={`text-[8px] xs:text-[9px] font-bold leading-tight mt-0.5 ${canDiscard ? 'text-amber-300' : 'text-slate-500'}`}>
+                        {canDiscard ? 'Taşı At' : 'Iskarta'}
                       </span>
                     </div>
                   )}
 
                   {canDiscard && (
-                    <span className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-[8px] sm:text-[9px] font-extrabold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
+                    <span className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-[7px] xs:text-[8px] sm:text-[9px] font-extrabold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
                       Taş Atma
                     </span>
                   )}
                 </div>
-                <span className="text-[9px] sm:text-[10px] text-slate-400 mt-1 max-w-[75px] sm:max-w-[100px] truncate text-center">
+                <span className="text-[8px] xs:text-[9px] sm:text-[10px] text-slate-400 mt-0.5 sm:mt-1 max-w-[65px] sm:max-w-[100px] truncate text-center">
                   Senin Iskartan
                 </span>
               </div>
@@ -1105,9 +1105,9 @@ function RackSlot({
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      className={`aspect-[2/3] w-full min-w-0 max-w-[48px] bg-[#3a1a03]/90 rounded-[3px] sm:rounded-[5px] border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-all select-none touch-none ${
+      className={`aspect-[2/3] w-full min-w-0 max-w-[48px] bg-[#3a1a03]/90 rounded-[2px] xs:rounded-[3px] sm:rounded-[5px] border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-all select-none touch-none ${
         isSelected 
-          ? 'ring-2 sm:ring-3 ring-emerald-400 -translate-y-1.5 sm:-translate-y-2 z-20 shadow-xl bg-[#4a2204]' 
+          ? 'ring-2 sm:ring-3 ring-emerald-400 -translate-y-1 sm:-translate-y-2 z-20 shadow-xl bg-[#4a2204]' 
           : isTouchDragging
             ? 'opacity-30 scale-90'
             : 'active:scale-95'
@@ -1157,9 +1157,9 @@ function TileView({
 
   // Sizing styles
   const sizeClasses = {
-    sm: 'w-6 h-9 text-xs rounded-[2px]',
-    md: 'w-11 h-16 sm:w-13 sm:h-18 text-base sm:text-xl rounded-md',
-    rack: 'w-full h-full text-[11px] xs:text-xs sm:text-base md:text-lg rounded-[2px] sm:rounded-sm'
+    sm: 'w-7 h-10 xs:w-8 xs:h-12 text-xs rounded-[3px]',
+    md: 'w-9 h-13 xs:w-10 xs:h-15 sm:w-12 sm:h-18 text-xs xs:text-sm sm:text-base md:text-lg rounded-[4px] sm:rounded-md',
+    rack: 'w-full h-full text-[9px] xs:text-[11px] sm:text-sm md:text-base rounded-[2px] sm:rounded-sm'
   }[size];
 
   if (tile.color === 'fake') {

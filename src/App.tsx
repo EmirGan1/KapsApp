@@ -140,7 +140,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-white dark:bg-slate-900 md:bg-slate-50 md:dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-200">
+    <div className="flex flex-col md:flex-row h-[100dvh] w-full max-w-[100vw] bg-white dark:bg-slate-900 md:bg-slate-50 md:dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-200">
       {/* Desktop Sidebar */}
       <div className="hidden md:flex w-24 lg:w-64 flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-colors duration-200">
         <div className="p-6">
@@ -207,15 +207,15 @@ export default function App() {
       </div>
 
       {/* Mobile Bottom Nav */}
-      <div className="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md pb-safe">
-        <nav className="flex justify-around p-3">
-          <MobileNavItem icon={<Globe />} active={activeTab === 'global'} onClick={() => handleTabChange('global')} />
-          <MobileNavItem icon={<MessageSquare />} active={activeTab === 'chats'} onClick={() => handleTabChange('chats')} />
-          <MobileNavItem icon={<LayoutGrid />} active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
-          <MobileNavItem icon={<Folder />} active={activeTab === 'subject'} onClick={() => handleSubjectClick("Turkish")} />
-          <MobileNavItem icon={<Gamepad2 />} active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
-          <MobileNavItem icon={<Users />} active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
-          <MobileNavItem icon={<UserCircle2 />} active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
+      <div className="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md pb-safe shrink-0 z-30">
+        <nav className="flex items-center justify-around px-1 py-1.5 overflow-x-auto no-scrollbar">
+          <MobileNavItem icon={<Globe size={22} />} active={activeTab === 'global'} onClick={() => handleTabChange('global')} />
+          <MobileNavItem icon={<MessageSquare size={22} />} active={activeTab === 'chats'} onClick={() => handleTabChange('chats')} />
+          <MobileNavItem icon={<LayoutGrid size={22} />} active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
+          <MobileNavItem icon={<Folder size={22} />} active={activeTab === 'subject'} onClick={() => handleSubjectClick("Turkish")} />
+          <MobileNavItem icon={<Gamepad2 size={22} />} active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
+          <MobileNavItem icon={<Users size={22} />} active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
+          <MobileNavItem icon={<UserCircle2 size={22} />} active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
         </nav>
       </div>
     </div>
@@ -248,7 +248,7 @@ function MobileNavItem({ icon, active, badge, onClick }: { icon: React.ReactNode
   return (
     <button 
       onClick={onClick}
-      className={`p-3 rounded-xl transition-all relative ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}`}
+      className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 rounded-xl transition-all relative ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}`}
     >
       {icon}
       {badge && badge > 0 && <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900"></div>}

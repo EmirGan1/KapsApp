@@ -1,3 +1,18 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
+
+html, body, #root {
+  width: 100%;
+  max-width: 100vw;
+  height: 100%;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ensure padding-bottom safe area for modern mobile browsers (iPhone home bar, Android gesture nav) */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

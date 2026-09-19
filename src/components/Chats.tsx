@@ -593,35 +593,35 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
             </div>
 
             {/* Input */}
-            <div className="bg-[#f0f2f5] border-t border-slate-200 relative pb-safe">
+            <div className="bg-[#f0f2f5] dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 relative pb-safe shrink-0 z-10">
               {replyTo && (
-                <div className="absolute bottom-full left-0 w-full bg-slate-50 border-t border-slate-200 p-2 px-4 flex justify-between items-center text-sm shadow-md">
-                   <div><span className="font-semibold text-blue-600">{replyTo.sender_name || (activeTab === 'friends' ? (activeChat as Friend).username : 'Biri')}</span> kişisine yanıtlanıyor: <span className="text-slate-500 truncate max-w-xs inline-block align-bottom">{replyTo.type === 'text' ? replyTo.content : 'Medya'}</span></div>
-                   <button onClick={() => setReplyTo(null)} className="text-slate-400 hover:text-red-500 font-bold px-2">&times;</button>
+                <div className="absolute bottom-full left-0 w-full bg-slate-50 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 p-2 px-3 sm:px-4 flex justify-between items-center text-xs sm:text-sm shadow-md">
+                   <div className="truncate pr-2"><span className="font-semibold text-blue-600 dark:text-blue-400">{replyTo.sender_name || (activeTab === 'friends' ? (activeChat as Friend).username : 'Biri')}</span> kişisine yanıtlanıyor: <span className="text-slate-500 dark:text-slate-400 truncate max-w-[150px] sm:max-w-xs inline-block align-bottom">{replyTo.type === 'text' ? replyTo.content : 'Medya'}</span></div>
+                   <button onClick={() => setReplyTo(null)} className="text-slate-400 hover:text-red-500 font-bold px-2 text-base shrink-0">&times;</button>
                 </div>
               )}
-              <div className="p-3 flex items-center gap-1">
-                <label className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-slate-200/70 rounded-full cursor-pointer transition-colors" title="Fotoğraf veya Video Gönder">
-                  <ImageIcon size={22} />
+              <div className="p-2 sm:p-3 flex items-center gap-1 sm:gap-1.5 max-w-4xl mx-auto">
+                <label className="p-2 sm:p-2.5 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 rounded-full cursor-pointer transition-colors shrink-0" title="Fotoğraf veya Video Gönder">
+                  <ImageIcon size={20} className="sm:w-[22px] sm:h-[22px]" />
                   <input type="file" accept="image/*,video/*" className="hidden" onChange={handleFileUpload} />
                 </label>
-                <label className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-slate-200/70 rounded-full cursor-pointer transition-colors" title="Belge / Dosya Gönder">
-                  <Paperclip size={22} />
+                <label className="p-2 sm:p-2.5 text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 rounded-full cursor-pointer transition-colors shrink-0" title="Belge / Dosya Gönder">
+                  <Paperclip size={20} className="sm:w-[22px] sm:h-[22px]" />
                   <input type="file" accept="*/*" className="hidden" onChange={handleFileUpload} />
                 </label>
-                <form onSubmit={handleSendText} className="flex-1 relative">
+                <form onSubmit={handleSendText} className="flex-1 relative min-w-0">
                   <input 
                     type="text" 
-                    placeholder="Bir mesaj yazın... (maks 1000 karakter)" 
+                    placeholder="Mesaj yazın... (maks 1000)" 
                     maxLength={1000}
-                    className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-transparent focus:ring-0 focus:outline-none py-3 px-4 rounded-xl shadow-sm text-[15px]"
+                    className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl shadow-sm text-sm sm:text-[15px]"
                     value={text}
                     onChange={handleTyping}
                   />
                 </form>
                 {text.trim() ? (
-                  <button onClick={handleSendText} className="p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors shadow-md">
-                    <Send size={20} />
+                  <button onClick={handleSendText} className="p-2.5 sm:p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors shadow-md shrink-0">
+                    <Send size={18} className="sm:w-5 sm:h-5" />
                   </button>
                 ) : (
                   <button 
@@ -630,9 +630,9 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                     onMouseLeave={stopRecording}
                     onTouchStart={startRecording}
                     onTouchEnd={stopRecording}
-                    className={`p-3 rounded-full transition-colors shadow-md ${isRecording ? 'bg-red-500 text-white animate-pulse scale-110' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                    className={`p-2.5 sm:p-3 rounded-full transition-colors shadow-md shrink-0 ${isRecording ? 'bg-red-500 text-white animate-pulse scale-110' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
                   >
-                    <Mic size={20} />
+                    <Mic size={18} className="sm:w-5 sm:h-5" />
                   </button>
                 )}
               </div>
