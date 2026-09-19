@@ -34,6 +34,25 @@ export default function Games({
   const [rack, setRack] = useState<(Tile | null)[]>(Array(INITIAL_RACK_SIZE).fill(null));
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [draggedSlot, setDraggedSlot] = useState<number | null>(null);
+  const [isOverDiscardZone, setIsOverDiscardZone] = useState(false);
+  const [touchDragState, setTouchDragState] = useState<{
+    slotIndex: number;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    isDragging: boolean;
+    tile: Tile;
+  } | null>(null);
+  const touchDragRef = useRef<{
+    slotIndex: number;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    isDragging: boolean;
+    tile: Tile;
+  } | null>(null);
 
   // Messages / feedback
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -210,6 +229,7 @@ export default function Games({
   const handleDragStart = (e: React.DragEvent, index: number) => {
     setDraggedSlot(index);
     e.dataTransfer.setData('text/plain', index.toString());
+    e.dataTransfer.effectAllowed = 'move';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -227,6 +247,117 @@ export default function Games({
       return next;
     });
     setDraggedSlot(null);
+  };
+
+  const handleDragOverDiscard = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!isOverDiscardZone) setIsOverDiscardZone(true);
+  };
+
+  const handleDragLeaveDiscard = () => {
+    setIsOverDiscardZone(false);
+  };
+
+  const handleDropOnDiscard = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsOverDiscardZone(false);
+    if (draggedSlot === null) return;
+    if (canDiscard) {
+      handleDiscard(draggedSlot);
+    } else {
+      setErrorMessage("Sıra sizde değil veya henüz taş çekmediniz.");
+      setTimeout(() => setErrorMessage(null), 3000);
+    }
+    setDraggedSlot(null);
+  };
+
+  // Click on Discard Zone with a selected tile
+  const handleClickDiscardZone = () => {
+    if (selectedSlot !== null) {
+      if (canDiscard) {
+        handleDiscard(selectedSlot);
+      } else {
+        setErrorMessage("Sıra sizde değil veya henüz taş çekmediniz.");
+        setTimeout(() => setErrorMessage(null), 3000);
+      }
+    }
+  };
+
+  // Touch Drag and Drop (Mobile / Tablet)
+  const handleTouchStartSlot = (e: React.TouchEvent, index: number) => {
+    const tile = rack[index];
+    if (!tile) return;
+    const touch = e.touches[0];
+    const newTouch = {
+      slotIndex: index,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      currentX: touch.clientX,
+      currentY: touch.clientY,
+      isDragging: false,
+      tile
+    };
+    touchDragRef.current = newTouch;
+    setTouchDragState(newTouch);
+  };
+
+  const handleTouchMoveSlot = (e: React.TouchEvent) => {
+    if (!touchDragRef.current) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchDragRef.current.startX;
+    const dy = touch.clientY - touchDragRef.current.startY;
+    const isDragging = touchDragRef.current.isDragging || Math.hypot(dx, dy) > 8;
+
+    touchDragRef.current.currentX = touch.clientX;
+    touchDragRef.current.currentY = touch.clientY;
+    touchDragRef.current.isDragging = isDragging;
+
+    if (isDragging) {
+      if (e.cancelable) e.preventDefault();
+      const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+      const isDrop = !!elem?.closest('[data-drop-zone="discard"]');
+      setIsOverDiscardZone(isDrop);
+    }
+    setTouchDragState({ ...touchDragRef.current });
+  };
+
+  const handleTouchEndSlot = (e: React.TouchEvent) => {
+    if (!touchDragRef.current) return;
+    const { slotIndex, isDragging, currentX, currentY } = touchDragRef.current;
+
+    if (isDragging) {
+      const elem = document.elementFromPoint(currentX, currentY);
+      const dropZone = elem?.closest('[data-drop-zone="discard"]');
+      const targetSlotElem = elem?.closest('[data-slot-index]');
+
+      if (dropZone) {
+        if (canDiscard) {
+          handleDiscard(slotIndex);
+        } else {
+          setErrorMessage("Sıra sizde değil veya henüz taş çekmediniz.");
+          setTimeout(() => setErrorMessage(null), 3000);
+        }
+      } else if (targetSlotElem) {
+        const targetIdx = Number(targetSlotElem.getAttribute('data-slot-index'));
+        if (!isNaN(targetIdx) && targetIdx !== slotIndex) {
+          setRack(prev => {
+            const next = [...prev];
+            const temp = next[slotIndex];
+            next[slotIndex] = next[targetIdx];
+            next[targetIdx] = temp;
+            return next;
+          });
+        }
+      }
+    } else {
+      // Tap selection or double-tap
+      handleSlotClick(slotIndex);
+    }
+
+    touchDragRef.current = null;
+    setTouchDragState(null);
+    setIsOverDiscardZone(false);
   };
 
   // Auto Sort
@@ -405,6 +536,11 @@ export default function Games({
     : null;
   const previousPlayerDiscard = previousPlayer?.discardPile && previousPlayer.discardPile.length > 0 
     ? previousPlayer.discardPile[previousPlayer.discardPile.length - 1] 
+    : null;
+
+  const myPlayer = myPlayerIdx !== -1 ? tablePlayers[myPlayerIdx] : null;
+  const myDiscard = myPlayer?.discardPile && myPlayer.discardPile.length > 0 
+    ? myPlayer.discardPile[myPlayer.discardPile.length - 1] 
     : null;
 
   const currentTurnPlayer = tablePlayers[currentRoom.currentTurn];
@@ -619,141 +755,196 @@ export default function Games({
           </div>
         </div>
 
-        {/* Center Board Station: Deck, Indicator, Okey Badge, Discards */}
-        <div className="my-auto flex flex-col items-center justify-center gap-3 w-full max-w-2xl mx-auto z-10">
-          
+        {/* Center Playing Surface & Discard Stations */}
+        <div className="my-auto w-full max-w-4xl mx-auto px-2 sm:px-4 z-10 select-none">
           {currentRoom.status === 'waiting' ? (
-            isHost ? (
-              <div className="bg-slate-900/95 border-2 border-emerald-500/60 shadow-2xl p-4 sm:p-6 rounded-2xl text-center max-w-sm w-full backdrop-blur-md animate-in fade-in zoom-in">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
-                  <Crown size={28} />
-                </div>
-                <h3 className="text-base sm:text-lg font-black text-white">Masa Yöneticisisiniz</h3>
-                <p className="text-xs text-slate-300 mt-1 mb-4">
-                  Masa kuruldu ({tablePlayers.length}/4 oyuncu). Hazır olduğunuzda taşları dağıtıp oyunu başlatabilirsiniz!
-                </p>
-                <button
-                  onClick={startGame}
-                  className="w-full py-3 px-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-sm rounded-xl shadow-xl ring-4 ring-emerald-400/50 animate-pulse flex items-center justify-center gap-2 transition-transform active:scale-95 cursor-pointer"
-                >
-                  <Play size={18} fill="currentColor" /> Taşları Dağıt (Oyunu Başlat)
-                </button>
-              </div>
-            ) : (
-              <div className="bg-slate-900/90 border border-amber-500/40 shadow-2xl p-4 sm:p-6 rounded-2xl text-center max-w-sm w-full backdrop-blur-md animate-in fade-in zoom-in">
-                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-3 animate-spin">
-                  <RefreshCcw size={26} />
-                </div>
-                <h3 className="text-base sm:text-lg font-black text-white">Masa Yöneticisi Bekleniyor</h3>
-                <p className="text-xs text-slate-300 mt-1">
-                  Masa yöneticisi <strong className="text-amber-300">{hostPlayer?.username || 'Host'}</strong> taşları dağıttığında oyun başlayacak.
-                </p>
-              </div>
-            )
-          ) : (
-            <>
-              {/* Deck, Indicator, and Neighbor Discard Row */}
-              <div className="flex items-center justify-center gap-3 sm:gap-6 flex-wrap">
-                
-                {/* Draw Deck (Kapalı Deste) */}
-                <div className="flex flex-col items-center gap-1">
-                  <button 
-                    onClick={handleDrawFromDeck}
-                    disabled={!canDraw}
-                    className={`relative w-11 h-16 sm:w-13 sm:h-18 bg-[#fefae0] rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
-                      canDraw 
-                        ? 'ring-4 ring-emerald-400 hover:scale-105 border-emerald-500 cursor-pointer animate-pulse' 
-                        : 'border-slate-300 opacity-90 cursor-default'
-                    }`}
-                    title={canDraw ? "Ortadan Taş Çek" : "Kapalı Deste"}
+            <div className="flex items-center justify-center py-4">
+              {isHost ? (
+                <div className="bg-slate-900/95 border-2 border-emerald-500/60 shadow-2xl p-4 sm:p-6 rounded-2xl text-center max-w-sm w-full backdrop-blur-md animate-in fade-in zoom-in">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
+                    <Crown size={28} />
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-white">Masa Yöneticisisiniz</h3>
+                  <p className="text-xs text-slate-300 mt-1 mb-4">
+                    Masa kuruldu ({tablePlayers.length}/4 oyuncu). Hazır olduğunuzda taşları dağıtıp oyunu başlatabilirsiniz!
+                  </p>
+                  <button
+                    onClick={startGame}
+                    className="w-full py-3 px-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-sm rounded-xl shadow-xl ring-4 ring-emerald-400/50 animate-pulse flex items-center justify-center gap-2 transition-transform active:scale-95 cursor-pointer"
                   >
-                    <div className="w-6 h-6 rounded-full border-2 border-red-700/70 flex items-center justify-center">
-                      <span className="text-[9px] font-black text-red-700">OKEY</span>
-                    </div>
-                    <span className="text-[11px] font-extrabold text-slate-800 mt-1">
-                      {currentRoom.deckCount}
-                    </span>
-                    <span className={`absolute -top-2.5 px-1.5 py-0.2 rounded-full text-[9px] font-bold shadow ${
-                      canDraw ? 'bg-emerald-600 text-white animate-bounce' : 'bg-slate-900 text-white'
-                    }`}>
-                      {canDraw ? 'Taş Çek' : 'Deste'}
-                    </span>
+                    <Play size={18} fill="currentColor" /> Taşları Dağıt (Oyunu Başlat)
                   </button>
                 </div>
-
-                {/* Indicator Tile (Gösterge) */}
-                <div className="flex flex-col items-center gap-1">
-                  {currentRoom.indicator ? (
+              ) : (
+                <div className="bg-slate-900/90 border border-amber-500/40 shadow-2xl p-4 sm:p-6 rounded-2xl text-center max-w-sm w-full backdrop-blur-md animate-in fade-in zoom-in">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-3 animate-spin">
+                    <RefreshCcw size={26} />
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black text-white">Masa Yöneticisi Bekleniyor</h3>
+                  <p className="text-xs text-slate-300 mt-1">
+                    Masa yöneticisi <strong className="text-amber-300">{hostPlayer?.username || 'Host'}</strong> taşları dağıttığında oyun başlayacak.
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="w-full flex items-center justify-between gap-2 sm:gap-6 py-2">
+              
+              {/* 1. SOL ISKARTASI: Önceki Oyuncunun Attığı Taşlar (Çekilebilen Alan) */}
+              <div className="flex flex-col items-center shrink-0">
+                <span className="text-[10px] sm:text-xs font-bold text-slate-300 mb-1 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-blue-400 inline-block"></span>
+                  <span>Sol Iskartası</span>
+                </span>
+                
+                <button
+                  onClick={handleDrawFromDiscard}
+                  disabled={!canDraw || !previousPlayerDiscard}
+                  className={`relative p-1 rounded-xl transition-all flex flex-col items-center justify-center ${
+                    canDraw && previousPlayerDiscard
+                      ? 'ring-4 ring-blue-400 hover:scale-105 cursor-pointer animate-pulse bg-blue-950/60 shadow-2xl'
+                      : 'cursor-default opacity-85'
+                  }`}
+                  title={canDraw && previousPlayerDiscard ? "Soldaki Oyuncunun Attığı Taşı Çek" : "Sol Iskartası"}
+                >
+                  {previousPlayerDiscard ? (
                     <div className="relative">
-                      <TileView tile={currentRoom.indicator} size="md" />
-                      <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
-                        Gösterge
+                      <TileView tile={previousPlayerDiscard} size="md" />
+                      <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap ${
+                        canDraw ? 'bg-blue-600 text-white animate-bounce' : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {canDraw ? 'Soldan Çek' : 'Atılan Taş'}
                       </span>
                     </div>
                   ) : (
-                    <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
-                      Yok
+                    <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-900/60 rounded-lg border-2 border-dashed border-slate-700/80 flex flex-col items-center justify-center text-[10px] text-slate-500">
+                      <span>Boş</span>
                     </div>
                   )}
-                </div>
+                </button>
+                <span className="text-[9px] sm:text-[10px] text-slate-400 mt-1 max-w-[75px] sm:max-w-[100px] truncate text-center">
+                  {previousPlayer ? previousPlayer.username : 'Önceki Oyuncu'}
+                </span>
+              </div>
 
-                {/* Okey Tile Indicator Badge */}
-                {currentRoom.okeyTile && (
+              {/* 2. ORTA ALAN: Yalnızca Kapalı Deste ve Gösterge (ve Okey Rozeti) */}
+              <div className="flex flex-col items-center justify-center shrink-0">
+                <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-2 sm:p-3 shadow-2xl flex items-center gap-3 sm:gap-6 backdrop-blur-sm">
+                  
+                  {/* Kapalı Deste */}
                   <div className="flex flex-col items-center gap-1">
-                    <div className="relative">
-                      <TileView tile={currentRoom.okeyTile} size="md" isOkeyBadge />
-                      <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow flex items-center gap-0.5 whitespace-nowrap">
-                        <Sparkles size={10} /> OKEY
+                    <button 
+                      onClick={handleDrawFromDeck}
+                      disabled={!canDraw}
+                      className={`relative w-11 h-16 sm:w-13 sm:h-18 bg-[#fefae0] rounded-lg shadow-xl border-2 transition-all flex flex-col items-center justify-center ${
+                        canDraw 
+                          ? 'ring-4 ring-emerald-400 hover:scale-105 border-emerald-500 cursor-pointer animate-pulse' 
+                          : 'border-slate-300 opacity-90 cursor-default'
+                      }`}
+                      title={canDraw ? "Ortadan Kapalı Taş Çek" : "Kapalı Deste"}
+                    >
+                      <div className="w-6 h-6 rounded-full border-2 border-red-700/70 flex items-center justify-center">
+                        <span className="text-[9px] font-black text-red-700">OKEY</span>
+                      </div>
+                      <span className="text-[11px] sm:text-xs font-black text-slate-900 mt-1">
+                        {currentRoom.deckCount}
                       </span>
-                    </div>
+                      <span className={`absolute -top-2.5 px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-extrabold shadow-lg whitespace-nowrap ${
+                        canDraw ? 'bg-emerald-600 text-white animate-bounce' : 'bg-slate-900 text-white'
+                      }`}>
+                        {canDraw ? 'Desteden Çek' : 'Deste'}
+                      </span>
+                    </button>
                   </div>
-                )}
 
-                {/* Right Neighbor Discard (Yandan Çekilecek Taş) */}
-                <div className="flex flex-col items-center gap-1">
-                  <button 
-                    onClick={handleDrawFromDiscard}
-                    disabled={!canDraw || !previousPlayerDiscard}
-                    className={`relative rounded-lg transition-all ${
-                      canDraw && previousPlayerDiscard 
-                        ? 'ring-4 ring-blue-400 hover:scale-105 cursor-pointer animate-pulse' 
-                        : 'cursor-default opacity-80'
-                    }`}
-                    title={canDraw && previousPlayerDiscard ? "Yandan Atılan Taşı Al" : "Yandan Atılan"}
-                  >
-                    {previousPlayerDiscard ? (
-                      <>
-                        <TileView tile={previousPlayerDiscard} size="md" />
-                        <span className={`absolute -top-2.5 left-1/2 -translate-x-1/2 text-[9px] font-bold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap ${
-                          canDraw ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'
-                        }`}>
-                          {canDraw ? 'Yandan Al' : 'Yandaki'}
+                  {/* Gösterge Taşı */}
+                  <div className="flex flex-col items-center gap-1">
+                    {currentRoom.indicator ? (
+                      <div className="relative">
+                        <TileView tile={currentRoom.indicator} size="md" />
+                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-600 text-white text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap">
+                          Gösterge
                         </span>
-                      </>
+                      </div>
                     ) : (
-                      <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-800/40 rounded-lg border border-dashed border-slate-600 flex items-center justify-center text-[10px] text-slate-500">
-                        Yan Boş
+                      <div className="w-11 h-16 sm:w-13 sm:h-18 bg-slate-900/60 rounded-lg border border-dashed border-slate-700 flex items-center justify-center text-[10px] text-slate-500">
+                        Yok
                       </div>
                     )}
-                  </button>
+                  </div>
+
+                  {/* Okey Rozeti */}
+                  {currentRoom.okeyTile && (
+                    <div className="flex flex-col items-center gap-1">
+                      <div className="relative">
+                        <TileView tile={currentRoom.okeyTile} size="md" isOkeyBadge />
+                        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg flex items-center gap-0.5 whitespace-nowrap">
+                          <Sparkles size={10} /> OKEY
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               </div>
 
-              {/* Mobile Quick Discard Area: Tapping discards selected tile if canDiscard */}
-              {canDiscard && selectedSlot !== null && (
-                <button
-                  onClick={() => handleDiscard(selectedSlot)}
-                  className="px-4 py-2 bg-red-600/95 hover:bg-red-600 text-white rounded-xl text-xs sm:text-sm font-bold shadow-xl ring-4 ring-red-400/50 animate-bounce flex items-center gap-1.5 cursor-pointer mt-1"
+              {/* 3. SAĞ ISKARTASI: Kendi Atacağı Taşlar (Sürükle Bırak / Tıkla Bırak Alanı) */}
+              <div className="flex flex-col items-center shrink-0">
+                <span className="text-[10px] sm:text-xs font-bold text-slate-300 mb-1 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+                  <span>Sağ Iskartası</span>
+                </span>
+                
+                <div 
+                  data-drop-zone="discard"
+                  onDragOver={handleDragOverDiscard}
+                  onDragLeave={handleDragLeaveDiscard}
+                  onDrop={handleDropOnDiscard}
+                  onClick={handleClickDiscardZone}
+                  className={`relative w-12 h-17 sm:w-15 sm:h-20 rounded-xl border-2 transition-all flex flex-col items-center justify-center p-1 ${
+                    canDiscard
+                      ? isOverDiscardZone
+                        ? 'border-emerald-400 ring-4 ring-emerald-400 bg-emerald-950/80 scale-105 shadow-2xl cursor-pointer'
+                        : 'border-amber-400 border-dashed ring-2 ring-amber-400/50 bg-amber-950/30 shadow-lg cursor-pointer animate-pulse'
+                      : 'border-slate-700/70 bg-slate-900/60 cursor-default'
+                  }`}
+                  title={canDiscard ? "Taşı Buraya Sürükleyip Bırakın veya Seçip Tıklayın" : "Kendi Iskartanız"}
                 >
-                  <ArrowDown size={16} /> Seçili Taşı Buraya At
-                </button>
-              )}
-            </>
+                  {myDiscard ? (
+                    <div className="relative">
+                      <TileView tile={myDiscard} size="md" />
+                      <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap ${
+                        canDiscard ? 'bg-amber-500 text-slate-950 animate-bounce' : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {canDiscard ? 'Buraya At' : 'Son Attığın'}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-center p-1">
+                      <ArrowDown size={18} className={canDiscard ? 'text-amber-400 animate-bounce' : 'text-slate-500'} />
+                      <span className={`text-[9px] font-bold leading-tight mt-0.5 ${canDiscard ? 'text-amber-300' : 'text-slate-500'}`}>
+                        {canDiscard ? 'Taşı Buraya At' : 'Iskarta'}
+                      </span>
+                    </div>
+                  )}
+
+                  {canDiscard && (
+                    <span className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-[8px] sm:text-[9px] font-extrabold px-1.5 py-0.2 rounded-full shadow whitespace-nowrap">
+                      Taş Atma
+                    </span>
+                  )}
+                </div>
+                <span className="text-[9px] sm:text-[10px] text-slate-400 mt-1 max-w-[75px] sm:max-w-[100px] truncate text-center">
+                  Senin Iskartan
+                </span>
+              </div>
+
+            </div>
           )}
 
           {/* Game End Modal / Banner */}
           {currentRoom.status === 'ended' && (
-            <div className="bg-slate-900/95 p-4 sm:p-5 rounded-2xl border-2 border-emerald-500 shadow-2xl text-center max-w-sm w-full animate-in fade-in zoom-in">
+            <div className="bg-slate-900/95 p-4 sm:p-5 rounded-2xl border-2 border-emerald-500 shadow-2xl text-center max-w-sm w-full mx-auto mt-2 animate-in fade-in zoom-in">
               <Trophy className="text-amber-400 w-12 h-12 mx-auto mb-2 animate-bounce" />
               <h3 className="text-lg font-black text-white">Tebrikler!</h3>
               <p className="text-xs text-slate-300 mt-1 mb-3">{currentRoom.winningReason}</p>
@@ -791,16 +982,6 @@ export default function Games({
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Selected Discard Button */}
-            {selectedSlot !== null && canDiscard && (
-              <button 
-                onClick={() => handleDiscard(selectedSlot)}
-                className="px-3 sm:px-4 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] sm:text-xs font-bold rounded-lg shadow animate-pulse flex items-center gap-1 cursor-pointer"
-              >
-                <ArrowDown size={13} /> Taşı At
-              </button>
-            )}
-
             {/* Bitti Button */}
             {currentRoom.status === 'playing' && (
               <button 
@@ -834,10 +1015,14 @@ export default function Games({
                   slotIndex={idx}
                   tile={tile}
                   isSelected={selectedSlot === idx}
+                  isTouchDragging={touchDragState?.slotIndex === idx && touchDragState.isDragging}
                   onClick={() => handleSlotClick(idx)}
                   onDragStart={(e) => handleDragStart(e, idx)}
                   onDragOver={handleDragOver}
                   onDrop={(e) => handleDropOnSlot(e, idx)}
+                  onTouchStart={(e) => handleTouchStartSlot(e, idx)}
+                  onTouchMove={handleTouchMoveSlot}
+                  onTouchEnd={handleTouchEndSlot}
                 />
               ))}
             </div>
@@ -852,10 +1037,14 @@ export default function Games({
                     slotIndex={realIdx}
                     tile={tile}
                     isSelected={selectedSlot === realIdx}
+                    isTouchDragging={touchDragState?.slotIndex === realIdx && touchDragState.isDragging}
                     onClick={() => handleSlotClick(realIdx)}
                     onDragStart={(e) => handleDragStart(e, realIdx)}
                     onDragOver={handleDragOver}
                     onDrop={(e) => handleDropOnSlot(e, realIdx)}
+                    onTouchStart={(e) => handleTouchStartSlot(e, realIdx)}
+                    onTouchMove={handleTouchMoveSlot}
+                    onTouchEnd={handleTouchEndSlot}
                   />
                 );
               })}
@@ -863,38 +1052,65 @@ export default function Games({
           </div>
         </div>
 
+        {/* Touch Drag Floating Preview */}
+        {touchDragState?.isDragging && touchDragState.tile && (
+          <div 
+            className="fixed pointer-events-none z-50 transform -translate-x-1/2 -translate-y-1/2 shadow-2xl scale-110 opacity-95"
+            style={{
+              left: `${touchDragState.currentX}px`,
+              top: `${touchDragState.currentY}px`
+            }}
+          >
+            <TileView tile={touchDragState.tile} size="md" />
+          </div>
+        )}
+
       </div>
     </div>
   );
 }
 
-// Subcomponents: Single Rack Slot
+// Subcomponents: Single Rack Slot with Mouse & Touch support
 function RackSlot({ 
   slotIndex, 
   tile, 
   isSelected, 
+  isTouchDragging,
   onClick, 
   onDragStart, 
   onDragOver, 
-  onDrop 
+  onDrop,
+  onTouchStart,
+  onTouchMove,
+  onTouchEnd
 }: { 
   slotIndex: number; 
   tile: Tile | null; 
   isSelected: boolean; 
+  isTouchDragging?: boolean;
   onClick: () => void; 
   onDragStart: (e: React.DragEvent) => void; 
   onDragOver: (e: React.DragEvent) => void; 
   onDrop: (e: React.DragEvent) => void; 
+  onTouchStart: (e: React.TouchEvent) => void;
+  onTouchMove: (e: React.TouchEvent) => void;
+  onTouchEnd: (e: React.TouchEvent) => void;
 }) {
   return (
     <div 
+      data-slot-index={slotIndex}
       onClick={onClick}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      className={`aspect-[2/3] w-full min-w-0 max-w-[46px] bg-[#3a1a03]/90 rounded-[3px] sm:rounded-[5px] border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-all select-none touch-manipulation ${
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      className={`aspect-[2/3] w-full min-w-0 max-w-[48px] bg-[#3a1a03]/90 rounded-[3px] sm:rounded-[5px] border border-[#2b1201] flex items-center justify-center relative shadow-inner cursor-pointer transition-all select-none touch-none ${
         isSelected 
           ? 'ring-2 sm:ring-3 ring-emerald-400 -translate-y-1.5 sm:-translate-y-2 z-20 shadow-xl bg-[#4a2204]' 
-          : 'active:scale-95'
+          : isTouchDragging
+            ? 'opacity-30 scale-90'
+            : 'active:scale-95'
       }`}
     >
       {tile && (

@@ -300,7 +300,7 @@ export default function GlobalChat({
                     <div
                       className={`absolute top-0 ${
                         isMine ? "-left-28" : "-right-24"
-                      } hidden sm:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}
+                      } hidden lg:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}
                     >
                       <button
                         onClick={() => setReplyTo(msg)}
@@ -481,7 +481,7 @@ export default function GlobalChat({
                     )}
 
                     {/* Mobile / Tablet Touch Action Bar (Always visible on mobile & tablet) */}
-                    <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t sm:hidden ${
+                    <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t lg:hidden ${
                       isMine ? "border-blue-500/40 justify-end" : "border-slate-200 dark:border-slate-700/60 justify-start"
                     }`}>
                       <button

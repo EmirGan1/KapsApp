@@ -409,7 +409,7 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                       <div className={`max-w-[88%] sm:max-w-[80%] md:max-w-[75%] min-w-0 rounded-2xl p-2 px-3 shadow-sm relative overflow-hidden [overflow-wrap:anywhere] break-words break-all ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
                         
                         {/* Desktop Floating Action Buttons (Shown on hover) */}
-                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-24'} hidden sm:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
+                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-24'} hidden lg:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
                           <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500 dark:hover:text-blue-400 transition-colors" title="Yanıtla"><Reply size={14}/></button>
                           <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500 transition-colors" title="Beğen"><Smile size={14}/></button>
                           {canDelete && (
@@ -503,7 +503,7 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                         )}
 
                         {/* Mobile / Tablet Touch Action Bar (Always visible on mobile & tablet) */}
-                        <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t sm:hidden ${
+                        <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t lg:hidden ${
                           isMine ? "border-green-600/30 justify-end" : "border-slate-200 dark:border-slate-700/60 justify-start"
                         }`}>
                           <button
