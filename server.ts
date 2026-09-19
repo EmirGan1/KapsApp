@@ -995,11 +995,51 @@ async function startServer() {
     }
   };
 
+  const addDrawGuessChatMessage = (room: any, msg: any) => {
+    if (!room) return;
+    if (!room.chatMessages) room.chatMessages = [];
+    room.chatMessages.push(msg);
+    if (room.chatMessages.length > 50) {
+      room.chatMessages.splice(0, room.chatMessages.length - 50);
+    }
+  };
+
+  const cleanupDrawGuessRoom = (roomId: string) => {
+    const room = drawGuessRooms.get(roomId);
+    if (!room) return;
+    clearInterval(room.timerInterval);
+    clearTimeout(room.chooseTimeout);
+    clearTimeout(room.roundEndTimeout);
+    if (room.strokeHistory) room.strokeHistory.length = 0;
+    if (room.chatMessages) room.chatMessages.length = 0;
+    room.players = [];
+    drawGuessRooms.delete(roomId);
+  };
+
+  const cleanupOkeyRoom = (roomId: string) => {
+    const room = okeyRooms.get(roomId);
+    if (!room) return;
+    clearTimeout(room.botTimeout);
+    if (room.deck) room.deck.length = 0;
+    if (room.players) room.players.length = 0;
+    okeyRooms.delete(roomId);
+  };
+
+  const cleanupUnoRoom = (roomId: string) => {
+    const room = unoRooms.get(roomId);
+    if (!room) return;
+    clearTimeout(room.botTimeout);
+    if (room.deck) room.deck.length = 0;
+    if (room.players) room.players.length = 0;
+    unoRooms.delete(roomId);
+  };
+
   const startDrawGuessChoosing = (room: any) => {
     if (!room) return;
     clearTimeout(room.roundEndTimeout);
     clearTimeout(room.chooseTimeout);
     clearInterval(room.timerInterval);
+    if (room.strokeHistory) room.strokeHistory.length = 0;
 
     if (room.players.length === 0) return;
 
@@ -1040,7 +1080,7 @@ async function startServer() {
       isSystem: true,
       createdAt: new Date().toISOString()
     };
-    room.chatMessages.push(sysMsg);
+    addDrawGuessChatMessage(room, sysMsg);
     io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
 
     // If drawer doesn't choose within 15s, pick easy word automatically
@@ -1056,6 +1096,7 @@ async function startServer() {
     if (!room) return;
     clearTimeout(room.chooseTimeout);
     clearInterval(room.timerInterval);
+    if (room.strokeHistory) room.strokeHistory.length = 0;
 
     room.currentWord = selectedWord;
     room.currentWordPoints = points || 150;
@@ -1073,7 +1114,7 @@ async function startServer() {
       isSystem: true,
       createdAt: new Date().toISOString()
     };
-    room.chatMessages.push(sysMsg);
+    addDrawGuessChatMessage(room, sysMsg);
     io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
 
     broadcastDrawGuessRoom(room.id);
@@ -1100,6 +1141,7 @@ async function startServer() {
 
     clearInterval(room.timerInterval);
     clearTimeout(room.chooseTimeout);
+    if (room.strokeHistory) room.strokeHistory.length = 0;
 
     room.status = 'round_end';
     room.revealedWord = room.currentWord;
@@ -1112,7 +1154,7 @@ async function startServer() {
       isSystem: true,
       createdAt: new Date().toISOString()
     };
-    room.chatMessages.push(sysMsg);
+    addDrawGuessChatMessage(room, sysMsg);
     io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
 
     broadcastDrawGuessRoom(roomId);
@@ -1143,6 +1185,7 @@ async function startServer() {
     clearInterval(room.timerInterval);
     clearTimeout(room.chooseTimeout);
     clearTimeout(room.roundEndTimeout);
+    if (room.strokeHistory) room.strokeHistory.length = 0;
 
     room.status = 'game_over';
     const sorted = [...room.players].sort((a: any, b: any) => b.score - a.score);
@@ -1157,7 +1200,7 @@ async function startServer() {
       isSystem: true,
       createdAt: new Date().toISOString()
     };
-    room.chatMessages.push(sysMsg);
+    addDrawGuessChatMessage(room, sysMsg);
     io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
 
     broadcastDrawGuessRoom(roomId);
@@ -3717,7 +3760,7 @@ async function startServer() {
           isSystem: true,
           createdAt: new Date().toISOString()
         };
-        room.chatMessages.push(joinMsg);
+        addDrawGuessChatMessage(room, joinMsg);
         io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", joinMsg);
       }
 
@@ -3727,7 +3770,7 @@ async function startServer() {
       broadcastDrawGuessRoom(roomId);
       emitDrawGuessRoomsList();
 
-      socket.emit("drawguess_chat_history", room.chatMessages);
+      socket.emit("drawguess_chat_history", room.chatMessages || []);
 
       if (cb) cb({ success: true, room: getSanitizedDrawGuessRoom(room, user.id) });
     });
@@ -3743,10 +3786,7 @@ async function startServer() {
           room.players = room.players.filter((p: any) => p.id !== user.id);
 
           if (room.players.length === 0) {
-            clearInterval(room.timerInterval);
-            clearTimeout(room.chooseTimeout);
-            clearTimeout(room.roundEndTimeout);
-            drawGuessRooms.delete(roomId);
+            cleanupDrawGuessRoom(roomId);
           } else {
             if (wasHost) {
               const nextHost = room.players[0];
@@ -3761,7 +3801,7 @@ async function startServer() {
                 isSystem: true,
                 createdAt: new Date().toISOString()
               };
-              room.chatMessages.push(hostMsg);
+              addDrawGuessChatMessage(room, hostMsg);
               io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", hostMsg);
             }
 
@@ -3773,7 +3813,7 @@ async function startServer() {
               isSystem: true,
               createdAt: new Date().toISOString()
             };
-            room.chatMessages.push(leaveMsg);
+            addDrawGuessChatMessage(room, leaveMsg);
             io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", leaveMsg);
 
             if (room.status === 'drawing' || room.status === 'choosing') {
@@ -3782,6 +3822,7 @@ async function startServer() {
                 clearInterval(room.timerInterval);
                 clearTimeout(room.chooseTimeout);
                 clearTimeout(room.roundEndTimeout);
+                if (room.strokeHistory) room.strokeHistory.length = 0;
                 const cancelMsg = {
                   id: 'dg_cancel_' + Date.now(),
                   userId: 0,
@@ -3790,7 +3831,7 @@ async function startServer() {
                   isSystem: true,
                   createdAt: new Date().toISOString()
                 };
-                room.chatMessages.push(cancelMsg);
+                addDrawGuessChatMessage(room, cancelMsg);
                 io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", cancelMsg);
               } else if (wasDrawer) {
                 endDrawGuessRound(roomId, "Çizen oyuncu ayrıldı.");
@@ -3820,6 +3861,7 @@ async function startServer() {
 
       room.currentRound = 1;
       room.currentDrawerIndex = 0;
+      if (room.strokeHistory) room.strokeHistory.length = 0;
       room.players.forEach((p: any) => {
         p.score = 0;
         p.roundScore = 0;
@@ -3834,7 +3876,7 @@ async function startServer() {
         isSystem: true,
         createdAt: new Date().toISOString()
       };
-      room.chatMessages.push(startMsg);
+      addDrawGuessChatMessage(room, startMsg);
       io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", startMsg);
 
       startDrawGuessChoosing(room);
@@ -3870,7 +3912,7 @@ async function startServer() {
         isSystem: true,
         createdAt: new Date().toISOString()
       };
-      room.chatMessages.push(kickMsg);
+      addDrawGuessChatMessage(room, kickMsg);
       io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", kickMsg);
 
       if (room.players.length < 2 && (room.status === 'drawing' || room.status === 'choosing')) {
@@ -3878,6 +3920,7 @@ async function startServer() {
         clearInterval(room.timerInterval);
         clearTimeout(room.chooseTimeout);
         clearTimeout(room.roundEndTimeout);
+        if (room.strokeHistory) room.strokeHistory.length = 0;
       } else if (wasDrawer && (room.status === 'drawing' || room.status === 'choosing')) {
         endDrawGuessRound(roomId, "Çizen oyuncu odadan atıldı.");
       }
@@ -3903,6 +3946,12 @@ async function startServer() {
       const room = drawGuessRooms.get(roomId);
       if (!room || room.status !== 'drawing' || room.drawerId !== user.id) return;
 
+      if (!room.strokeHistory) room.strokeHistory = [];
+      room.strokeHistory.push(line);
+      if (room.strokeHistory.length > 500) {
+        room.strokeHistory.splice(0, 100);
+      }
+
       socket.to(`drawguess_${roomId}`).emit("drawguess_draw_line", line);
     });
 
@@ -3912,6 +3961,7 @@ async function startServer() {
       const room = drawGuessRooms.get(roomId);
       if (!room || room.status !== 'drawing' || room.drawerId !== user.id) return;
 
+      if (room.strokeHistory) room.strokeHistory.length = 0;
       socket.to(`drawguess_${roomId}`).emit("drawguess_canvas_cleared");
     });
 
@@ -3954,7 +4004,7 @@ async function startServer() {
             isCorrect: true,
             createdAt: new Date().toISOString()
           };
-          room.chatMessages.push(correctMsg);
+          addDrawGuessChatMessage(room, correctMsg);
           io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", correctMsg);
 
           broadcastDrawGuessRoom(roomId);
@@ -3968,7 +4018,7 @@ async function startServer() {
         }
       }
 
-      // Regular chat message
+      // Regular chat message (FIFO 50 limit)
       const msg = {
         id: 'dg_msg_' + Date.now() + '_' + Math.random(),
         userId: user.id,
@@ -3978,12 +4028,15 @@ async function startServer() {
         isCorrect: false,
         createdAt: new Date().toISOString()
       };
-      room.chatMessages.push(msg);
-      if (room.chatMessages.length > 120) room.chatMessages.shift();
+      addDrawGuessChatMessage(room, msg);
       io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", msg);
     });
 
     socket.on("disconnect", async () => {
+      try {
+        (socket as any).leaveAll?.();
+      } catch (e) {}
+
       const drawGuessRoomId = socket.data.currentDrawGuessRoom;
       if (drawGuessRoomId) {
         const room = drawGuessRooms.get(drawGuessRoomId);
@@ -3993,10 +4046,7 @@ async function startServer() {
           room.players = room.players.filter((p: any) => p.id !== user.id);
 
           if (room.players.length === 0) {
-            clearInterval(room.timerInterval);
-            clearTimeout(room.chooseTimeout);
-            clearTimeout(room.roundEndTimeout);
-            drawGuessRooms.delete(drawGuessRoomId);
+            cleanupDrawGuessRoom(drawGuessRoomId);
           } else {
             if (wasHost) {
               const nextHost = room.players[0];
@@ -4010,6 +4060,7 @@ async function startServer() {
                 clearInterval(room.timerInterval);
                 clearTimeout(room.chooseTimeout);
                 clearTimeout(room.roundEndTimeout);
+                if (room.strokeHistory) room.strokeHistory.length = 0;
               } else if (wasDrawer) {
                 endDrawGuessRound(drawGuessRoomId, "Çizen oyuncu ayrıldı.");
               }
@@ -4028,8 +4079,12 @@ async function startServer() {
             voiceRooms.delete(voiceRoomId);
           } else {
             vRoom.participants.delete(user.id);
-            socket.to(`voice_${voiceRoomId}`).emit("voice_user_left", { userId: user.id, socketId: socket.id });
-            broadcastVoiceRoom(voiceRoomId);
+            if (vRoom.participants.size === 0) {
+              voiceRooms.delete(voiceRoomId);
+            } else {
+              socket.to(`voice_${voiceRoomId}`).emit("voice_user_left", { userId: user.id, socketId: socket.id });
+              broadcastVoiceRoom(voiceRoomId);
+            }
           }
           emitVoiceRoomsList();
         }
@@ -4041,7 +4096,7 @@ async function startServer() {
           const wasHost = room.hostId === user.id;
           room.players = room.players.filter((p: any) => p.id !== user.id);
           if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
-            unoRooms.delete(unoRoomId);
+            cleanupUnoRoom(unoRoomId);
           } else {
             if (wasHost) {
               const nextReal = room.players.find((p: any) => !p.isBot);
@@ -4064,7 +4119,7 @@ async function startServer() {
           const wasHost = room.hostId === user.id;
           room.players = room.players.filter((p: any) => p.id !== user.id);
           if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
-            okeyRooms.delete(roomId);
+            cleanupOkeyRoom(roomId);
           } else {
             if (wasHost) {
               const nextRealPlayer = room.players.find((p: any) => !p.isBot);
@@ -4089,10 +4144,12 @@ async function startServer() {
         emitUserLocations();
       }
 
-      await client.execute({
-        sql: "UPDATE users SET last_seen = ? WHERE id = ?",
-        args: [new Date().toISOString(), user.id]
-      });
+      try {
+        await client.execute({
+          sql: "UPDATE users SET last_seen = ? WHERE id = ?",
+          args: [new Date().toISOString(), user.id]
+        });
+      } catch (e) {}
 
       // 5651 Sayılı Kanun Traffic Log
       logAccess(userIdNum, socket.data?.ip || "Bilinmiyor", 'disconnect');
@@ -4110,6 +4167,11 @@ async function startServer() {
         }, 20000); // 20s grace period for mobile reconnection
         disconnectTimers.set(userIdNum, timer);
       }
+
+      // Memory hygiene: Remove all listeners on the disconnected socket
+      try {
+        socket.removeAllListeners();
+      } catch (e) {}
     });
   });
 
