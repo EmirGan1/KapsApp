@@ -173,6 +173,24 @@ async function initDb() {
   try { await client.execute("ALTER TABLE users ADD COLUMN last_ip TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE notifications ADD COLUMN sender_id INTEGER"); } catch(e){}
   try { await client.execute("ALTER TABLE notifications ADD COLUMN target_id INTEGER"); } catch(e){}
+
+  // High Performance DB Indexing for Turso/SQLite
+  try {
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_direct ON messages(sender, receiver)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_global_messages_created ON global_messages(created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_followers_pair ON followers(follower_id, following_id)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_followers_following ON followers(following_id)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_likes_post ON likes(post_id)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_friends_pair ON friends(user1, user2)");
+  } catch (idxErr) {
+    console.error("Index creation notice:", idxErr);
+  }
 }
 
 async function startServer() {
@@ -502,6 +520,12 @@ async function startServer() {
   const globalRead = new Map<number, number>();
   const chatRead = new Map<string | number, Map<number, number>>();
   
+  // High-performance User Cache with TTL to reduce database round-trips
+  const userCache = new Map<number, { data: any; expiresAt: number }>();
+  const invalidateUserCache = (id: number) => {
+    userCache.delete(Number(id));
+  };
+
   const okeyRooms = new Map<string, any>();
 
   const getSanitizedRoom = (room: any) => {
@@ -595,6 +619,13 @@ async function startServer() {
         // Check if bot can declare win
         const winCheck = checkClassicOkeyWin(bot2.hand, r2.okeyTile);
         if (winCheck.canWin) {
+          if (winCheck.discardTileId) {
+            const dIdx = bot2.hand.findIndex((t: any) => t.id === winCheck.discardTileId);
+            if (dIdx !== -1) {
+              const finishTile = bot2.hand.splice(dIdx, 1)[0];
+              bot2.discardPile.push(finishTile);
+            }
+          }
           r2.status = 'ended';
           r2.winnerId = bot2.id;
           r2.winningReason = `${bot2.username} ${winCheck.reason || 'elini bitirdi ve kazandı!'} 🏆`;
@@ -960,8 +991,24 @@ async function startServer() {
     });
 
     const getUser = async (id: number) => {
-      const res = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [id] });
-      return res.rows.length > 0 ? res.rows[0] : null;
+      const numId = Number(id);
+      if (!numId) return null;
+      const now = Date.now();
+      const cached = userCache.get(numId);
+      if (cached && cached.expiresAt > now) {
+        return cached.data;
+      }
+      try {
+        const res = await client.execute({ 
+          sql: "SELECT id, username, avatar, color, okey_wins, uno_wins, signup_ip, last_ip FROM users WHERE id = ?", 
+          args: [numId] 
+        });
+        const u = res.rows.length > 0 ? res.rows[0] : null;
+        userCache.set(numId, { data: u, expiresAt: now + 45000 });
+        return u;
+      } catch (e) {
+        return null;
+      }
     };
 
     socket.on("mark_global_read", (messageId) => {
@@ -1087,7 +1134,7 @@ async function startServer() {
 
     socket.on("get_user_posts", async (targetId, cb) => {
       try {
-        const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", args: [targetId] });
+        const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 30", args: [targetId] });
         const postIds = postsRes.rows.map((p: any) => p.id);
         
         let likesRes: any = { rows: [] };
@@ -1129,7 +1176,7 @@ async function startServer() {
       }
     });
 
-    // Feeds
+    // Feeds (Strict 30 limit for fast payload)
     socket.on("get_feed", async (subjectFilter, cb) => {
       if (typeof subjectFilter === "function") {
         cb = subjectFilter;
@@ -1138,9 +1185,9 @@ async function startServer() {
       try {
         let postsRes;
         if (subjectFilter) {
-          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 50", args: [subjectFilter] });
+          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 30", args: [subjectFilter] });
         } else {
-          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 50", args: [] });
+          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 30", args: [] });
         }
         const postIds = postsRes.rows.map((p: any) => p.id);
         let likesRes: any = { rows: [] };
@@ -1317,7 +1364,7 @@ async function startServer() {
 
     socket.on("get_notifications", async (cb) => {
       const notifsRes = await client.execute({
-        sql: "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+        sql: "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
         args: [user.id]
       });
       cb(notifsRes.rows);
@@ -1535,6 +1582,7 @@ async function startServer() {
           onlineUsers.delete(targetId);
         }
 
+        invalidateUserCache(targetId);
         io.emit("user_deleted", { userId: targetId });
         io.emit("feed_updated");
         io.emit("friends_updated");
@@ -1548,7 +1596,7 @@ async function startServer() {
     // Chat
     socket.on("get_messages", async (friendId, cb) => {
       const msgRes = await client.execute({
-        sql: "SELECT * FROM (SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC",
+        sql: "SELECT * FROM (SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 30) ORDER BY created_at ASC",
         args: [user.id, friendId, friendId, user.id]
       });
       const populated = await Promise.all(msgRes.rows.map(async (r: any) => {
@@ -1635,24 +1683,49 @@ async function startServer() {
       };
     };
 
-    // Global Chat
-    socket.on("get_global_messages", async (cb) => {
-      const msgs = await client.execute("SELECT * FROM (SELECT * FROM global_messages ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC");
-      const populated = await Promise.all(msgs.rows.map(m => populateMessage(m, "global")));
-      cb(populated);
+    // Global Chat (Strict 30 Limit & Cursor Pagination)
+    socket.on("get_global_messages", async (data, cb) => {
+      let limit = 30;
+      let beforeId: number | null = null;
+      let callback = cb;
+      if (typeof data === "function") {
+        callback = data;
+      } else if (data && typeof data === "object") {
+        if (data.limit) limit = Math.min(Number(data.limit), 50);
+        if (data.beforeId) beforeId = Number(data.beforeId);
+      }
+
+      try {
+        let msgs;
+        if (beforeId) {
+          msgs = await client.execute({
+            sql: "SELECT * FROM (SELECT * FROM global_messages WHERE id < ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC",
+            args: [beforeId, limit]
+          });
+        } else {
+          msgs = await client.execute({
+            sql: "SELECT * FROM (SELECT * FROM global_messages ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC",
+            args: [limit]
+          });
+        }
+        const populated = await Promise.all(msgs.rows.map(m => populateMessage(m, "global")));
+        if (callback) callback(populated);
+      } catch (err) {
+        if (callback) callback([]);
+      }
     });
 
     socket.on("get_delta_global_messages", async (data: { since?: string }, cb) => {
       try {
-        if (!data?.since) return cb([]);
+        if (!data?.since) return cb ? cb([]) : undefined;
         const deltaRes = await client.execute({
-          sql: "SELECT * FROM global_messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 100",
+          sql: "SELECT * FROM global_messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 30",
           args: [data.since]
         });
         const populated = await Promise.all(deltaRes.rows.map(m => populateMessage(m, "global")));
-        cb(populated);
+        if (cb) cb(populated);
       } catch (err) {
-        cb([]);
+        if (cb) cb([]);
       }
     });
 
@@ -1906,6 +1979,7 @@ async function startServer() {
         sql: "UPDATE users SET avatar = ? WHERE id = ?",
         args: [url, user.id]
       });
+      invalidateUserCache(user.id);
       io.emit("feed_updated");
       io.emit("friends_updated");
     });

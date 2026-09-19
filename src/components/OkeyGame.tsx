@@ -12,7 +12,8 @@ import {
   OkeyRoomState, 
   autoSortRuns, 
   autoSortPairs, 
-  checkClassicOkeyWin 
+  checkClassicOkeyWin,
+  isTileOkey
 } from '../utils/okeyEngine';
 import { TableChatMessage } from '../types';
 
@@ -415,12 +416,12 @@ export default function OkeyGame({
 
   // Auto Sort
   const handleSortRuns = () => {
-    setRack(prev => autoSortRuns(prev));
+    setRack(prev => autoSortRuns(prev, currentRoom?.okeyTile));
     setSelectedSlot(null);
   };
 
   const handleSortPairs = () => {
-    setRack(prev => autoSortPairs(prev));
+    setRack(prev => autoSortPairs(prev, currentRoom?.okeyTile));
     setSelectedSlot(null);
   };
 
@@ -1136,6 +1137,7 @@ export default function OkeyGame({
                   tile={tile}
                   isSelected={selectedSlot === idx}
                   isTouchDragging={touchDragState?.slotIndex === idx && touchDragState.isDragging}
+                  okeyRef={currentRoom?.okeyTile}
                   onClick={() => handleSlotClick(idx)}
                   onDragStart={(e) => handleDragStart(e, idx)}
                   onDragOver={handleDragOver}
@@ -1158,6 +1160,7 @@ export default function OkeyGame({
                     tile={tile}
                     isSelected={selectedSlot === realIdx}
                     isTouchDragging={touchDragState?.slotIndex === realIdx && touchDragState.isDragging}
+                    okeyRef={currentRoom?.okeyTile}
                     onClick={() => handleSlotClick(realIdx)}
                     onDragStart={(e) => handleDragStart(e, realIdx)}
                     onDragOver={handleDragOver}
@@ -1181,7 +1184,7 @@ export default function OkeyGame({
               top: `${touchDragState.currentY}px`
             }}
           >
-            <TileView tile={touchDragState.tile} size="md" />
+            <TileView tile={touchDragState.tile} size="md" okeyRef={currentRoom?.okeyTile} />
           </div>
         )}
 
@@ -1297,6 +1300,7 @@ function RackSlot({
   tile, 
   isSelected, 
   isTouchDragging,
+  okeyRef,
   onClick, 
   onDragStart, 
   onDragOver, 
@@ -1309,13 +1313,14 @@ function RackSlot({
   tile: Tile | null; 
   isSelected: boolean; 
   isTouchDragging?: boolean;
+  okeyRef?: Tile | null;
   onClick: () => void; 
   onDragStart: (e: React.DragEvent) => void; 
   onDragOver: (e: React.DragEvent) => void; 
   onDrop: (e: React.DragEvent) => void; 
-  onTouchStart: (e: React.TouchEvent) => void;
-  onTouchMove: (e: React.TouchEvent) => void;
-  onTouchEnd: (e: React.TouchEvent) => void;
+  onTouchStart: (e: React.TouchEvent) => void; 
+  onTouchMove: (e: React.TouchEvent) => void; 
+  onTouchEnd: (e: React.TouchEvent) => void; 
 }) {
   return (
     <div 
@@ -1340,6 +1345,7 @@ function RackSlot({
           size="rack" 
           draggable 
           onDragStart={onDragStart} 
+          okeyRef={okeyRef}
         />
       )}
     </div>
@@ -1352,13 +1358,15 @@ function TileView({
   size = 'rack',
   draggable = false, 
   onDragStart,
-  isOkeyBadge = false
+  isOkeyBadge = false,
+  okeyRef
 }: { 
   tile: Tile; 
   size?: 'sm' | 'md' | 'rack'; 
   draggable?: boolean; 
   onDragStart?: (e: React.DragEvent) => void; 
   isOkeyBadge?: boolean;
+  okeyRef?: Tile | null;
 }) {
   const colorTextMap: Record<string, string> = {
     red: 'text-red-600',
@@ -1383,20 +1391,7 @@ function TileView({
     rack: 'w-full h-full text-[9px] xs:text-[11px] sm:text-sm md:text-base rounded-[2px] sm:rounded-sm'
   }[size];
 
-  if (tile.color === 'fake') {
-    return (
-      <div 
-        draggable={draggable}
-        onDragStart={onDragStart}
-        className={`${sizeClasses} bg-[#fefae0] border border-slate-300 shadow flex flex-col items-center justify-center relative cursor-grab active:cursor-grabbing font-black`}
-      >
-        <div className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 rounded-full border-2 border-slate-900 flex items-center justify-center">
-          <div className="w-1 h-1 bg-slate-900 rounded-full"></div>
-        </div>
-        <span className="text-[7px] sm:text-[8px] text-slate-600 font-bold mt-0.5">Sahte</span>
-      </div>
-    );
-  }
+  const isThisOkey = isTileOkey(tile, okeyRef);
 
   return (
     <div 
@@ -1406,8 +1401,13 @@ function TileView({
     >
       <span className="mt-0.5">{tile.number}</span>
       <div className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full mt-0.5 sm:mt-1 ${colorBgMap[tile.color] || 'bg-slate-900'}`}></div>
-      {tile.isOkey && (
-        <span className="absolute -top-1 -right-1 text-[8px] sm:text-[10px]" title="Okey Taşı">
+      {tile.isFake && (
+        <span className="absolute -top-1 -left-1 text-[7px] sm:text-[9px] bg-slate-800 text-white rounded-full px-0.5 leading-tight font-bold shadow" title="Sahte Okey">
+          ★
+        </span>
+      )}
+      {(isThisOkey || isOkeyBadge) && (
+        <span className="absolute -top-1 -right-1 text-[8px] sm:text-[10px] animate-pulse" title="Okey Taşı (Joker)">
           ⭐
         </span>
       )}
