@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
-import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2, Radio } from "lucide-react";
+import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2, Radio, MapPin } from "lucide-react";
 import Auth from "./components/Auth";
 import Feed from "./components/Feed";
 import Chats from "./components/Chats";
@@ -10,6 +10,7 @@ import GlobalChat from "./components/GlobalChat";
 import Notifications from "./components/Notifications";
 import Games from "./components/Games";
 import VoiceChat from "./components/VoiceChat";
+import LiveMap from "./components/LiveMap";
 import ToastContainer, { ToastItem } from "./components/ToastContainer";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
@@ -27,7 +28,7 @@ export default function App() {
   const [onlineUsers, setOnlineUsers] = useState<number[]>([]);
   const [currentUserId, setCurrentUserId] = useState<number>(Number(localStorage.getItem("lan_user_id")) || 0);
   
-  const [activeTab, setActiveTab] = useState<"global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice">("chats");
+  const [activeTab, setActiveTab] = useState<"global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map">("chats");
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<number>(currentUserId);
   const [targetChatUserId, setTargetChatUserId] = useState<number | null>(null);
@@ -248,7 +249,7 @@ export default function App() {
     return <Auth onAuthSuccess={handleAuthSuccess} />;
   }
 
-  const handleTabChange = (tab: "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice") => {
+  const handleTabChange = (tab: "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map") => {
     setActiveTab(tab);
     if (tab === "global") {
       setUnreadGlobalCount(0);
@@ -295,6 +296,7 @@ export default function App() {
             <NavItem icon={<Globe />} label="Genel Sohbet" active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
             <NavItem icon={<MessageSquare />} label="Sohbetler" active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
             <NavItem icon={<LayoutGrid />} label="Akış" active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
+            <NavItem icon={<MapPin className="text-emerald-500" />} label="Canlı Harita" active={activeTab === 'map'} onClick={() => handleTabChange('map')} />
             <NavItem icon={<Users />} label="Arkadaşlar" active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
             <NavItem icon={<Radio />} label="Sesli & Görüntülü" active={activeTab === 'voice'} onClick={() => handleTabChange('voice')} />
             <NavItem icon={<Gamepad2 />} label="Oyunlar" active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
@@ -371,6 +373,21 @@ export default function App() {
           />
         )}
         
+        {activeTab === 'map' && (
+          <LiveMap 
+            socket={socket} 
+            currentUserId={currentUserId} 
+            username={username} 
+            avatar={avatar} 
+            color={color} 
+            onUserClick={handleUserClick}
+            onOpenChat={(targetId) => {
+              setTargetChatUserId(targetId);
+              setActiveTab('chats');
+            }}
+          />
+        )}
+        
         {/* Persistently mounted Voice Chat tab to preserve audio connection when switching tabs */}
         <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'voice' ? 'flex' : 'hidden'}`}>
           <VoiceChat socket={socket} currentUserId={currentUserId} currentUsername={username} avatar={avatar} color={color} onUserClick={handleUserClick} />
@@ -388,6 +405,7 @@ export default function App() {
           <MobileNavItem icon={<Globe size={22} />} active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
           <MobileNavItem icon={<MessageSquare size={22} />} active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
           <MobileNavItem icon={<LayoutGrid size={22} />} active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
+          <MobileNavItem icon={<MapPin size={22} className="text-emerald-500" />} active={activeTab === 'map'} onClick={() => handleTabChange('map')} />
           <MobileNavItem icon={<Radio size={22} />} active={activeTab === 'voice'} onClick={() => handleTabChange('voice')} />
           <MobileNavItem icon={<Gamepad2 size={22} />} active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
           <MobileNavItem icon={<Users size={22} />} active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />

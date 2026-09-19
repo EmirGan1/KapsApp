@@ -519,6 +519,23 @@ async function startServer() {
   const disconnectTimers = new Map<number, NodeJS.Timeout>();
   const globalRead = new Map<number, number>();
   const chatRead = new Map<string | number, Map<number, number>>();
+
+  // In-Memory Live Geolocation Sync (RAM ONLY - Never saved to database)
+  interface UserLiveLocation {
+    userId: number;
+    username: string;
+    avatar: string | null;
+    color: string;
+    lat: number;
+    lng: number;
+    status: string;
+    updatedAt: number;
+  }
+  const userLiveLocations = new Map<number, UserLiveLocation>();
+
+  const emitUserLocations = () => {
+    io.emit("update_user_locations", Array.from(userLiveLocations.values()));
+  };
   
   // High-performance User Cache with TTL to reduce database round-trips
   const userCache = new Map<number, { data: any; expiresAt: number }>();
@@ -1317,6 +1334,48 @@ async function startServer() {
       if (!onlineUsers.has(userIdNum) || onlineUsers.get(userIdNum) !== socket.id) {
         onlineUsers.set(userIdNum, socket.id);
         io.emit("online_users", Array.from(onlineUsers.keys()));
+      }
+    });
+
+    // Real-time Geolocation Sync (RAM ONLY - Never saved to database)
+    socket.on("share_location", (data: { lat: number; lng: number }) => {
+      if (typeof data?.lat !== "number" || typeof data?.lng !== "number") return;
+
+      let userStatus = "Lobide";
+      if (socket.data.currentOkeyRoom) {
+        userStatus = "Okey Masasında";
+      } else if (socket.data.currentUnoRoom) {
+        userStatus = "UNO Oynuyor";
+      } else if (socket.data.currentDrawGuessRoom) {
+        userStatus = "Çiz & Tahmin Et Oynuyor";
+      } else if (socket.data.currentVoiceRoom) {
+        userStatus = "Sesli/Görüntülü Sohbette";
+      }
+
+      userLiveLocations.set(userIdNum, {
+        userId: userIdNum,
+        username: user.username,
+        avatar: user.avatar,
+        color: user.color || "#3b82f6",
+        lat: data.lat,
+        lng: data.lng,
+        status: userStatus,
+        updatedAt: Date.now()
+      });
+
+      emitUserLocations();
+    });
+
+    socket.on("get_user_locations", (cb) => {
+      if (typeof cb === "function") {
+        cb(Array.from(userLiveLocations.values()));
+      }
+    });
+
+    socket.on("stop_sharing_location", () => {
+      if (userLiveLocations.has(userIdNum)) {
+        userLiveLocations.delete(userIdNum);
+        emitUserLocations();
       }
     });
 
@@ -3770,6 +3829,12 @@ async function startServer() {
         }
       }
       
+      // Immediately remove pin from live map on disconnect/leave
+      if (userLiveLocations.has(userIdNum)) {
+        userLiveLocations.delete(userIdNum);
+        emitUserLocations();
+      }
+
       await client.execute({
         sql: "UPDATE users SET last_seen = ? WHERE id = ?",
         args: [new Date().toISOString(), user.id]
