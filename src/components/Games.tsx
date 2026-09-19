@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Gamepad2, Users, ChevronRight, Trophy, Sparkles, Bot, ShieldCheck, Crown, Medal, RefreshCw } from 'lucide-react';
+import { Gamepad2, Users, ChevronRight, Trophy, Sparkles, Bot, ShieldCheck, Crown, Medal, RefreshCw, Palette, Pencil } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import OkeyGame from './OkeyGame';
 import UnoGame from './UnoGame';
+import DrawGuessGame from './DrawGuessGame';
 import Avatar from './Avatar';
 
 interface GamesProps {
@@ -31,9 +32,10 @@ export default function Games({
   color,
   onUserClick
 }: GamesProps) {
-  const [selectedGame, setSelectedGame] = useState<'hub' | 'okey' | 'uno'>('hub');
+  const [selectedGame, setSelectedGame] = useState<'hub' | 'okey' | 'uno' | 'drawguess'>('hub');
   const [okeyRoomCount, setOkeyRoomCount] = useState<number>(0);
   const [unoRoomCount, setUnoRoomCount] = useState<number>(0);
+  const [drawguessRoomCount, setDrawguessRoomCount] = useState<number>(0);
 
   // Leaderboard state
   const [leaderboardTab, setLeaderboardTab] = useState<'okey' | 'uno'>('okey');
@@ -87,21 +89,34 @@ export default function Games({
       }
     };
 
+    // Check Draw & Guess presence
+    const onDrawGuessRooms = (rooms: any[]) => {
+      setDrawguessRoomCount(rooms.length);
+    };
+
     socket.on("okey_rooms_list", onOkeyRooms);
     socket.on("okey_state", onOkeyState);
     socket.on("uno_rooms_list", onUnoRooms);
     socket.on("uno_state", onUnoState);
+    socket.on("drawguess_rooms_list", onDrawGuessRooms);
 
     socket.emit("get_okey_rooms");
     socket.emit("get_my_okey_room");
     socket.emit("get_uno_rooms");
     socket.emit("get_my_uno_room");
+    socket.emit("get_drawguess_rooms");
+    socket.emit("get_my_drawguess_room", (res: any) => {
+      if (res?.success && res?.room) {
+        setSelectedGame('drawguess');
+      }
+    });
 
     return () => {
       socket.off("okey_rooms_list", onOkeyRooms);
       socket.off("okey_state", onOkeyState);
       socket.off("uno_rooms_list", onUnoRooms);
       socket.off("uno_state", onUnoState);
+      socket.off("drawguess_rooms_list", onDrawGuessRooms);
     };
   }, [socket]);
 
@@ -133,6 +148,20 @@ export default function Games({
     );
   }
 
+  // Route to Draw & Guess
+  if (selectedGame === 'drawguess') {
+    return (
+      <DrawGuessGame
+        socket={socket}
+        currentUserId={currentUserId}
+        username={username}
+        avatar={avatar}
+        color={color}
+        onBackToHub={() => setSelectedGame('hub')}
+      />
+    );
+  }
+
   // --- GAME SELECTION HUB VIEW ---
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 p-4 sm:p-6 lg:p-8 transition-colors">
@@ -152,7 +181,7 @@ export default function Games({
         </div>
 
         {/* Game Selection Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           
           {/* Card 1: Klasik Okey */}
           <div 
@@ -312,6 +341,81 @@ export default function Games({
               </span>
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 group-hover:bg-rose-500 text-white font-bold text-xs transition-colors shadow-md shadow-rose-900/20">
                 UNO Lobisine Gir <ChevronRight size={16} />
+              </div>
+            </div>
+          </div>
+
+          {/* Card 3: Çiz & Tahmin Et (Draw & Guess) */}
+          <div 
+            onClick={() => setSelectedGame('drawguess')}
+            className="group relative cursor-pointer overflow-hidden rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-amber-500 dark:hover:border-amber-500 shadow-lg hover:shadow-2xl transition-all duration-300 flex flex-col justify-between transform hover:-translate-y-1"
+          >
+            {/* Top decorative gradient */}
+            <div className="h-2.5 bg-gradient-to-r from-amber-500 via-violet-500 to-fuchsia-500" />
+            
+            <div className="p-6 sm:p-7 space-y-5">
+              
+              {/* Header inside card */}
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shadow-sm group-hover:scale-110 transition-transform">
+                    <Palette size={26} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900 dark:text-slate-100 group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
+                      Çiz & Tahmin Et
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Gartic & Skribbl tarzı çizim kapışması
+                    </p>
+                  </div>
+                </div>
+
+                <span className="px-3 py-1 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800/60">
+                  {drawguessRoomCount} Oda Aktif
+                </span>
+              </div>
+
+              {/* Visual preview mini drawing tools */}
+              <div className="flex items-center gap-2 py-2">
+                <div className="w-8 h-10 rounded-lg bg-amber-500 text-white flex items-center justify-center font-black text-xs shadow-sm">
+                  ✏️
+                </div>
+                <div className="w-8 h-10 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-black text-xs shadow-sm">
+                  🎨
+                </div>
+                <div className="w-8 h-10 rounded-lg bg-sky-500 text-white flex items-center justify-center font-black text-xs shadow-sm">
+                  💡
+                </div>
+                <div className="w-8 h-10 rounded-lg bg-fuchsia-500 text-white flex items-center justify-center font-black text-xs shadow-sm">
+                  🏆
+                </div>
+              </div>
+
+              {/* Feature bullets */}
+              <ul className="text-xs text-slate-600 dark:text-slate-300 space-y-2">
+                <li className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span><strong>HTML5 Dokunmatik Tuval:</strong> Renkler, kalınlıklar, silgi & temizleme</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span><strong>Canlı Süre & Kelime Seçimi:</strong> Kolay, orta ve zor seviyeli kelimeler</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span><strong>Eğlence Modu:</strong> Sıralama tablosundan bağımsız parti oyunu</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Action footer */}
+            <div className="p-5 bg-slate-50 dark:bg-slate-900/70 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
+              <span className="text-xs font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                <Users size={14} /> 2-10 Oyuncu
+              </span>
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 group-hover:bg-amber-500 text-white font-bold text-xs transition-colors shadow-md shadow-amber-900/20">
+                Çizim Lobisine Gir <ChevronRight size={16} />
               </div>
             </div>
           </div>

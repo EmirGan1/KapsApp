@@ -296,7 +296,7 @@ export default function App() {
             <NavItem icon={<MessageSquare />} label="Sohbetler" active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
             <NavItem icon={<LayoutGrid />} label="Akış" active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
             <NavItem icon={<Users />} label="Arkadaşlar" active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
-            <NavItem icon={<Radio />} label="Sesli Sohbet" active={activeTab === 'voice'} onClick={() => handleTabChange('voice')} />
+            <NavItem icon={<Radio />} label="Sesli & Görüntülü" active={activeTab === 'voice'} onClick={() => handleTabChange('voice')} />
             <NavItem icon={<Gamepad2 />} label="Oyunlar" active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
             <NavItem icon={<Bell />} label="Bildirimler" active={activeTab === 'notifications'} badge={unreadNotificationsCount} onClick={() => handleTabChange('notifications')} />
             <NavItem icon={<UserCircle2 />} label="Profil" active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />

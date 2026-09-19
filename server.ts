@@ -758,6 +758,7 @@ async function startServer() {
     isMuted: boolean;
     isSpeaking: boolean;
     isDeafened?: boolean;
+    isVideoOff?: boolean;
     joinedAt: string;
   }
 
@@ -795,6 +796,285 @@ async function startServer() {
     const room = voiceRooms.get(roomId);
     if (!room) return;
     io.to(`voice_${roomId}`).emit("voice_room_updated", getSanitizedVoiceRoom(room));
+  };
+
+  // --- DRAW & GUESS (ÇİZ & TAHMİN ET) IN-MEMORY LOGIC ---
+  const DRAWGUESS_WORDS_EASY = [
+    "Elma", "Kedi", "Köpek", "Güneş", "Ağaç", "Araba", "Balık", "Ev", "Top", "Masa",
+    "Kitap", "Çiçek", "Kuş", "Bardak", "Yıldız", "Kapı", "Saat", "Ayakkabı", "Gözlük", "Kalem",
+    "Şapka", "Sandalye", "Telefon", "Uçak", "Muz", "Ekmek", "Kalp", "Bulut", "Mum", "Çanta",
+    "Çilek", "Karpuz", "Limon", "Göz", "Burun", "Kulak", "Tarak", "Kaşık", "Çatal", "Bıçak",
+    "Gemi", "Tren", "Bisiklet", "Bayrak", "Kutu", "Ayna", "Yatak", "Kelebek", "Yumurta", "Peynir"
+  ];
+
+  const DRAWGUESS_WORDS_MEDIUM = [
+    "Gitar", "Dinozor", "Roket", "Panda", "Yanardağ", "Helikopter", "Denizaltı", "Paraşüt", "Şemsiye", "Mikroskop",
+    "Teleskop", "Hamburger", "Robot", "Palyaço", "Gökkuşağı", "Kanguru", "Zürafa", "Piramit", "Kaykay", "Motosiklet",
+    "Akvaryum", "Kamera", "Denizkızı", "Kardan Adam", "Bukalemun", "Ahtapot", "Penguen", "Aslan", "Kaplan", "Piyano",
+    "Trompet", "Satranç", "Mikrofon", "Kamp Çadırı", "Tost Makinesi", "Dondurma", "Deniz Feneri", "Astronot", "Trafik Lambası"
+  ];
+
+  const DRAWGUESS_WORDS_HARD = [
+    "Yerçekimi", "Zaman Yolculuğu", "Karadelik", "Fotosentez", "Labirent", "Elektrik Santrali", "Meteor Yağmuru", "Heyelan", "Matruşka", "DNA Sarmalı",
+    "Atmosfer", "Süpersonik", "Pusula", "Yanılsama", "Küresel Isınma", "Manyetizma", "Hipnoz", "Ekosistem", "Fosilleşme", "Kutup Işıkları",
+    "Deprem", "Bumerang", "Periskop", "Kum Saati", "Yapay Zeka", "Akupunktur", "Simya", "Gölge Oyunu", "Hologram"
+  ];
+
+  const drawGuessRooms = new Map<string, any>();
+
+  const normalizeTrText = (text: string) => {
+    return (text || '')
+      .trim()
+      .toLocaleLowerCase('tr-TR')
+      .replace(/[\s\-_]+/g, '');
+  };
+
+  const createWordMask = (word: string) => {
+    return (word || '')
+      .split('')
+      .map(char => (char === ' ' ? '   ' : '_ '))
+      .join('')
+      .trim();
+  };
+
+  const getSanitizedDrawGuessRoom = (room: any, forUserId?: number) => {
+    const isDrawer = room.drawerId === forUserId;
+    const isRoundEndOrOver = room.status === 'round_end' || room.status === 'game_over';
+
+    return {
+      id: room.id,
+      name: room.name,
+      hostId: room.hostId,
+      hostUsername: room.hostUsername,
+      maxPlayers: room.maxPlayers,
+      totalRounds: room.totalRounds,
+      currentRound: room.currentRound,
+      currentDrawerIndex: room.currentDrawerIndex,
+      drawerId: room.drawerId,
+      drawerUsername: room.drawerUsername,
+      status: room.status,
+      currentWord: (isDrawer || isRoundEndOrOver) ? room.currentWord : undefined,
+      wordMask: (!isDrawer && room.status === 'drawing') ? createWordMask(room.currentWord) : undefined,
+      wordLength: room.currentWord ? room.currentWord.replace(/\s+/g, '').length : undefined,
+      wordChoices: (isDrawer && room.status === 'choosing') ? room.wordChoices : undefined,
+      timer: room.timer,
+      roundDuration: room.roundDuration,
+      players: room.players.map((p: any) => ({
+        id: p.id,
+        username: p.username,
+        avatar: p.avatar,
+        color: p.color,
+        score: p.score || 0,
+        roundScore: p.roundScore || 0,
+        hasGuessed: !!p.hasGuessed,
+        isDrawing: p.id === room.drawerId,
+        isHost: p.id === room.hostId,
+        socketId: p.socketId
+      })),
+      lastRoundWinner: room.lastRoundWinner,
+      revealedWord: isRoundEndOrOver ? room.currentWord : undefined,
+      createdAt: room.createdAt
+    };
+  };
+
+  const getSanitizedDrawGuessRoomsList = () => {
+    return Array.from(drawGuessRooms.values()).map(r => ({
+      id: r.id,
+      name: r.name,
+      hostId: r.hostId,
+      hostUsername: r.hostUsername,
+      maxPlayers: r.maxPlayers,
+      totalRounds: r.totalRounds,
+      currentRound: r.currentRound,
+      status: r.status,
+      players: r.players.map((p: any) => ({ id: p.id, username: p.username, avatar: p.avatar, color: p.color })),
+      createdAt: r.createdAt
+    }));
+  };
+
+  const emitDrawGuessRoomsList = () => {
+    io.emit("drawguess_rooms_list", getSanitizedDrawGuessRoomsList());
+  };
+
+  const broadcastDrawGuessRoom = (roomId: string) => {
+    const room = drawGuessRooms.get(roomId);
+    if (!room) return;
+    
+    for (const p of room.players) {
+      const sId = p.socketId || onlineUsers.get(Number(p.id));
+      if (sId) {
+        io.to(sId).emit("drawguess_room_updated", getSanitizedDrawGuessRoom(room, p.id));
+      }
+    }
+  };
+
+  const startDrawGuessChoosing = (room: any) => {
+    if (!room) return;
+    clearTimeout(room.roundEndTimeout);
+    clearTimeout(room.chooseTimeout);
+    clearInterval(room.timerInterval);
+
+    if (room.players.length === 0) return;
+
+    if (room.currentDrawerIndex >= room.players.length) {
+      room.currentDrawerIndex = 0;
+    }
+
+    const drawer = room.players[room.currentDrawerIndex];
+    if (!drawer) return;
+
+    room.drawerId = drawer.id;
+    room.drawerUsername = drawer.username;
+    room.status = 'choosing';
+    room.players.forEach((p: any) => {
+      p.hasGuessed = false;
+      p.roundScore = 0;
+    });
+
+    // Pick 3 words
+    const randomEasy = DRAWGUESS_WORDS_EASY[Math.floor(Math.random() * DRAWGUESS_WORDS_EASY.length)];
+    const randomMed = DRAWGUESS_WORDS_MEDIUM[Math.floor(Math.random() * DRAWGUESS_WORDS_MEDIUM.length)];
+    const randomHard = DRAWGUESS_WORDS_HARD[Math.floor(Math.random() * DRAWGUESS_WORDS_HARD.length)];
+
+    room.wordChoices = [
+      { word: randomEasy, difficulty: 'easy', points: 100 },
+      { word: randomMed, difficulty: 'medium', points: 200 },
+      { word: randomHard, difficulty: 'hard', points: 350 }
+    ];
+
+    room.timer = 15;
+    broadcastDrawGuessRoom(room.id);
+
+    const sysMsg = {
+      id: 'dg_sys_' + Date.now() + '_' + Math.random(),
+      userId: 0,
+      username: 'Sistem',
+      text: `✏️ ${drawer.username} kelime seçiyor... (${room.timer}s)`,
+      isSystem: true,
+      createdAt: new Date().toISOString()
+    };
+    room.chatMessages.push(sysMsg);
+    io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
+
+    // If drawer doesn't choose within 15s, pick easy word automatically
+    room.chooseTimeout = setTimeout(() => {
+      if (drawGuessRooms.has(room.id) && room.status === 'choosing') {
+        const choice = room.wordChoices[0];
+        startDrawGuessDrawing(room, choice.word, choice.points);
+      }
+    }, 15000);
+  };
+
+  const startDrawGuessDrawing = (room: any, selectedWord: string, points: number) => {
+    if (!room) return;
+    clearTimeout(room.chooseTimeout);
+    clearInterval(room.timerInterval);
+
+    room.currentWord = selectedWord;
+    room.currentWordPoints = points || 150;
+    room.status = 'drawing';
+    room.roundDuration = 70;
+    room.timer = room.roundDuration;
+
+    io.to(`drawguess_${room.id}`).emit('drawguess_canvas_cleared');
+
+    const sysMsg = {
+      id: 'dg_sys_' + Date.now() + '_' + Math.random(),
+      userId: 0,
+      username: 'Sistem',
+      text: `🎨 ${room.drawerUsername} çizmeye başladı! Süre: ${room.roundDuration}s`,
+      isSystem: true,
+      createdAt: new Date().toISOString()
+    };
+    room.chatMessages.push(sysMsg);
+    io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
+
+    broadcastDrawGuessRoom(room.id);
+
+    room.timerInterval = setInterval(() => {
+      if (!drawGuessRooms.has(room.id) || room.status !== 'drawing') {
+        clearInterval(room.timerInterval);
+        return;
+      }
+
+      room.timer--;
+      io.to(`drawguess_${room.id}`).emit('drawguess_timer', { timer: room.timer });
+
+      if (room.timer <= 0) {
+        clearInterval(room.timerInterval);
+        endDrawGuessRound(room.id, "Süre Doldu!");
+      }
+    }, 1000);
+  };
+
+  const endDrawGuessRound = (roomId: string, reason: string) => {
+    const room = drawGuessRooms.get(roomId);
+    if (!room || room.status === 'round_end' || room.status === 'game_over') return;
+
+    clearInterval(room.timerInterval);
+    clearTimeout(room.chooseTimeout);
+
+    room.status = 'round_end';
+    room.revealedWord = room.currentWord;
+
+    const sysMsg = {
+      id: 'dg_sys_' + Date.now() + '_' + Math.random(),
+      userId: 0,
+      username: 'Sistem',
+      text: `🔔 Tur Sona Erdi! Doğru kelime: "${room.currentWord}" (${reason})`,
+      isSystem: true,
+      createdAt: new Date().toISOString()
+    };
+    room.chatMessages.push(sysMsg);
+    io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
+
+    broadcastDrawGuessRoom(roomId);
+
+    // Advance turn
+    if (room.currentDrawerIndex >= room.players.length - 1) {
+      room.currentRound++;
+      room.currentDrawerIndex = 0;
+      if (room.currentRound > room.totalRounds) {
+        endDrawGuessGame(roomId);
+        return;
+      }
+    } else {
+      room.currentDrawerIndex++;
+    }
+
+    room.roundEndTimeout = setTimeout(() => {
+      if (drawGuessRooms.has(roomId) && room.status === 'round_end') {
+        startDrawGuessChoosing(room);
+      }
+    }, 5500);
+  };
+
+  const endDrawGuessGame = (roomId: string) => {
+    const room = drawGuessRooms.get(roomId);
+    if (!room) return;
+
+    clearInterval(room.timerInterval);
+    clearTimeout(room.chooseTimeout);
+    clearTimeout(room.roundEndTimeout);
+
+    room.status = 'game_over';
+    const sorted = [...room.players].sort((a: any, b: any) => b.score - a.score);
+    const winner = sorted[0];
+    room.lastRoundWinner = winner ? winner.username : null;
+
+    const sysMsg = {
+      id: 'dg_sys_' + Date.now() + '_' + Math.random(),
+      userId: 0,
+      username: 'Sistem',
+      text: `🏆 Oyun Bitti! Şampiyon: ${winner ? winner.username : 'Bilinmiyor'} (${winner ? winner.score : 0} Puan)`,
+      isSystem: true,
+      createdAt: new Date().toISOString()
+    };
+    room.chatMessages.push(sysMsg);
+    io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
+
+    broadcastDrawGuessRoom(roomId);
+    emitDrawGuessRoomsList();
   };
 
   const executePlayUnoCard = (room: any, player: any, cardId: string, chosenColor?: UnoColor) => {
@@ -2928,8 +3208,30 @@ async function startServer() {
       }
     });
 
-    socket.on("voice_update_status", (data: { roomId: string; isMuted?: boolean; isSpeaking?: boolean; isDeafened?: boolean }) => {
-      const { roomId, isMuted, isSpeaking, isDeafened } = data || {};
+    socket.on("voice_force_camera_off", (data: { roomId: string; targetUserId: number }, cb?: (res: any) => void) => {
+      const { roomId, targetUserId } = data || {};
+      if (!roomId || !targetUserId) return cb && cb({ success: false, message: "Eksik parametre." });
+
+      const room = voiceRooms.get(roomId);
+      if (!room) return cb && cb({ success: false, message: "Oda bulunamadı." });
+      if (room.hostId !== user.id) return cb && cb({ success: false, message: "Bu işlem için sadece oda kurucusu yetkilidir." });
+
+      const target = room.participants.get(targetUserId);
+      if (target) {
+        target.isVideoOff = true;
+        const targetSocket = io.sockets.sockets.get(target.socketId);
+        if (targetSocket) {
+          targetSocket.emit("voice_force_camera_off_received", { roomId, reason: "Oda kurucusu kameranızı kapattı." });
+        }
+        broadcastVoiceRoom(roomId);
+        if (cb) cb({ success: true });
+      } else {
+        if (cb) cb({ success: false, message: "Kullanıcı bulunamadı." });
+      }
+    });
+
+    socket.on("voice_update_status", (data: { roomId: string; isMuted?: boolean; isSpeaking?: boolean; isDeafened?: boolean; isVideoOff?: boolean }) => {
+      const { roomId, isMuted, isSpeaking, isDeafened, isVideoOff } = data || {};
       if (!roomId) return;
       const room = voiceRooms.get(roomId);
       if (!room) return;
@@ -2939,12 +3241,14 @@ async function startServer() {
         if (typeof isMuted === 'boolean') p.isMuted = isMuted;
         if (typeof isSpeaking === 'boolean') p.isSpeaking = isSpeaking;
         if (typeof isDeafened === 'boolean') p.isDeafened = isDeafened;
+        if (typeof isVideoOff === 'boolean') p.isVideoOff = isVideoOff;
         io.to(`voice_${roomId}`).emit("voice_user_status_changed", {
           userId: user.id,
           socketId: socket.id,
           isMuted: p.isMuted,
           isSpeaking: p.isSpeaking,
-          isDeafened: p.isDeafened
+          isDeafened: p.isDeafened,
+          isVideoOff: p.isVideoOff
         });
       }
     });
@@ -2980,7 +3284,431 @@ async function startServer() {
       }
     });
 
+    // --- Draw & Guess (Çiz & Tahmin Et) Socket Handlers ---
+    socket.on("get_drawguess_rooms", (cb?: (rooms: any[]) => void) => {
+      const list = getSanitizedDrawGuessRoomsList();
+      if (cb) cb(list);
+      else socket.emit("drawguess_rooms_list", list);
+    });
+
+    socket.on("get_my_drawguess_room", (cb?: (data: any) => void) => {
+      let targetRoomId = socket.data.currentDrawGuessRoom;
+      if (!targetRoomId) {
+        for (const [id, r] of drawGuessRooms.entries()) {
+          if (r.players.some((p: any) => p.id === user.id)) {
+            targetRoomId = id;
+            break;
+          }
+        }
+      }
+      if (targetRoomId) {
+        const room = drawGuessRooms.get(targetRoomId);
+        if (room) {
+          socket.data.currentDrawGuessRoom = targetRoomId;
+          socket.join(`drawguess_${targetRoomId}`);
+          if (cb) cb({ success: true, room: getSanitizedDrawGuessRoom(room, user.id) });
+          return;
+        }
+      }
+      if (cb) cb({ success: false });
+    });
+
+    socket.on("create_drawguess_room", (data: { name: string; maxPlayers?: number; totalRounds?: number }, cb?: (res: any) => void) => {
+      const { name, maxPlayers = 6, totalRounds = 3 } = data || {};
+      if (!name || !name.trim()) {
+        return cb && cb({ success: false, message: "Oda adı geçerli değil." });
+      }
+
+      const roomId = `dg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const creatorPlayer = {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        color: user.color,
+        score: 0,
+        roundScore: 0,
+        hasGuessed: false,
+        isDrawing: false,
+        isHost: true,
+        socketId: socket.id
+      };
+
+      const newRoom = {
+        id: roomId,
+        name: name.trim().substring(0, 30),
+        hostId: user.id,
+        hostUsername: user.username,
+        maxPlayers: Math.max(2, Math.min(10, Number(maxPlayers) || 6)),
+        totalRounds: Math.max(2, Math.min(5, Number(totalRounds) || 3)),
+        currentRound: 1,
+        currentDrawerIndex: 0,
+        drawerId: null,
+        drawerUsername: null,
+        status: 'lobby',
+        currentWord: '',
+        wordChoices: [],
+        timer: 0,
+        roundDuration: 70,
+        players: [creatorPlayer],
+        chatMessages: [
+          {
+            id: 'dg_init_' + Date.now(),
+            userId: 0,
+            username: 'Sistem',
+            text: `🎨 ${user.username} odayı kurdu. Hoş geldiniz!`,
+            isSystem: true,
+            createdAt: new Date().toISOString()
+          }
+        ],
+        createdAt: new Date().toISOString()
+      };
+
+      drawGuessRooms.set(roomId, newRoom);
+      socket.data.currentDrawGuessRoom = roomId;
+      socket.join(`drawguess_${roomId}`);
+
+      emitDrawGuessRoomsList();
+      if (cb) cb({ success: true, room: getSanitizedDrawGuessRoom(newRoom, user.id) });
+    });
+
+    socket.on("join_drawguess_room", (data: { roomId: string }, cb?: (res: any) => void) => {
+      const { roomId } = data || {};
+      if (!roomId) return cb && cb({ success: false, message: "Oda kimliği belirtilmedi." });
+
+      const room = drawGuessRooms.get(roomId);
+      if (!room) return cb && cb({ success: false, message: "Oda bulunamadı." });
+
+      if (room.players.length >= room.maxPlayers) {
+        return cb && cb({ success: false, message: "Oda dolu." });
+      }
+
+      const existingIdx = room.players.findIndex((p: any) => p.id === user.id);
+      if (existingIdx !== -1) {
+        room.players[existingIdx].socketId = socket.id;
+      } else {
+        room.players.push({
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          color: user.color,
+          score: 0,
+          roundScore: 0,
+          hasGuessed: false,
+          isDrawing: false,
+          isHost: room.hostId === user.id,
+          socketId: socket.id
+        });
+
+        const joinMsg = {
+          id: 'dg_join_' + Date.now() + '_' + Math.random(),
+          userId: 0,
+          username: 'Sistem',
+          text: `👋 ${user.username} odaya katıldı.`,
+          isSystem: true,
+          createdAt: new Date().toISOString()
+        };
+        room.chatMessages.push(joinMsg);
+        io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", joinMsg);
+      }
+
+      socket.data.currentDrawGuessRoom = roomId;
+      socket.join(`drawguess_${roomId}`);
+
+      broadcastDrawGuessRoom(roomId);
+      emitDrawGuessRoomsList();
+
+      socket.emit("drawguess_chat_history", room.chatMessages);
+
+      if (cb) cb({ success: true, room: getSanitizedDrawGuessRoom(room, user.id) });
+    });
+
+    socket.on("leave_drawguess_room", (cb?: (res: any) => void) => {
+      const roomId = socket.data.currentDrawGuessRoom;
+      if (roomId) {
+        socket.leave(`drawguess_${roomId}`);
+        const room = drawGuessRooms.get(roomId);
+        if (room) {
+          const wasHost = room.hostId === user.id;
+          const wasDrawer = room.drawerId === user.id;
+          room.players = room.players.filter((p: any) => p.id !== user.id);
+
+          if (room.players.length === 0) {
+            clearInterval(room.timerInterval);
+            clearTimeout(room.chooseTimeout);
+            clearTimeout(room.roundEndTimeout);
+            drawGuessRooms.delete(roomId);
+          } else {
+            if (wasHost) {
+              const nextHost = room.players[0];
+              room.hostId = nextHost.id;
+              room.hostUsername = nextHost.username;
+              nextHost.isHost = true;
+              const hostMsg = {
+                id: 'dg_host_' + Date.now(),
+                userId: 0,
+                username: 'Sistem',
+                text: `👑 Oda kurucusu ayrıldı. Yeni kurucu: ${nextHost.username}`,
+                isSystem: true,
+                createdAt: new Date().toISOString()
+              };
+              room.chatMessages.push(hostMsg);
+              io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", hostMsg);
+            }
+
+            const leaveMsg = {
+              id: 'dg_leave_' + Date.now(),
+              userId: 0,
+              username: 'Sistem',
+              text: `🚪 ${user.username} odadan ayrıldı.`,
+              isSystem: true,
+              createdAt: new Date().toISOString()
+            };
+            room.chatMessages.push(leaveMsg);
+            io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", leaveMsg);
+
+            if (room.status === 'drawing' || room.status === 'choosing') {
+              if (room.players.length < 2) {
+                room.status = 'lobby';
+                clearInterval(room.timerInterval);
+                clearTimeout(room.chooseTimeout);
+                clearTimeout(room.roundEndTimeout);
+                const cancelMsg = {
+                  id: 'dg_cancel_' + Date.now(),
+                  userId: 0,
+                  username: 'Sistem',
+                  text: `⚠️ Yeterli oyuncu kalmadığı için oyun lobiye döndürüldü.`,
+                  isSystem: true,
+                  createdAt: new Date().toISOString()
+                };
+                room.chatMessages.push(cancelMsg);
+                io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", cancelMsg);
+              } else if (wasDrawer) {
+                endDrawGuessRound(roomId, "Çizen oyuncu ayrıldı.");
+              }
+            }
+
+            broadcastDrawGuessRoom(roomId);
+          }
+          emitDrawGuessRoomsList();
+        }
+        socket.data.currentDrawGuessRoom = null;
+      }
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("start_drawguess_game", (data: { roomId: string }, cb?: (res: any) => void) => {
+      const { roomId } = data || {};
+      if (!roomId) return;
+      const room = drawGuessRooms.get(roomId);
+      if (!room) return;
+      if (room.hostId !== user.id) {
+        return socket.emit("drawguess_error", "Yalnızca oda kurucusu oyunu başlatabilir.");
+      }
+      if (room.players.length < 2) {
+        return socket.emit("drawguess_error", "Oyunu başlatmak için en az 2 oyuncu gereklidir.");
+      }
+
+      room.currentRound = 1;
+      room.currentDrawerIndex = 0;
+      room.players.forEach((p: any) => {
+        p.score = 0;
+        p.roundScore = 0;
+        p.hasGuessed = false;
+      });
+
+      const startMsg = {
+        id: 'dg_start_' + Date.now(),
+        userId: 0,
+        username: 'Sistem',
+        text: `🚀 Çiz & Tahmin Et başladı! Toplam ${room.totalRounds} tur oynanacak.`,
+        isSystem: true,
+        createdAt: new Date().toISOString()
+      };
+      room.chatMessages.push(startMsg);
+      io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", startMsg);
+
+      startDrawGuessChoosing(room);
+      emitDrawGuessRoomsList();
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("drawguess_kick_player", (data: { roomId: string; targetUserId: number }, cb?: (res: any) => void) => {
+      const { roomId, targetUserId } = data || {};
+      if (!roomId || !targetUserId) return;
+      const room = drawGuessRooms.get(roomId);
+      if (!room || room.hostId !== user.id || targetUserId === user.id) return;
+
+      const targetIdx = room.players.findIndex((p: any) => p.id === targetUserId);
+      if (targetIdx === -1) return;
+
+      const targetPlayer = room.players[targetIdx];
+      const targetSocket = io.sockets.sockets.get(targetPlayer.socketId);
+      if (targetSocket) {
+        targetSocket.emit("drawguess_kicked", { reason: "Oda kurucusu tarafından odadan çıkarıldınız." });
+        targetSocket.leave(`drawguess_${roomId}`);
+        targetSocket.data.currentDrawGuessRoom = null;
+      }
+
+      const wasDrawer = room.drawerId === targetUserId;
+      room.players.splice(targetIdx, 1);
+
+      const kickMsg = {
+        id: 'dg_kick_' + Date.now(),
+        userId: 0,
+        username: 'Sistem',
+        text: `🚫 ${targetPlayer.username} kurucu tarafından odadan atıldı.`,
+        isSystem: true,
+        createdAt: new Date().toISOString()
+      };
+      room.chatMessages.push(kickMsg);
+      io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", kickMsg);
+
+      if (room.players.length < 2 && (room.status === 'drawing' || room.status === 'choosing')) {
+        room.status = 'lobby';
+        clearInterval(room.timerInterval);
+        clearTimeout(room.chooseTimeout);
+        clearTimeout(room.roundEndTimeout);
+      } else if (wasDrawer && (room.status === 'drawing' || room.status === 'choosing')) {
+        endDrawGuessRound(roomId, "Çizen oyuncu odadan atıldı.");
+      }
+
+      broadcastDrawGuessRoom(roomId);
+      emitDrawGuessRoomsList();
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("drawguess_select_word", (data: { roomId: string; word: string }) => {
+      const { roomId, word } = data || {};
+      if (!roomId || !word) return;
+      const room = drawGuessRooms.get(roomId);
+      if (!room || room.status !== 'choosing' || room.drawerId !== user.id) return;
+
+      const choice = room.wordChoices?.find((c: any) => c.word === word) || { word, points: 150 };
+      startDrawGuessDrawing(room, choice.word, choice.points);
+    });
+
+    socket.on("drawguess_draw_line", (data: { roomId: string; line: any }) => {
+      const { roomId, line } = data || {};
+      if (!roomId || !line) return;
+      const room = drawGuessRooms.get(roomId);
+      if (!room || room.status !== 'drawing' || room.drawerId !== user.id) return;
+
+      socket.to(`drawguess_${roomId}`).emit("drawguess_draw_line", line);
+    });
+
+    socket.on("drawguess_clear_canvas", (data: { roomId: string }) => {
+      const { roomId } = data || {};
+      if (!roomId) return;
+      const room = drawGuessRooms.get(roomId);
+      if (!room || room.status !== 'drawing' || room.drawerId !== user.id) return;
+
+      socket.to(`drawguess_${roomId}`).emit("drawguess_canvas_cleared");
+    });
+
+    socket.on("drawguess_chat_message", (data: { roomId: string; text: string }) => {
+      const { roomId, text } = data || {};
+      if (!roomId || !text || !text.trim()) return;
+
+      const room = drawGuessRooms.get(roomId);
+      if (!room) return;
+
+      const trimmedText = text.trim();
+      const player = room.players.find((p: any) => p.id === user.id);
+      if (!player) return;
+
+      // Check if active guessing turn
+      const isDrawer = room.drawerId === user.id;
+      const isDrawingStatus = room.status === 'drawing';
+
+      if (isDrawingStatus && !isDrawer && !player.hasGuessed) {
+        if (normalizeTrText(trimmedText) === normalizeTrText(room.currentWord)) {
+          player.hasGuessed = true;
+          const timeRatio = Math.max(0.15, room.timer / room.roundDuration);
+          const guesserPoints = Math.round((room.currentWordPoints || 150) * timeRatio) + 40;
+          player.score += guesserPoints;
+          player.roundScore += guesserPoints;
+
+          const drawer = room.players.find((p: any) => p.id === room.drawerId);
+          if (drawer) {
+            const drawerBonus = Math.round(guesserPoints * 0.35);
+            drawer.score += drawerBonus;
+            drawer.roundScore += drawerBonus;
+          }
+
+          const correctMsg = {
+            id: 'dg_cor_' + Date.now() + '_' + Math.random(),
+            userId: user.id,
+            username: user.username,
+            text: `🎉 ${user.username} kelimeyi doğru bildi! (+${guesserPoints} Puan)`,
+            isSystem: true,
+            isCorrect: true,
+            createdAt: new Date().toISOString()
+          };
+          room.chatMessages.push(correctMsg);
+          io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", correctMsg);
+
+          broadcastDrawGuessRoom(roomId);
+
+          // Check if all non-drawers guessed
+          const nonDrawers = room.players.filter((p: any) => p.id !== room.drawerId);
+          if (nonDrawers.length > 0 && nonDrawers.every((p: any) => p.hasGuessed)) {
+            endDrawGuessRound(roomId, "Tüm oyuncular bildi!");
+          }
+          return;
+        }
+      }
+
+      // Regular chat message
+      const msg = {
+        id: 'dg_msg_' + Date.now() + '_' + Math.random(),
+        userId: user.id,
+        username: user.username,
+        text: trimmedText.substring(0, 150),
+        isSystem: false,
+        isCorrect: false,
+        createdAt: new Date().toISOString()
+      };
+      room.chatMessages.push(msg);
+      if (room.chatMessages.length > 120) room.chatMessages.shift();
+      io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", msg);
+    });
+
     socket.on("disconnect", async () => {
+      const drawGuessRoomId = socket.data.currentDrawGuessRoom;
+      if (drawGuessRoomId) {
+        const room = drawGuessRooms.get(drawGuessRoomId);
+        if (room) {
+          const wasHost = room.hostId === user.id;
+          const wasDrawer = room.drawerId === user.id;
+          room.players = room.players.filter((p: any) => p.id !== user.id);
+
+          if (room.players.length === 0) {
+            clearInterval(room.timerInterval);
+            clearTimeout(room.chooseTimeout);
+            clearTimeout(room.roundEndTimeout);
+            drawGuessRooms.delete(drawGuessRoomId);
+          } else {
+            if (wasHost) {
+              const nextHost = room.players[0];
+              room.hostId = nextHost.id;
+              room.hostUsername = nextHost.username;
+              nextHost.isHost = true;
+            }
+            if (room.status === 'drawing' || room.status === 'choosing') {
+              if (room.players.length < 2) {
+                room.status = 'lobby';
+                clearInterval(room.timerInterval);
+                clearTimeout(room.chooseTimeout);
+                clearTimeout(room.roundEndTimeout);
+              } else if (wasDrawer) {
+                endDrawGuessRound(drawGuessRoomId, "Çizen oyuncu ayrıldı.");
+              }
+            }
+            broadcastDrawGuessRoom(drawGuessRoomId);
+          }
+          emitDrawGuessRoomsList();
+        }
+      }
       const voiceRoomId = socket.data.currentVoiceRoom;
       if (voiceRoomId) {
         const vRoom = voiceRooms.get(voiceRoomId);

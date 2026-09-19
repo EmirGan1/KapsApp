@@ -149,6 +149,7 @@ export interface VoiceParticipant {
   isMuted: boolean;
   isSpeaking: boolean;
   isDeafened?: boolean;
+  isVideoOff?: boolean;
   joinedAt: string;
 }
 
@@ -159,5 +160,62 @@ export interface VoiceRoom {
   hostUsername: string;
   maxParticipants: number;
   participants: VoiceParticipant[];
+  createdAt: string;
+}
+
+export interface DrawGuessPlayer {
+  id: number;
+  username: string;
+  avatar: string | null;
+  color?: string;
+  score: number;
+  roundScore: number;
+  hasGuessed: boolean;
+  isDrawing: boolean;
+  isHost: boolean;
+  socketId: string;
+}
+
+export interface DrawGuessRoom {
+  id: string;
+  name: string;
+  hostId: number;
+  hostUsername: string;
+  maxPlayers: number;
+  totalRounds: number;
+  currentRound: number;
+  currentDrawerIndex: number;
+  drawerId: number | null;
+  drawerUsername: string | null;
+  status: 'lobby' | 'choosing' | 'drawing' | 'round_end' | 'game_over';
+  currentWord?: string; // only revealed to drawer or at round end
+  wordMask?: string; // e.g. "_ _ _ _ _"
+  wordLength?: number;
+  wordChoices?: { word: string; difficulty: 'easy' | 'medium' | 'hard'; points: number }[];
+  timer: number;
+  roundDuration: number;
+  players: DrawGuessPlayer[];
+  lastRoundWinner?: string | null;
+  revealedWord?: string | null;
+  createdAt: string;
+}
+
+export interface DrawLineData {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  color: string;
+  size: number;
+  isEraser?: boolean;
+}
+
+export interface DrawGuessChatMessage {
+  id: string;
+  userId: number;
+  username: string;
+  text: string;
+  isSystem?: boolean;
+  isCorrect?: boolean;
   createdAt: string;
 }
