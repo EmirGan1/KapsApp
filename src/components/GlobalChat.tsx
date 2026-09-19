@@ -52,9 +52,8 @@ export default function GlobalChat({
       };
       
       const onMessageDeleted = (data: any) => {
-        if (data.type === "global") {
-          setMessages((prev) => prev.filter(m => String(m.id) !== String(data.message_id)));
-        }
+        const deletedId = String(data?.message_id || data?.id || data);
+        setMessages((prev) => prev.filter(m => String(m.id) !== deletedId));
       };
 
       const onCleared = () => setMessages([]);
@@ -220,6 +219,21 @@ export default function GlobalChat({
     });
   };
 
+  const handleDeleteMessage = (messageId: number) => {
+    if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      if (socket) {
+        socket.emit("delete_message", { message_id: messageId, id: messageId, type: "global" }, (res: any) => {
+          if (res?.error) {
+            alert(res.error);
+            socket.emit("get_global_messages", setMessages);
+          }
+        });
+        socket.emit("delete_global_message", { message_id: messageId, id: messageId });
+      }
+    }
+  };
+
   const sortedUsers = [...users].sort((a, b) => {
     const aOnline = onlineUsers.includes(a.id);
     const bOnline = onlineUsers.includes(b.id);
@@ -285,10 +299,25 @@ export default function GlobalChat({
                 className={`flex flex-col ${isMine ? "items-end" : "items-start"} w-full min-w-0`}
               >
                 <div
-                  className={`flex gap-1.5 sm:gap-2 max-w-[92%] sm:max-w-[85%] md:max-w-[75%] min-w-0 group relative ${
+                  className={`flex items-center gap-1.5 sm:gap-2 max-w-[95%] sm:max-w-[85%] md:max-w-[75%] min-w-0 group relative ${
                     isMine ? "flex-row-reverse" : "flex-row"
                   }`}
                 >
+                  {/* Dedicated Delete (Çöp Kutusu) Button right beside message bubble */}
+                  {canDelete && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteMessage(msg.id);
+                      }}
+                      className="shrink-0 p-2 text-red-500 hover:text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-full transition-all cursor-pointer border border-red-200 dark:border-red-900/40 bg-white dark:bg-slate-900 shadow-sm self-center active:scale-95"
+                      title={isEmirgan && !isMine ? "Yönetici Olarak Sil (emirgan)" : "Mesajı Sil"}
+                    >
+                      <Trash2 size={16} className="shrink-0" />
+                    </button>
+                  )}
+
                   <div
                     className={`relative rounded-2xl p-2.5 sm:p-3.5 shadow-sm transition-all min-w-0 max-w-full overflow-hidden [overflow-wrap:anywhere] break-words whitespace-normal select-text ${
                       isMine
@@ -486,19 +515,14 @@ export default function GlobalChat({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
-                              socket.emit("delete_message", { 
-                                message_id: msg.id, 
-                                type: "global"
-                              });
-                            }
+                            handleDeleteMessage(msg.id);
                           }}
                           className={`px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
                             isMine 
                               ? "text-red-200 hover:text-white hover:bg-red-700/60 active:bg-red-800" 
                               : "text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 active:bg-red-100"
                           }`}
-                          title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}
+                          title={isEmirgan && !isMine ? "Yönetici Olarak Sil (emirgan)" : "Sil"}
                         >
                           <Trash2 size={13} className="shrink-0" />
                           <span>Sil</span>

@@ -246,7 +246,7 @@ export default function App() {
         
         {/* Persistently mounted Games tab to preserve room and game state when navigating */}
         <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'games' ? 'flex' : 'hidden'}`}>
-          <Games socket={socket} currentUserId={currentUserId} username={username} avatar={avatar} color={color} />
+          <Games socket={socket} currentUserId={currentUserId} username={username} avatar={avatar} color={color} onUserClick={handleUserClick} />
         </div>
       </div>
 

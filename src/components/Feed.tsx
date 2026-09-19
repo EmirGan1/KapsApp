@@ -41,10 +41,17 @@ export default function Feed({
     loadData();
     socket.on("feed_updated", loadData);
     socket.on("stories_updated", loadData);
+    
+    const onPostDeleted = (data: any) => {
+      const deletedId = Number(data?.postId || data?.id || data);
+      setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+    };
+    socket.on("post_deleted", onPostDeleted);
 
     return () => {
       socket.off("feed_updated", loadData);
       socket.off("stories_updated", loadData);
+      socket.off("post_deleted", onPostDeleted);
     };
   }, [socket, activeSubject]);
 
@@ -143,6 +150,34 @@ export default function Feed({
 
   const handleLike = (postId: number) => {
     socket?.emit("like_post", postId);
+  };
+
+  const handleDeletePost = async (postId: number) => {
+    if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
+      // Optimistically remove from state immediately
+      setPosts((prev) => prev.filter((p) => p.id !== postId));
+
+      if (socket) {
+        socket.emit("delete_post", postId, (res: any) => {
+          if (res?.error) {
+            alert(res.error);
+            socket.emit("get_feed", activeSubject || null, (data: Post[]) => setPosts(data));
+          }
+        });
+      }
+
+      const token = localStorage.getItem("token");
+      if (token) {
+        try {
+          await fetch(`/api/posts/${postId}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch (e) {
+          // Socket handles the deletion
+        }
+      }
+    }
   };
 
   const toggleComments = (postId: number) => {
@@ -349,17 +384,16 @@ export default function Feed({
                     })}
                   </p>
                 </div>
-                {(post.user_id === currentUserId || currentUsername?.trim().toLowerCase() === 'emirgan') && (
+                {/* Gönderi Silme Butonu: Sadece gönderinin sahibi VEYA currentUser.username === 'emirgan' */}
+                {(Number(post.user_id) === Number(currentUserId) || currentUsername?.trim().toLowerCase() === 'emirgan') && (
                   <button
-                    onClick={() => {
-                      if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
-                        socket?.emit("delete_post", post.id);
-                      }
-                    }}
-                    className="p-2 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors cursor-pointer"
-                    title={currentUsername?.trim().toLowerCase() === 'emirgan' && post.user_id !== currentUserId ? "Yönetici Olarak Sil" : "Gönderiyi Sil"}
+                    type="button"
+                    onClick={() => handleDeletePost(post.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-900/50 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+                    title={currentUsername?.trim().toLowerCase() === 'emirgan' && Number(post.user_id) !== Number(currentUserId) ? "Yönetici Olarak Sil (emirgan)" : "Gönderiyi Sil"}
                   >
-                    <Trash2 size={18} />
+                    <Trash2 size={15} className="shrink-0" />
+                    <span>Gönderiyi Sil</span>
                   </button>
                 )}
               </div>

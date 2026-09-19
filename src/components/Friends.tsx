@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
 import { User, Friend } from "../types";
-import { Search, UserPlus, Check, Clock, UserRound } from "lucide-react";
+import { Search, UserPlus, Check, Clock, UserRound, UserX, AlertTriangle } from "lucide-react";
 
 export default function Friends({ 
   socket, 
@@ -17,6 +17,11 @@ export default function Friends({
   const [friends, setFriends] = useState<Friend[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<User[]>([]);
+
+  // Admin delete modal
+  const [userToDelete, setUserToDelete] = useState<{ id: number; username: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const isEmirgan = currentUsername?.trim().toLowerCase() === "emirgan";
 
   useEffect(() => {
     if (!socket) return;
@@ -56,6 +61,22 @@ export default function Friends({
     });
   };
 
+  const handleConfirmDeleteUser = () => {
+    if (!userToDelete || !socket) return;
+    setIsDeleting(true);
+    socket.emit("admin_delete_user", { userId: userToDelete.id }, (res: any) => {
+      setIsDeleting(false);
+      if (res?.error) {
+        alert(res.error);
+      } else {
+        alert("Kullanıcı başarıyla silindi.");
+        setSearchResults(prev => prev.filter(u => u.id !== userToDelete.id));
+        setFriends(prev => prev.filter(f => f.id !== userToDelete.id));
+        setUserToDelete(null);
+      }
+    });
+  };
+
   const pendingRequests = friends.filter(f => f.status === 0 && !f.is_sender);
   const sentRequests = friends.filter(f => f.status === 0 && f.is_sender);
   const acceptedFriends = friends.filter(f => f.status === 1);
@@ -88,15 +109,26 @@ export default function Friends({
                       {user.avatar ? <img src={user.avatar} className="w-10 h-10 rounded-full object-cover" /> : <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center"><UserRound size={20} className="text-slate-400" /></div>}
                       <span className="font-medium text-slate-700">{user.username}</span>
                     </div>
-                    {isFriend ? (
-                      <span className="text-xs font-medium text-slate-400 px-3 py-1 bg-slate-100 rounded-full">
-                        {isFriend.status === 1 ? 'Arkadaş' : 'İstek Gönderildi'}
-                      </span>
-                    ) : (
-                      <button onClick={() => handleAddFriend(user.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors">
-                        <UserPlus size={20} />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {isFriend ? (
+                        <span className="text-xs font-medium text-slate-400 px-3 py-1 bg-slate-100 rounded-full">
+                          {isFriend.status === 1 ? 'Arkadaş' : 'İstek Gönderildi'}
+                        </span>
+                      ) : (
+                        <button onClick={() => handleAddFriend(user.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors">
+                          <UserPlus size={20} />
+                        </button>
+                      )}
+                      {isEmirgan && (
+                        <button
+                          onClick={() => setUserToDelete({ id: user.id, username: user.username })}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-full transition-colors cursor-pointer"
+                          title="Kullanıcıyı Sil / Banla (Yönetici)"
+                        >
+                          <UserX size={18} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )
               })}
@@ -136,15 +168,29 @@ export default function Friends({
               {acceptedFriends.map(friend => {
                 const isOnline = onlineUsers.includes(friend.id);
                 return (
-                  <div key={friend.id} className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100 hover:border-slate-300 transition-all cursor-pointer" onClick={() => onUserClick && onUserClick(friend.id)}>
-                    <div className="relative">
-                      {friend.avatar ? <img src={friend.avatar} className="w-12 h-12 rounded-full object-cover" /> : <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center"><UserRound size={24} className="text-slate-400" /></div>}
-                      {isOnline && <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full"></div>}
+                  <div key={friend.id} className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-slate-100 hover:border-slate-300 transition-all">
+                    <div className="flex items-center gap-4 cursor-pointer flex-1 min-w-0" onClick={() => onUserClick && onUserClick(friend.id)}>
+                      <div className="relative shrink-0">
+                        {friend.avatar ? <img src={friend.avatar} className="w-12 h-12 rounded-full object-cover" /> : <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center"><UserRound size={24} className="text-slate-400" /></div>}
+                        {isOnline && <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full"></div>}
+                      </div>
+                      <div className="truncate">
+                        <h3 className="font-semibold text-slate-800 hover:text-blue-600 transition-colors truncate">{friend.username}</h3>
+                        <p className="text-xs text-slate-500">{isOnline ? "Çevrimiçi" : "Çevrimdışı"}</p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-semibold text-slate-800 hover:text-blue-600 transition-colors">{friend.username}</h3>
-                      <p className="text-xs text-slate-500">{isOnline ? "Çevrimiçi" : "Çevrimdışı"}</p>
-                    </div>
+                    {isEmirgan && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setUserToDelete({ id: friend.id, username: friend.username });
+                        }}
+                        className="p-2 text-red-500 hover:bg-red-50 rounded-xl transition-colors cursor-pointer shrink-0 ml-2"
+                        title="Kullanıcıyı Sil / Banla (Yönetici)"
+                      >
+                        <UserX size={18} />
+                      </button>
+                    )}
                   </div>
                 )
               })}
@@ -153,6 +199,46 @@ export default function Friends({
         </div>
 
       </div>
+
+      {/* Admin Delete User Modal in Friends */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="p-3 bg-red-100 rounded-xl shrink-0">
+                <AlertTriangle size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Kullanıcıyı Sil / Banla</h3>
+                <p className="text-xs text-slate-500">Yönetici Yetkisi (emirgan)</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-600 leading-relaxed">
+              <strong className="text-slate-900 font-bold">"{userToDelete.username}"</strong> adlı kullanıcının hesabını ve tüm verilerini kalıcı olarak silmek üzeresiniz. Bu işlem geri alınamaz!
+            </p>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setUserToDelete(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDeleteUser}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition-colors cursor-pointer shadow-md shadow-red-600/20"
+              >
+                {isDeleting ? "Siliniyor..." : "Evet, Kalıcı Olarak Sil"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
-import { Camera, LogOut, Heart, MessageCircle, ArrowLeft, Maximize2, Lock, X, Trash2 } from "lucide-react";
+import { Camera, LogOut, Heart, MessageCircle, ArrowLeft, Maximize2, Lock, X, Trash2, UserX, AlertTriangle } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { MediaModalData } from "../types";
@@ -38,7 +38,13 @@ export default function Profile({
   const [passwordError, setPasswordError] = useState("");
   const [passwordSuccess, setPasswordSuccess] = useState(false);
 
+  // Admin User Deletion State
+  const [showDeleteUserModal, setShowDeleteUserModal] = useState(false);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [deleteUserError, setDeleteUserError] = useState("");
+
   const isMe = currentUserId === viewingUserId;
+  const isEmirgan = currentUsername?.trim().toLowerCase() === "emirgan";
 
   useEffect(() => {
     if (!socket) return;
@@ -70,6 +76,11 @@ export default function Profile({
     loadProfile();
     loadPosts();
     socket.on("feed_updated", loadPosts);
+    const onPostDeleted = (data: any) => {
+      const deletedId = Number(data?.postId || data?.id || data);
+      setUserPosts((prev) => prev.filter((p) => p.id !== deletedId));
+    };
+    socket.on("post_deleted", onPostDeleted);
     socket.on("profile_updated", (targetId) => {
       if (targetId === viewingUserId) {
         loadProfile();
@@ -78,6 +89,7 @@ export default function Profile({
 
     return () => {
       socket.off("feed_updated", loadPosts);
+      socket.off("post_deleted", onPostDeleted);
       socket.off("profile_updated");
     };
   }, [socket, currentUserId, viewingUserId, currentUsername, currentAvatar, currentColor, isMe]);
@@ -127,6 +139,31 @@ export default function Profile({
         socket?.emit("add_comment", { postId: post.id, content: text });
       },
     });
+  };
+
+  const handleDeletePost = async (postId: number) => {
+    if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
+      setUserPosts((prev) => prev.filter((p) => p.id !== postId));
+      if (socket) {
+        socket.emit("delete_post", postId, (res: any) => {
+          if (res?.error) {
+            alert(res.error);
+            socket.emit("get_user_posts", viewingUserId, (posts: any[]) => setUserPosts(posts));
+          }
+        });
+      }
+      const token = localStorage.getItem("token");
+      if (token) {
+        try {
+          await fetch(`/api/posts/${postId}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch (e) {
+          // Handled via socket
+        }
+      }
+    }
   };
 
   const handleChangePassword = (e: React.FormEvent) => {
@@ -195,10 +232,10 @@ export default function Profile({
         </div>
 
         {!isMe && (
-          <div className="flex gap-2 w-full md:w-auto mb-6">
+          <div className="flex flex-wrap items-center justify-center gap-2 w-full md:w-auto mb-6">
             <button
               onClick={() => socket?.emit("toggle_follow", userProfile.id)}
-              className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl font-semibold transition-colors ${
+              className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl font-semibold transition-colors cursor-pointer ${
                 userProfile.isFollowing
                   ? "bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200"
                   : "bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20"
@@ -206,6 +243,20 @@ export default function Profile({
             >
               {userProfile.isFollowing ? "Takibi Bırak" : "Takip Et"}
             </button>
+
+            {isEmirgan && (
+              <button
+                onClick={() => {
+                  setDeleteUserError("");
+                  setShowDeleteUserModal(true);
+                }}
+                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-md shadow-red-600/20 transition-all cursor-pointer"
+                title="Kullanıcıyı Sil / Kalıcı Olarak Banla (Yönetici)"
+              >
+                <UserX size={18} />
+                <span>Kullanıcıyı Sil / Banla</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -267,15 +318,13 @@ export default function Profile({
                 </div>
                 {(isMe || currentUsername?.trim().toLowerCase() === 'emirgan') && (
                   <button
-                    onClick={() => {
-                      if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
-                        socket?.emit("delete_post", post.id);
-                      }
-                    }}
-                    className="p-2 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors cursor-pointer"
-                    title={currentUsername?.trim().toLowerCase() === 'emirgan' && !isMe ? "Yönetici Olarak Sil" : "Gönderiyi Sil"}
+                    type="button"
+                    onClick={() => handleDeletePost(post.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-900/50 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+                    title={currentUsername?.trim().toLowerCase() === 'emirgan' && !isMe ? "Yönetici Olarak Sil (emirgan)" : "Gönderiyi Sil"}
                   >
-                    <Trash2 size={18} />
+                    <Trash2 size={15} className="shrink-0" />
+                    <span>Gönderiyi Sil</span>
                   </button>
                 )}
               </div>
@@ -418,6 +467,69 @@ export default function Profile({
                 </button>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Admin Delete User Confirmation Modal */}
+      {showDeleteUserModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center gap-3 text-red-600 dark:text-red-500">
+              <div className="p-3 bg-red-100 dark:bg-red-950/60 rounded-xl shrink-0">
+                <AlertTriangle size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">Kullanıcıyı Sil / Banla</h3>
+                <p className="text-xs text-slate-500">Yönetici Yetkisi (emirgan)</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              <strong className="text-slate-900 dark:text-slate-100 font-bold">"{userProfile?.username}"</strong> adlı kullanıcının hesabını ve bu hesaba ait tüm verileri (gönderiler, mesajlar, arkadaşlıklar, yorumlar vb.) veritabanından kalıcı olarak silmek üzeresiniz.
+            </p>
+
+            <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-xs text-red-700 dark:text-red-300">
+              ⚠️ Bu işlem geri alınamaz! Kullanıcı sisteme tekrar giriş yapamaz ve oturumu derhal sonlandırılır.
+            </div>
+
+            {deleteUserError && (
+              <p className="text-xs text-red-600 font-semibold">{deleteUserError}</p>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={() => setShowDeleteUserModal(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={() => {
+                  setIsDeletingUser(true);
+                  setDeleteUserError("");
+                  if (socket) {
+                    socket.emit("admin_delete_user", { userId: userProfile.id }, (res: any) => {
+                      setIsDeletingUser(false);
+                      if (res?.error) {
+                        setDeleteUserError(res.error);
+                      } else {
+                        setShowDeleteUserModal(false);
+                        alert("Kullanıcı başarıyla silindi.");
+                        onUserClick(currentUserId);
+                      }
+                    });
+                  }
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition-colors cursor-pointer shadow-md shadow-red-600/20"
+              >
+                {isDeletingUser ? "Siliniyor..." : "Evet, Kalıcı Olarak Sil"}
+              </button>
+            </div>
           </div>
         </div>
       )}
