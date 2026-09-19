@@ -362,12 +362,14 @@ export default function LiveMap({
     socket.emit("request_all_locations");
     socket.emit("get_user_locations", (locations: UserLiveLocation[]) => {
       if (Array.isArray(locations)) {
+        console.log("Soketten gelen kullanıcılar (initial):", locations);
         setUsersLocations(locations);
       }
     });
 
     const handleUpdateUserLocations = (locations: UserLiveLocation[]) => {
       if (Array.isArray(locations)) {
+        console.log("Soketten gelen kullanıcılar:", locations);
         setUsersLocations(locations);
       }
     };

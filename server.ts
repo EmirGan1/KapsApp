@@ -1422,12 +1422,7 @@ async function startServer() {
     // Real-time Geolocation Sync (RAM ONLY - Jitter applied for 5651 & privacy protection)
     socket.on("share_location", async (data: { lat: number; lng: number }) => {
       if (typeof data?.lat !== "number" || typeof data?.lng !== "number") return;
-
-      const dbUser = await getUser(userIdNum);
-      if (dbUser && dbUser.locationConsent === 0) {
-        // User opted out of location sharing consent
-        return;
-      }
+      if (isNaN(data.lat) || isNaN(data.lng)) return;
 
       let userStatus = "Lobide";
       if (socket.data.currentOkeyRoom) {
