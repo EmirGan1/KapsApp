@@ -551,7 +551,10 @@ export default function Games({
   const hostPlayer = tablePlayers.find(p => p.id === hostId);
 
   return (
-    <div className="flex-1 flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative selection:bg-transparent touch-manipulation">
+    <div 
+      className="flex-1 flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative selection:bg-transparent"
+      style={{ touchAction: 'manipulation', overscrollBehavior: 'none' }}
+    >
       
       {/* Toast Feedback */}
       {errorMessage && (
@@ -721,7 +724,10 @@ export default function Games({
       </div>
 
       {/* Main Board Surface (Green Felt Area) - Sized cleanly for Tablet & Mobile */}
-      <div className="flex-1 relative flex flex-col justify-between p-2 sm:p-3 overflow-hidden bg-[radial-gradient(ellipse_at_center,#134e34_0%,#09261a_70%,#03120b_100%)] border-y border-emerald-950/40 shadow-inner">
+      <div 
+        className="flex-1 relative flex flex-col justify-between p-2 sm:p-3 overflow-hidden bg-[radial-gradient(ellipse_at_center,#134e34_0%,#09261a_70%,#03120b_100%)] border-y border-emerald-950/40 shadow-inner"
+        style={{ overscrollBehavior: 'none' }}
+      >
         
         {/* Live Action Ticker Banner - Highly Clear & Actionable */}
         <div className="w-full flex justify-center z-10">
@@ -964,21 +970,46 @@ export default function Games({
 
         {/* Player Action Buttons Toolbar */}
         <div className="w-full max-w-3xl mx-auto flex items-center justify-between gap-1 sm:gap-2 px-1 z-10">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button 
               onClick={handleSortRuns}
               className="px-2.5 sm:px-3 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 border border-slate-700 shadow"
               title="Taşları renklere ve sayılara göre serilere diz"
             >
-              <Layers size={13} className="text-emerald-400" /> Seri Sırala
+              <Layers size={13} className="text-emerald-400" /> Seri
             </button>
             <button 
               onClick={handleSortPairs}
               className="px-2.5 sm:px-3 py-1 bg-slate-800/90 hover:bg-slate-700 text-slate-200 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 border border-slate-700 shadow"
               title="Aynı taşları yan yana çiftlere diz"
             >
-              <CheckCircle2 size={13} className="text-blue-400" /> Çift Sırala
+              <CheckCircle2 size={13} className="text-blue-400" /> Çift
             </button>
+
+            {/* Selected Tile indicator & Fast Discard Action */}
+            {selectedSlot !== null && rack[selectedSlot] && (
+              <div className="flex items-center gap-1 bg-amber-950/80 border border-amber-500/60 rounded-lg px-2 py-0.5 animate-in fade-in">
+                <span className="text-[10px] text-amber-200 font-bold hidden xs:inline">
+                  Seçili: Hedef göze dokun
+                </span>
+                {canDiscard && (
+                  <button
+                    onClick={() => handleDiscard(selectedSlot)}
+                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] sm:text-[11px] px-2 py-0.5 rounded shadow flex items-center gap-0.5 animate-pulse"
+                    title="Seçili taşı sağ ıskartaya at"
+                  >
+                    <ArrowDown size={12} /> Taşı At
+                  </button>
+                )}
+                <button
+                  onClick={() => setSelectedSlot(null)}
+                  className="text-amber-400 hover:text-white text-[10px] px-1"
+                  title="Seçimi kaldır"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -1004,7 +1035,10 @@ export default function Games({
         </div>
 
         {/* The Istaka (Player Rack) - 2 rows x 15 slots, Tablet & Mobile Scaled */}
-        <div className="w-full max-w-4xl mx-auto z-10 origin-bottom pt-1 px-0.5 sm:px-1 touch-manipulation">
+        <div 
+          className="w-full max-w-4xl mx-auto z-10 origin-bottom pt-1 px-0.5 sm:px-1 select-none"
+          style={{ touchAction: 'none', overscrollBehavior: 'none' }}
+        >
           <div className="bg-gradient-to-b from-[#7a3e14] via-[#5c2b09] to-[#381a04] p-1 sm:p-2 rounded-t-xl sm:rounded-t-2xl border-t-2 border-amber-600/80 shadow-2xl relative">
             
             {/* Top Row of Istaka */}

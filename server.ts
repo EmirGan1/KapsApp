@@ -371,8 +371,9 @@ async function startServer() {
     }
   });
 
-  // Socket Online Tracking
-  const onlineUsers = new Map();
+  // Socket Online Tracking with Reconnection Grace Period (Graceful disconnect for mobile networks)
+  const onlineUsers = new Map<number, string>();
+  const disconnectTimers = new Map<number, NodeJS.Timeout>();
   const globalRead = new Map<number, number>();
   const chatRead = new Map<number, Map<number, number>>();
   
@@ -518,9 +519,29 @@ async function startServer() {
 
   io.on("connection", (socket) => {
     const user = socket.data.user;
-    onlineUsers.set(Number(user.id), socket.id);
-    socket.emit("your_id", Number(user.id));
+    const userIdNum = Number(user.id);
+
+    // Cancel any pending disconnect cleanup timer for this user (they reconnected)
+    if (disconnectTimers.has(userIdNum)) {
+      clearTimeout(disconnectTimers.get(userIdNum)!);
+      disconnectTimers.delete(userIdNum);
+    }
+
+    onlineUsers.set(userIdNum, socket.id);
+    socket.emit("your_id", userIdNum);
     io.emit("online_users", Array.from(onlineUsers.keys()));
+
+    // Active ping / heartbeat to keep presence fresh when tab becomes visible
+    socket.on("heartbeat", () => {
+      if (disconnectTimers.has(userIdNum)) {
+        clearTimeout(disconnectTimers.get(userIdNum)!);
+        disconnectTimers.delete(userIdNum);
+      }
+      if (!onlineUsers.has(userIdNum) || onlineUsers.get(userIdNum) !== socket.id) {
+        onlineUsers.set(userIdNum, socket.id);
+        io.emit("online_users", Array.from(onlineUsers.keys()));
+      }
+    });
 
     const getUser = async (id: number) => {
       const res = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [id] });
@@ -590,12 +611,18 @@ async function startServer() {
           sql: "INSERT INTO notifications (user_id, type, content, created_at) VALUES (?, ?, ?, ?)",
           args: [targetId, 'follow', `${user.username} seni takip etmeye başladı.`, new Date().toISOString()]
         });
-        io.to(onlineUsers.get(Number(targetId))).emit("notifications_updated");
+        const targetSockId = onlineUsers.get(Number(targetId));
+        if (targetSockId) {
+          io.to(targetSockId).emit("notifications_updated");
+        }
       }
       
       // Update both users
       io.to(socket.id).emit("profile_updated", targetId);
-      io.to(onlineUsers.get(Number(targetId))).emit("profile_updated", user.id);
+      const targetSockId = onlineUsers.get(Number(targetId));
+      if (targetSockId) {
+        io.to(targetSockId).emit("profile_updated", user.id);
+      }
     });
 
     socket.on("get_user_posts", async (targetId, cb) => {
@@ -1538,8 +1565,20 @@ async function startServer() {
         sql: "UPDATE users SET last_seen = ? WHERE id = ?",
         args: [new Date().toISOString(), user.id]
       });
-      onlineUsers.delete(Number(user.id));
-      io.emit("online_users", Array.from(onlineUsers.keys()));
+
+      // Mobile network reconnection grace period:
+      // Don't drop user from online status immediately on momentary disconnect (e.g. backgrounding tab, cellular handover)
+      // If user reconnects within 20 seconds, their presence is uninterrupted!
+      if (onlineUsers.get(userIdNum) === socket.id) {
+        const timer = setTimeout(() => {
+          disconnectTimers.delete(userIdNum);
+          if (onlineUsers.get(userIdNum) === socket.id) {
+            onlineUsers.delete(userIdNum);
+            io.emit("online_users", Array.from(onlineUsers.keys()));
+          }
+        }, 20000); // 20s grace period for mobile reconnection
+        disconnectTimers.set(userIdNum, timer);
+      }
     });
   });
 

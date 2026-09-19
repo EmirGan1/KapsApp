@@ -45,14 +45,24 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      const newSocket = io({ auth: { token } });
+      const newSocket = io({ 
+        auth: { token },
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000
+      });
       
-      newSocket.on("connect", () => {
+      const onConnect = () => {
         setSocket(newSocket);
+        newSocket.emit("heartbeat");
         newSocket.emit("get_notifications", (notifs: any[]) => {
           setUnreadNotificationsCount(notifs.filter(n => !n.read).length);
         });
-      });
+      };
+
+      newSocket.on("connect", onConnect);
 
       newSocket.on("connect_error", (err) => {
         if (err.message === "Invalid token" || err.message === "No token") {
@@ -74,7 +84,41 @@ export default function App() {
         setUnreadNotificationsCount(prev => prev + 1);
       });
 
+      // Handle mobile visibility change & window focus to immediately refresh presence and re-connect if needed
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === "visible") {
+          if (!newSocket.connected) {
+            newSocket.connect();
+          } else {
+            newSocket.emit("heartbeat");
+          }
+        }
+      };
+
+      const handleFocus = () => {
+        if (!newSocket.connected) {
+          newSocket.connect();
+        } else {
+          newSocket.emit("heartbeat");
+        }
+      };
+
+      // Periodic heartbeat every 30s to keep socket alive and active
+      const heartbeatInterval = setInterval(() => {
+        if (newSocket.connected) {
+          newSocket.emit("heartbeat");
+        }
+      }, 30000);
+
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+      window.addEventListener("focus", handleFocus);
+      window.addEventListener("online", handleFocus);
+
       return () => {
+        clearInterval(heartbeatInterval);
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        window.removeEventListener("focus", handleFocus);
+        window.removeEventListener("online", handleFocus);
         newSocket.disconnect();
       };
     }
