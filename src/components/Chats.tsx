@@ -85,6 +85,9 @@ export default function Chats({
 
   const [replyTo, setReplyTo] = useState<any>(null);
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
+  const typingTimersRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
+  const lastTypingSentRef = useRef<number>(0);
+  const stopTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [readReceipts, setReadReceipts] = useState<{[userId: number]: number}>({});
   const [users, setUsers] = useState<any[]>([]);
 
@@ -164,6 +167,17 @@ export default function Chats({
     socket.emit("get_chat_read", roomId, (data: [number, number][]) => setReadReceipts(Object.fromEntries(data)));
     
     const handleNewMsg = (msg: any) => {
+      // Clear typing indicator for the user who just sent a message
+      if (msg.sender) {
+        const sId = Number(msg.sender);
+        const existingTimer = typingTimersRef.current.get(sId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          typingTimersRef.current.delete(sId);
+        }
+        setTypingUsers(prev => prev.filter(id => id !== sId));
+      }
+
       if (activeTab === "friends") {
         if ((msg.sender === activeChat.id && msg.receiver === currentUserId) || 
             (msg.sender === currentUserId && msg.receiver === activeChat.id)) {
@@ -188,16 +202,44 @@ export default function Chats({
     };
 
     const onTyping = (data: any) => {
-      if ((activeTab === "friends" && data.type === "private" && data.sender === activeChat.id) || 
-          (activeTab === "groups" && data.type === "group" && data.group_id === activeChat.id)) {
-        setTypingUsers(prev => {
-          if (!prev.includes(data.sender)) return [...prev, data.sender];
-          return prev;
-        });
-        setTimeout(() => {
-          setTypingUsers(prev => prev.filter(id => id !== data.sender));
-        }, 3000);
+      const isRelevant = 
+        (activeTab === "friends" && data.type === "private" && Number(data.sender) === Number(activeChat.id)) || 
+        (activeTab === "groups" && data.type === "group" && Number(data.group_id) === Number(activeChat.id));
+
+      if (!isRelevant) return;
+      const senderId = Number(data.sender);
+      if (!senderId || senderId === currentUserId) return;
+
+      // Clear existing timer if any (prevents flickering)
+      const existingTimer = typingTimersRef.current.get(senderId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
       }
+
+      // Ensure user is in typing state
+      setTypingUsers(prev => {
+        if (!prev.includes(senderId)) return [...prev, senderId];
+        return prev;
+      });
+
+      // Start a smooth 3-second timer
+      const timer = setTimeout(() => {
+        setTypingUsers(prev => prev.filter(id => id !== senderId));
+        typingTimersRef.current.delete(senderId);
+      }, 3000);
+
+      typingTimersRef.current.set(senderId, timer);
+    };
+
+    const onStopTyping = (data: any) => {
+      const senderId = Number(data?.sender);
+      if (!senderId) return;
+      const existingTimer = typingTimersRef.current.get(senderId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        typingTimersRef.current.delete(senderId);
+      }
+      setTypingUsers(prev => prev.filter(id => id !== senderId));
     };
 
     const handleReadUpdate = (rId: string, data: [number, number][]) => {
@@ -210,13 +252,20 @@ export default function Chats({
     socket.on("message_reacted", onReacted);
     socket.on("message_deleted", onMessageDeleted);
     socket.on("user_typing", onTyping);
+    socket.on("user_stop_typing", onStopTyping);
     socket.on("chat_read_update", handleReadUpdate);
     return () => { 
       socket.off(activeTab === "friends" ? "new_message" : "new_group_message", handleNewMsg); 
       socket.off("message_reacted", onReacted);
       socket.off("message_deleted", onMessageDeleted);
       socket.off("user_typing", onTyping);
+      socket.off("user_stop_typing", onStopTyping);
       socket.off("chat_read_update", handleReadUpdate);
+
+      // Clean up all typing timeouts
+      typingTimersRef.current.forEach(t => clearTimeout(t));
+      typingTimersRef.current.clear();
+      setTypingUsers([]);
     };
   }, [socket, activeChat, currentUserId, activeTab]);
 
@@ -228,21 +277,50 @@ export default function Chats({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, socket, activeChat, activeTab, currentUserId]);
 
+  const emitStopTyping = () => {
+    if (stopTypingTimeoutRef.current) {
+      clearTimeout(stopTypingTimeoutRef.current);
+      stopTypingTimeoutRef.current = null;
+    }
+    lastTypingSentRef.current = 0;
+    if (socket && activeChat) {
+      if (activeTab === "friends") {
+        socket.emit("stop_typing", { type: 'private', receiver: activeChat.id });
+      } else {
+        socket.emit("stop_typing", { type: 'group', group_id: activeChat.id });
+      }
+    }
+  };
+
   const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
     setText(e.target.value);
-    if (socket && activeChat) {
+    if (!socket || !activeChat) return;
+
+    const now = Date.now();
+    // Throttled emit: Only emit when user starts typing or after 2.5 seconds have elapsed
+    if (now - lastTypingSentRef.current > 2500) {
+      lastTypingSentRef.current = now;
       if (activeTab === "friends") {
         socket.emit("typing", { type: 'private', receiver: activeChat.id });
       } else {
         socket.emit("typing", { type: 'group', group_id: activeChat.id });
       }
     }
+
+    // Debounce stop_typing after 3 seconds of typing inactivity
+    if (stopTypingTimeoutRef.current) {
+      clearTimeout(stopTypingTimeoutRef.current);
+    }
+    stopTypingTimeoutRef.current = setTimeout(() => {
+      emitStopTyping();
+    }, 3000);
   };
 
   const handleSendText = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim() || !activeChat || !socket) return;
     
+    emitStopTyping();
     if (activeTab === "friends") {
       socket.emit("send_message", { receiver: activeChat.id, type: "text", content: text.trim(), reply_to: replyTo?.id });
     } else {

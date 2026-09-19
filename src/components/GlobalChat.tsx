@@ -39,6 +39,9 @@ export default function GlobalChat({
 
   const [replyTo, setReplyTo] = useState<any>(null);
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
+  const typingTimersRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
+  const lastTypingSentRef = useRef<number>(0);
+  const stopTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [readReceipts, setReadReceipts] = useState<{ [userId: number]: number }>(() => ({ ...globalChatCache.readReceipts }));
   const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
 
@@ -85,6 +88,17 @@ export default function GlobalChat({
     });
 
     const onNewMsg = (msg: any) => {
+      // Clear typing indicator for the message sender
+      if (msg.sender) {
+        const sId = Number(msg.sender);
+        const existingTimer = typingTimersRef.current.get(sId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          typingTimersRef.current.delete(sId);
+        }
+        setTypingUsers((prev) => prev.filter((id) => id !== sId));
+      }
+
       appendToGlobalCache(msg);
       globalChatCache.lastFetchedAt = new Date().toISOString();
       setMessages((prev) => {
@@ -117,13 +131,40 @@ export default function GlobalChat({
 
     const onTyping = (data: any) => {
       if (data.type === "global") {
+        const senderId = Number(data.sender);
+        if (!senderId || senderId === currentUserId) return;
+
+        // Reset existing timer if any (eliminates flickering)
+        const existingTimer = typingTimersRef.current.get(senderId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+
         setTypingUsers((prev) => {
-          if (!prev.includes(data.sender)) return [...prev, data.sender];
+          if (!prev.includes(senderId)) return [...prev, senderId];
           return prev;
         });
-        setTimeout(() => {
-          setTypingUsers((prev) => prev.filter((id) => id !== data.sender));
+
+        // 3-second auto-clear timer
+        const timer = setTimeout(() => {
+          setTypingUsers((prev) => prev.filter((id) => id !== senderId));
+          typingTimersRef.current.delete(senderId);
         }, 3000);
+
+        typingTimersRef.current.set(senderId, timer);
+      }
+    };
+
+    const onStopTyping = (data: any) => {
+      if (data.type === "global") {
+        const senderId = Number(data.sender);
+        if (!senderId) return;
+        const existingTimer = typingTimersRef.current.get(senderId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          typingTimersRef.current.delete(senderId);
+        }
+        setTypingUsers((prev) => prev.filter((id) => id !== senderId));
       }
     };
 
@@ -138,6 +179,7 @@ export default function GlobalChat({
     socket.on("message_deleted", onMessageDeleted);
     socket.on("global_chat_cleared", onCleared);
     socket.on("user_typing", onTyping);
+    socket.on("user_stop_typing", onStopTyping);
     socket.on("global_read_update", onReadUpdate);
 
     return () => {
@@ -146,9 +188,15 @@ export default function GlobalChat({
       socket.off("message_deleted", onMessageDeleted);
       socket.off("global_chat_cleared", onCleared);
       socket.off("user_typing", onTyping);
+      socket.off("user_stop_typing", onStopTyping);
       socket.off("global_read_update", onReadUpdate);
+
+      // Clean up all active typing timers
+      typingTimersRef.current.forEach((t) => clearTimeout(t));
+      typingTimersRef.current.clear();
+      setTypingUsers([]);
     };
-  }, [socket]);
+  }, [socket, currentUserId]);
 
   const scrollToBottom = (behavior: ScrollBehavior = "auto") => {
     if (chatContainerRef.current) {
@@ -180,11 +228,35 @@ export default function GlobalChat({
     }
   }, [messages, socket]);
 
+  const emitStopTyping = () => {
+    if (stopTypingTimeoutRef.current) {
+      clearTimeout(stopTypingTimeoutRef.current);
+      stopTypingTimeoutRef.current = null;
+    }
+    lastTypingSentRef.current = 0;
+    if (socket) {
+      socket.emit("stop_typing", { type: "global" });
+    }
+  };
+
   const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
-    if (socket) {
+    if (!socket) return;
+
+    const now = Date.now();
+    // Throttled emit: Only emit when user starts typing or after 2.5 seconds
+    if (now - lastTypingSentRef.current > 2500) {
+      lastTypingSentRef.current = now;
       socket.emit("typing", { type: "global" });
     }
+
+    // Debounce stop_typing after 3 seconds of typing inactivity
+    if (stopTypingTimeoutRef.current) {
+      clearTimeout(stopTypingTimeoutRef.current);
+    }
+    stopTypingTimeoutRef.current = setTimeout(() => {
+      emitStopTyping();
+    }, 3000);
   };
 
   const handleSend = () => {
@@ -194,6 +266,7 @@ export default function GlobalChat({
         alert("Mesajınız en fazla 1000 karakter olabilir.");
         return;
       }
+      emitStopTyping();
       socket.emit("send_global_message", {
         type: "text",
         content: trimmed.slice(0, 1000),

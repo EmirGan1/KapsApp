@@ -530,6 +530,8 @@ async function startServer() {
     lng: number;
     status: string;
     updatedAt: number;
+    isLocationActive: boolean;
+    lastSeen?: number;
   }
   const userLiveLocations = new Map<number, UserLiveLocation>();
 
@@ -1360,7 +1362,9 @@ async function startServer() {
         lat: data.lat,
         lng: data.lng,
         status: userStatus,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        isLocationActive: true,
+        lastSeen: Date.now()
       });
 
       emitUserLocations();
@@ -1373,8 +1377,11 @@ async function startServer() {
     });
 
     socket.on("stop_sharing_location", () => {
-      if (userLiveLocations.has(userIdNum)) {
-        userLiveLocations.delete(userIdNum);
+      const existing = userLiveLocations.get(userIdNum);
+      if (existing) {
+        existing.isLocationActive = false;
+        existing.lastSeen = Date.now();
+        existing.status = "Konum Kapalı";
         emitUserLocations();
       }
     });
@@ -2045,7 +2052,12 @@ async function startServer() {
       const targetSocket = onlineUsers.get(receiver);
       if (targetSocket) io.to(targetSocket).emit("new_message", newMsg);
       socket.emit("new_message", newMsg); // echo back
-      await addNotification(receiver, "new_message", `${user.username} sana yeni bir mesaj gönderdi.`, user.id);
+      let notifPreview = content;
+      if (type === "image") notifPreview = "📷 Fotoğraf";
+      else if (type === "voice") notifPreview = "🎤 Ses kaydı";
+      else if (type === "file") notifPreview = `📎 ${file_name || "Dosya"}`;
+      else if (typeof notifPreview === "string" && notifPreview.length > 80) notifPreview = notifPreview.slice(0, 80) + "...";
+      await addNotification(receiver, "new_message", `${user.username}: ${notifPreview}`, user.id);
     });
 
     const populateMessage = async (m: any, type: "global" | "group") => {
@@ -2216,6 +2228,7 @@ async function startServer() {
     });
 
     socket.on("typing", async (data) => {
+      if (!data) return;
       if (data.type === 'private') {
         const targetSocket = onlineUsers.get(data.receiver);
         if (targetSocket) io.to(targetSocket).emit("user_typing", { type: 'private', sender: user.id });
@@ -2232,6 +2245,27 @@ async function startServer() {
         }
       } else if (data.type === 'global') {
         socket.broadcast.emit("user_typing", { type: 'global', sender: user.id });
+      }
+    });
+
+    socket.on("stop_typing", async (data) => {
+      if (!data) return;
+      if (data.type === 'private') {
+        const targetSocket = onlineUsers.get(data.receiver);
+        if (targetSocket) io.to(targetSocket).emit("user_stop_typing", { type: 'private', sender: user.id });
+      } else if (data.type === 'group') {
+        const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [data.group_id] });
+        if (groupRes.rows.length > 0) {
+          const members = JSON.parse(groupRes.rows[0].members as string || "[]");
+          members.forEach((memberId: number) => {
+            if (memberId !== user.id) {
+              const targetSocket = onlineUsers.get(memberId);
+              if (targetSocket) io.to(targetSocket).emit("user_stop_typing", { type: 'group', group_id: data.group_id, sender: user.id });
+            }
+          });
+        }
+      } else if (data.type === 'global') {
+        socket.broadcast.emit("user_stop_typing", { type: 'global', sender: user.id });
       }
     });
 
@@ -3829,9 +3863,12 @@ async function startServer() {
         }
       }
       
-      // Immediately remove pin from live map on disconnect/leave
-      if (userLiveLocations.has(userIdNum)) {
-        userLiveLocations.delete(userIdNum);
+      // When user disconnects, keep pin on map with inactive / last-seen status
+      const existingLoc = userLiveLocations.get(userIdNum);
+      if (existingLoc) {
+        existingLoc.isLocationActive = false;
+        existingLoc.lastSeen = Date.now();
+        existingLoc.status = "Çevrimdışı";
         emitUserLocations();
       }
 

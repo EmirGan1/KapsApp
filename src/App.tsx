@@ -37,21 +37,70 @@ export default function App() {
   const [unreadGlobalCount, setUnreadGlobalCount] = useState(0);
   const [unreadDmCount, setUnreadDmCount] = useState(0);
 
-  // Real-time Floating Toast Notifications
+  // Real-time Floating Toast Notifications with Stacking / Grouping
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-
-  const addToast = (toast: Omit<ToastItem, "id">) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    const newToast: ToastItem = { ...toast, id };
-    setToasts((prev) => [newToast, ...prev.slice(0, 4)]);
-
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
-  };
+  const toastTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   const dismissToast = (id: string) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const addToast = (toast: Omit<ToastItem, "id">) => {
+    setToasts((prev) => {
+      // Find if an active toast from the same sender / category already exists
+      const existingIndex = prev.findIndex((t) => {
+        if (toast.sender_id && t.sender_id) {
+          return Number(t.sender_id) === Number(toast.sender_id) && t.type === toast.type;
+        }
+        return false;
+      });
+
+      if (existingIndex !== -1) {
+        const existingToast = prev[existingIndex];
+        const newCount = (existingToast.count || 1) + 1;
+
+        // Clear existing dismiss timer for this toast
+        const existingTimer = toastTimersRef.current.get(existingToast.id);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+
+        // Reset auto-dismiss timer (4500ms)
+        const newTimer = setTimeout(() => {
+          dismissToast(existingToast.id);
+        }, 4500);
+        toastTimersRef.current.set(existingToast.id, newTimer);
+
+        // Update the existing toast in place
+        const updatedList = [...prev];
+        updatedList[existingIndex] = {
+          ...existingToast,
+          message: toast.message,
+          title: toast.title,
+          notifId: toast.notifId || existingToast.notifId,
+          target_id: toast.target_id || existingToast.target_id,
+          count: newCount,
+        };
+        return updatedList;
+      }
+
+      // If no existing toast to stack with, create a new one
+      const id = Math.random().toString(36).substring(2, 9);
+      const newToast: ToastItem = { ...toast, id, count: 1 };
+
+      // Set auto-dismiss timer
+      const timer = setTimeout(() => {
+        dismissToast(id);
+      }, 4500);
+      toastTimersRef.current.set(id, timer);
+
+      return [newToast, ...prev.slice(0, 4)];
+    });
   };
 
   const activeTabRef = useRef(activeTab);

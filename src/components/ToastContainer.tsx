@@ -9,6 +9,7 @@ export interface ToastItem {
   sender_id?: number | null;
   target_id?: number | null;
   notifId?: number;
+  count?: number;
 }
 
 export default function ToastContainer({
@@ -74,40 +75,62 @@ export default function ToastContainer({
 
   return (
     <div className="fixed top-4 right-4 left-4 sm:left-auto sm:w-96 z-50 flex flex-col gap-2.5 pointer-events-none">
-      {toasts.map((toast) => (
-        <div
-          key={toast.id}
-          onClick={() => onClick(toast)}
-          className="pointer-events-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-xl hover:shadow-2xl flex items-start gap-3 cursor-pointer transition-all duration-200 transform hover:-translate-y-0.5 animate-in slide-in-from-top-3 fade-in"
-        >
-          {getToastIcon(toast.type)}
-          
-          <div className="flex-1 min-w-0 pt-0.5">
-            {toast.title && (
-              <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider mb-0.5">
-                {toast.title}
-              </h4>
-            )}
-            <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-medium leading-snug line-clamp-2">
-              {toast.message}
-            </p>
-            <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold mt-1 inline-block">
-              Görüntülemek için tıkla →
-            </span>
-          </div>
+      {toasts.map((toast) => {
+        const colonIdx = toast.message.indexOf(":");
+        const hasSenderColon = colonIdx !== -1;
+        const sender = hasSenderColon ? toast.message.substring(0, colonIdx).trim() : "";
+        const restMsg = hasSenderColon ? toast.message.substring(colonIdx + 1).trim() : toast.message;
 
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss(toast.id);
-            }}
-            className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+        return (
+          <div
+            key={toast.id}
+            onClick={() => onClick(toast)}
+            className="pointer-events-auto bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-xl hover:shadow-2xl flex items-start gap-3 cursor-pointer transition-all duration-200 transform hover:-translate-y-0.5 animate-in slide-in-from-top-3 fade-in"
           >
-            <X size={16} />
-          </button>
-        </div>
-      ))}
+            {getToastIcon(toast.type)}
+            
+            <div className="flex-1 min-w-0 pt-0.5">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                {toast.title && (
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider truncate">
+                    {toast.title}
+                  </h4>
+                )}
+                {toast.count && toast.count > 1 ? (
+                  <span className="px-1.5 py-0.2 bg-blue-600 dark:bg-blue-500 text-white rounded-full text-[10px] font-extrabold shadow-sm shrink-0">
+                    +{toast.count}
+                  </span>
+                ) : null}
+              </div>
+
+              {hasSenderColon && toast.count && toast.count > 1 ? (
+                <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-medium leading-snug line-clamp-2">
+                  <span className="font-bold text-slate-900 dark:text-white">{sender} ({toast.count}):</span> {restMsg}
+                </p>
+              ) : (
+                <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-medium leading-snug line-clamp-2">
+                  {toast.message}
+                </p>
+              )}
+
+              <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold mt-1 inline-block">
+                Görüntülemek için tıkla →
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss(toast.id);
+              }}
+              className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
