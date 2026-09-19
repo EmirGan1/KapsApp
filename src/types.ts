@@ -138,3 +138,26 @@ export interface MediaModalData {
   onLike?: () => void;
   onAddComment?: (text: string) => void;
 }
+
+export interface VoiceParticipant {
+  id: number;
+  username: string;
+  avatar: string | null;
+  color?: string;
+  socketId: string;
+  isHost: boolean;
+  isMuted: boolean;
+  isSpeaking: boolean;
+  isDeafened?: boolean;
+  joinedAt: string;
+}
+
+export interface VoiceRoom {
+  id: string;
+  name: string;
+  hostId: number;
+  hostUsername: string;
+  maxParticipants: number;
+  participants: VoiceParticipant[];
+  createdAt: string;
+}

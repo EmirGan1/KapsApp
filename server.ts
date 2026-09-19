@@ -747,6 +747,56 @@ async function startServer() {
     io.emit("uno_rooms_list", list);
   };
 
+  // --- Voice Rooms (In-Memory Only, No DB Persistence) ---
+  interface ServerVoiceParticipant {
+    id: number;
+    username: string;
+    avatar: string | null;
+    color?: string;
+    socketId: string;
+    isHost: boolean;
+    isMuted: boolean;
+    isSpeaking: boolean;
+    isDeafened?: boolean;
+    joinedAt: string;
+  }
+
+  interface ServerVoiceRoom {
+    id: string;
+    name: string;
+    hostId: number;
+    hostUsername: string;
+    maxParticipants: number;
+    participants: Map<number, ServerVoiceParticipant>;
+    createdAt: string;
+  }
+
+  const voiceRooms = new Map<string, ServerVoiceRoom>();
+
+  const getSanitizedVoiceRoom = (room: ServerVoiceRoom) => ({
+    id: room.id,
+    name: room.name,
+    hostId: room.hostId,
+    hostUsername: room.hostUsername,
+    maxParticipants: room.maxParticipants,
+    participants: Array.from(room.participants.values()),
+    createdAt: room.createdAt
+  });
+
+  const getSanitizedVoiceRoomsList = () => {
+    return Array.from(voiceRooms.values()).map(r => getSanitizedVoiceRoom(r));
+  };
+
+  const emitVoiceRoomsList = () => {
+    io.emit("voice_rooms_list", getSanitizedVoiceRoomsList());
+  };
+
+  const broadcastVoiceRoom = (roomId: string) => {
+    const room = voiceRooms.get(roomId);
+    if (!room) return;
+    io.to(`voice_${roomId}`).emit("voice_room_updated", getSanitizedVoiceRoom(room));
+  };
+
   const executePlayUnoCard = (room: any, player: any, cardId: string, chosenColor?: UnoColor) => {
     const cardIdx = player.hand.findIndex((c: UnoCard) => c.id === cardId);
     if (cardIdx === -1) return false;
@@ -2673,7 +2723,279 @@ async function startServer() {
       }
     });
 
+    // --- Voice Chat Socket Handlers ---
+    socket.on("get_voice_rooms", (cb?: (rooms: any[]) => void) => {
+      const list = getSanitizedVoiceRoomsList();
+      if (cb) cb(list);
+      else socket.emit("voice_rooms_list", list);
+    });
+
+    socket.on("get_my_voice_room", (cb?: (data: any) => void) => {
+      let targetRoomId = socket.data.currentVoiceRoom;
+      if (!targetRoomId) {
+        for (const [id, r] of voiceRooms.entries()) {
+          if (r.participants.has(user.id)) {
+            targetRoomId = id;
+            break;
+          }
+        }
+      }
+      if (targetRoomId) {
+        const room = voiceRooms.get(targetRoomId);
+        if (room) {
+          socket.data.currentVoiceRoom = targetRoomId;
+          socket.join(`voice_${targetRoomId}`);
+          if (cb) cb({ success: true, room: getSanitizedVoiceRoom(room) });
+          return;
+        }
+      }
+      if (cb) cb({ success: false });
+    });
+
+    socket.on("create_voice_room", (data: { name: string; maxParticipants?: number }, cb?: (res: any) => void) => {
+      const existingRoomId = socket.data.currentVoiceRoom;
+      if (existingRoomId) {
+        const oldRoom = voiceRooms.get(existingRoomId);
+        if (oldRoom) {
+          if (oldRoom.hostId === user.id) {
+            io.to(`voice_${existingRoomId}`).emit("voice_room_closed", { reason: "Oda kurucusu yeni bir oda açtığı için bu oda kapatıldı." });
+            voiceRooms.delete(existingRoomId);
+          } else {
+            oldRoom.participants.delete(user.id);
+            socket.to(`voice_${existingRoomId}`).emit("voice_user_left", { userId: user.id, socketId: socket.id });
+            broadcastVoiceRoom(existingRoomId);
+          }
+          socket.leave(`voice_${existingRoomId}`);
+        }
+      }
+
+      const rawName = (data?.name || "").trim();
+      const roomName = rawName.slice(0, 35) || `${user.username}'in Odası`;
+      const maxParticipants = Math.min(10, Math.max(2, Number(data?.maxParticipants) || 8));
+      const roomId = `vr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+      const newParticipant: ServerVoiceParticipant = {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        color: user.color,
+        socketId: socket.id,
+        isHost: true,
+        isMuted: false,
+        isSpeaking: false,
+        isDeafened: false,
+        joinedAt: new Date().toISOString()
+      };
+
+      const newRoom: ServerVoiceRoom = {
+        id: roomId,
+        name: roomName,
+        hostId: user.id,
+        hostUsername: user.username,
+        maxParticipants,
+        participants: new Map([[user.id, newParticipant]]),
+        createdAt: new Date().toISOString()
+      };
+
+      voiceRooms.set(roomId, newRoom);
+      socket.data.currentVoiceRoom = roomId;
+      socket.join(`voice_${roomId}`);
+
+      emitVoiceRoomsList();
+      const sanitized = getSanitizedVoiceRoom(newRoom);
+      if (cb) cb({ success: true, room: sanitized });
+    });
+
+    socket.on("join_voice_room", (data: { roomId: string }, cb?: (res: any) => void) => {
+      const { roomId } = data || {};
+      if (!roomId) return cb && cb({ success: false, message: "Geçersiz oda ID." });
+
+      const room = voiceRooms.get(roomId);
+      if (!room) return cb && cb({ success: false, message: "Oda bulunamadı veya kapatılmış." });
+
+      if (room.participants.size >= room.maxParticipants && !room.participants.has(user.id)) {
+        return cb && cb({ success: false, message: "Oda maksimum kişi kapasitesine ulaştı." });
+      }
+
+      if (socket.data.currentVoiceRoom && socket.data.currentVoiceRoom !== roomId) {
+        const oldRoom = voiceRooms.get(socket.data.currentVoiceRoom);
+        if (oldRoom) {
+          if (oldRoom.hostId === user.id) {
+            io.to(`voice_${socket.data.currentVoiceRoom}`).emit("voice_room_closed", { reason: "Oda kurucusu ayrıldığı için oda kapatıldı." });
+            voiceRooms.delete(socket.data.currentVoiceRoom);
+          } else {
+            oldRoom.participants.delete(user.id);
+            socket.to(`voice_${socket.data.currentVoiceRoom}`).emit("voice_user_left", { userId: user.id, socketId: socket.id });
+            broadcastVoiceRoom(socket.data.currentVoiceRoom);
+          }
+          socket.leave(`voice_${socket.data.currentVoiceRoom}`);
+        }
+      }
+
+      const isHost = room.hostId === user.id;
+      const participant: ServerVoiceParticipant = {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        color: user.color,
+        socketId: socket.id,
+        isHost,
+        isMuted: false,
+        isSpeaking: false,
+        isDeafened: false,
+        joinedAt: new Date().toISOString()
+      };
+
+      room.participants.set(user.id, participant);
+      socket.data.currentVoiceRoom = roomId;
+      socket.join(`voice_${roomId}`);
+
+      socket.to(`voice_${roomId}`).emit("voice_user_joined", participant);
+      broadcastVoiceRoom(roomId);
+      emitVoiceRoomsList();
+
+      const existingPeers = Array.from(room.participants.values()).filter(p => p.id !== user.id);
+      if (cb) cb({ success: true, room: getSanitizedVoiceRoom(room), existingPeers });
+    });
+
+    socket.on("leave_voice_room", (cb?: (res: any) => void) => {
+      const roomId = socket.data.currentVoiceRoom;
+      if (roomId) {
+        socket.leave(`voice_${roomId}`);
+        const room = voiceRooms.get(roomId);
+        if (room) {
+          if (room.hostId === user.id) {
+            io.to(`voice_${roomId}`).emit("voice_room_closed", { reason: "Oda kurucusu ayrıldığı için oda kapatıldı." });
+            voiceRooms.delete(roomId);
+          } else {
+            room.participants.delete(user.id);
+            socket.to(`voice_${roomId}`).emit("voice_user_left", { userId: user.id, socketId: socket.id });
+            broadcastVoiceRoom(roomId);
+          }
+          emitVoiceRoomsList();
+        }
+        socket.data.currentVoiceRoom = null;
+      }
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("voice_kick_user", (data: { roomId: string; targetUserId: number }, cb?: (res: any) => void) => {
+      const { roomId, targetUserId } = data || {};
+      if (!roomId || !targetUserId) return cb && cb({ success: false, message: "Eksik parametre." });
+
+      const room = voiceRooms.get(roomId);
+      if (!room) return cb && cb({ success: false, message: "Oda bulunamadı." });
+      if (room.hostId !== user.id) return cb && cb({ success: false, message: "Bu işlem için sadece oda kurucusu yetkilidir." });
+      if (targetUserId === user.id) return cb && cb({ success: false, message: "Kendinizi atamazsınız." });
+
+      const target = room.participants.get(targetUserId);
+      if (!target) return cb && cb({ success: false, message: "Kullanıcı bu odada değil." });
+
+      const targetSocket = io.sockets.sockets.get(target.socketId);
+      if (targetSocket) {
+        targetSocket.emit("kick_from_voice", { roomId, reason: "Oda kurucusu tarafından sesli odadan çıkarıldınız." });
+        targetSocket.leave(`voice_${roomId}`);
+        targetSocket.data.currentVoiceRoom = null;
+      }
+
+      room.participants.delete(targetUserId);
+      socket.to(`voice_${roomId}`).emit("voice_user_left", { userId: targetUserId, socketId: target.socketId });
+      broadcastVoiceRoom(roomId);
+      emitVoiceRoomsList();
+
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("voice_force_mute", (data: { roomId: string; targetUserId: number }, cb?: (res: any) => void) => {
+      const { roomId, targetUserId } = data || {};
+      if (!roomId || !targetUserId) return cb && cb({ success: false, message: "Eksik parametre." });
+
+      const room = voiceRooms.get(roomId);
+      if (!room) return cb && cb({ success: false, message: "Oda bulunamadı." });
+      if (room.hostId !== user.id) return cb && cb({ success: false, message: "Bu işlem için sadece oda kurucusu yetkilidir." });
+
+      const target = room.participants.get(targetUserId);
+      if (target) {
+        target.isMuted = true;
+        const targetSocket = io.sockets.sockets.get(target.socketId);
+        if (targetSocket) {
+          targetSocket.emit("voice_force_mute_received", { roomId, reason: "Oda kurucusu mikrofonunuzu kapattı." });
+        }
+        broadcastVoiceRoom(roomId);
+        if (cb) cb({ success: true });
+      } else {
+        if (cb) cb({ success: false, message: "Kullanıcı bulunamadı." });
+      }
+    });
+
+    socket.on("voice_update_status", (data: { roomId: string; isMuted?: boolean; isSpeaking?: boolean; isDeafened?: boolean }) => {
+      const { roomId, isMuted, isSpeaking, isDeafened } = data || {};
+      if (!roomId) return;
+      const room = voiceRooms.get(roomId);
+      if (!room) return;
+
+      const p = room.participants.get(user.id);
+      if (p) {
+        if (typeof isMuted === 'boolean') p.isMuted = isMuted;
+        if (typeof isSpeaking === 'boolean') p.isSpeaking = isSpeaking;
+        if (typeof isDeafened === 'boolean') p.isDeafened = isDeafened;
+        io.to(`voice_${roomId}`).emit("voice_user_status_changed", {
+          userId: user.id,
+          socketId: socket.id,
+          isMuted: p.isMuted,
+          isSpeaking: p.isSpeaking,
+          isDeafened: p.isDeafened
+        });
+      }
+    });
+
+    // --- WebRTC Mesh Signaling Handlers ---
+    socket.on("voice_offer", (data: { targetSocketId: string; offer: any }) => {
+      if (data?.targetSocketId) {
+        io.to(data.targetSocketId).emit("voice_offer", {
+          senderSocketId: socket.id,
+          senderUserId: user.id,
+          offer: data.offer
+        });
+      }
+    });
+
+    socket.on("voice_answer", (data: { targetSocketId: string; answer: any }) => {
+      if (data?.targetSocketId) {
+        io.to(data.targetSocketId).emit("voice_answer", {
+          senderSocketId: socket.id,
+          senderUserId: user.id,
+          answer: data.answer
+        });
+      }
+    });
+
+    socket.on("voice_ice_candidate", (data: { targetSocketId: string; candidate: any }) => {
+      if (data?.targetSocketId) {
+        io.to(data.targetSocketId).emit("voice_ice_candidate", {
+          senderSocketId: socket.id,
+          senderUserId: user.id,
+          candidate: data.candidate
+        });
+      }
+    });
+
     socket.on("disconnect", async () => {
+      const voiceRoomId = socket.data.currentVoiceRoom;
+      if (voiceRoomId) {
+        const vRoom = voiceRooms.get(voiceRoomId);
+        if (vRoom) {
+          if (vRoom.hostId === user.id) {
+            io.to(`voice_${voiceRoomId}`).emit("voice_room_closed", { reason: "Oda kurucusu ayrıldığı için oda kapatıldı." });
+            voiceRooms.delete(voiceRoomId);
+          } else {
+            vRoom.participants.delete(user.id);
+            socket.to(`voice_${voiceRoomId}`).emit("voice_user_left", { userId: user.id, socketId: socket.id });
+            broadcastVoiceRoom(voiceRoomId);
+          }
+          emitVoiceRoomsList();
+        }
+      }
       const unoRoomId = socket.data.currentUnoRoom;
       if (unoRoomId) {
         const room = unoRooms.get(unoRoomId);
