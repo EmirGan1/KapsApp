@@ -408,24 +408,6 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                     <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} group w-full min-w-0 relative`}>
                       <div className={`max-w-[88%] sm:max-w-[80%] md:max-w-[75%] min-w-0 rounded-2xl p-2 px-3 shadow-sm relative overflow-hidden [overflow-wrap:anywhere] break-words break-all ${isMine ? 'bg-[#DCF8C6] dark:bg-[#005C4B] rounded-tr-none text-slate-900 dark:text-slate-100' : 'bg-white dark:bg-slate-800 rounded-tl-none border border-slate-100 dark:border-slate-700 text-slate-800 dark:text-slate-100'}`}>
                         
-                        {/* Desktop Floating Action Buttons (Shown on hover) */}
-                        <div className={`absolute top-0 ${isMine ? '-left-28' : '-right-24'} hidden lg:group-hover:flex items-center gap-1 p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm rounded-lg z-20`}>
-                          <button onClick={() => setReplyTo(msg)} className="p-1 text-slate-400 hover:text-blue-500 dark:hover:text-blue-400 transition-colors" title="Yanıtla"><Reply size={14}/></button>
-                          <button onClick={() => handleReact(msg.id, '❤️')} className="p-1 text-slate-400 hover:text-red-500 transition-colors" title="Beğen"><Smile size={14}/></button>
-                          {canDelete && (
-                            <button onClick={() => {
-                              if (socket && window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
-                                socket.emit("delete_message", { 
-                                  message_id: msg.id, 
-                                  type: activeTab === "friends" ? "private" : "group",
-                                  receiver: activeTab === "friends" ? (activeChat as Friend)?.id : undefined,
-                                  group_id: activeTab === "groups" ? (activeChat as Group)?.id : undefined
-                                });
-                              }
-                            }} className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors" title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}><Trash2 size={14}/></button>
-                          )}
-                        </div>
-
                         {activeTab === "groups" && !isMine && (
                           <div className="flex items-center gap-2 mb-1 cursor-pointer" onClick={() => onUserClick && onUserClick(msg.sender)}>
                             <Avatar url={msg.sender_avatar} name={msg.sender_name} color={msg.sender_color} size={4} />
@@ -502,8 +484,8 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                           </div>
                         )}
 
-                        {/* Mobile / Tablet Touch Action Bar (Always visible on mobile & tablet) */}
-                        <div className={`flex items-center gap-1.5 mt-2 pt-1.5 border-t lg:hidden ${
+                        {/* Action Bar (Always visible on all screens: mobile, tablet, desktop - No hover/hidden) */}
+                        <div className={`flex items-center gap-1 mt-2 pt-1.5 border-t select-none ${
                           isMine ? "border-green-600/30 justify-end" : "border-slate-200 dark:border-slate-700/60 justify-start"
                         }`}>
                           <button
@@ -512,14 +494,14 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                               e.stopPropagation();
                               setReplyTo(msg);
                             }}
-                            className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                            className={`px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
                               isMine 
-                                ? "bg-green-700/20 active:bg-green-700/30 text-green-900 dark:text-green-100" 
-                                : "bg-slate-100 active:bg-slate-200 dark:bg-slate-700 dark:active:bg-slate-600 text-slate-700 dark:text-slate-200"
+                                ? "text-green-950 dark:text-green-100 hover:bg-green-700/20 active:bg-green-700/30" 
+                                : "text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 active:bg-slate-200"
                             }`}
                             title="Yanıtla"
                           >
-                            <Reply size={12} />
+                            <Reply size={13} className="shrink-0" />
                             <span>Yanıtla</span>
                           </button>
 
@@ -529,14 +511,14 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                               e.stopPropagation();
                               handleReact(msg.id, "❤️");
                             }}
-                            className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                            className={`px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
                               isMine 
-                                ? "bg-green-700/20 active:bg-green-700/30 text-green-900 dark:text-green-100" 
-                                : "bg-slate-100 active:bg-slate-200 dark:bg-slate-700 dark:active:bg-slate-600 text-slate-700 dark:text-slate-200"
+                                ? "text-green-950 dark:text-green-100 hover:bg-green-700/20 active:bg-green-700/30" 
+                                : "text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 active:bg-slate-200"
                             }`}
                             title="Beğen"
                           >
-                            <Smile size={12} />
+                            <Smile size={13} className="shrink-0" />
                             <span>❤️</span>
                           </button>
 
@@ -554,14 +536,14 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
                                   });
                                 }
                               }}
-                              className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                              className={`px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
                                 isMine 
-                                  ? "bg-red-700/20 active:bg-red-700/30 text-red-700 dark:text-red-200" 
-                                  : "bg-red-50 active:bg-red-100 dark:bg-red-950/50 dark:active:bg-red-900 text-red-600 dark:text-red-400"
+                                  ? "text-red-800 dark:text-red-200 hover:bg-red-700/20 active:bg-red-700/30" 
+                                  : "text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 active:bg-red-100"
                               }`}
                               title={isEmirgan && !isMine ? "Yönetici Olarak Sil" : "Sil"}
                             >
-                              <Trash2 size={12} />
+                              <Trash2 size={13} className="shrink-0" />
                               <span>Sil</span>
                             </button>
                           )}

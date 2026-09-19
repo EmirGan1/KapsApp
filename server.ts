@@ -1101,24 +1101,57 @@ async function startServer() {
       }
     });
 
-    socket.on("delete_message", async (data) => {
+    const handleDeleteMessage = async (data: any, cb?: (res: any) => void) => {
       let table = "";
       if (data.type === 'private') table = "messages";
       else if (data.type === 'group') table = "group_messages";
-      else if (data.type === 'global') table = "global_messages";
+      else if (data.type === 'global' || !data.type) table = "global_messages";
       
+      const messageId = data.message_id || data.id;
+      if (!messageId) {
+        if (cb) cb({ error: "Mesaj ID eksik." });
+        return;
+      }
+
       if (table) {
         try {
-          const msgRes = await client.execute({ sql: `SELECT sender FROM ${table} WHERE id = ?`, args: [data.message_id] });
+          const msgRes = await client.execute({ sql: `SELECT sender FROM ${table} WHERE id = ?`, args: [messageId] });
           const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
-          if (msgRes.rows.length > 0 && (String(msgRes.rows[0].sender) === String(user.id) || isEmirgan)) {
-            await client.execute({ sql: `DELETE FROM ${table} WHERE id = ?`, args: [data.message_id] });
-            io.emit("message_deleted", { type: data.type, message_id: data.message_id, group_id: data.group_id, receiver: data.receiver });
+          
+          if (msgRes.rows.length === 0) {
+            if (cb) cb({ error: "Mesaj bulunamadı." });
+            return;
           }
+
+          const originalSender = String(msgRes.rows[0].sender);
+          const currentUserId = String(user.id);
+
+          // Backend yetki kontrolü: Kullanıcı mesajın sahibi değilse ve emirgan değilse işlemi reddet
+          if (originalSender !== currentUserId && !isEmirgan) {
+            if (cb) cb({ error: "Bu mesajı silme yetkiniz yok." });
+            return;
+          }
+
+          // Kalıcı olarak DELETE FROM sorgusu ile sil
+          await client.execute({ sql: `DELETE FROM ${table} WHERE id = ?`, args: [messageId] });
+          io.emit("message_deleted", { 
+            type: data.type || "global", 
+            message_id: messageId, 
+            group_id: data.group_id, 
+            receiver: data.receiver 
+          });
+
+          if (cb) cb({ success: true, message_id: messageId });
         } catch (err) {
           console.error("Delete message error:", err);
+          if (cb) cb({ error: "Silme işlemi sırasında hata oluştu." });
         }
       }
+    };
+
+    socket.on("delete_message", handleDeleteMessage);
+    socket.on("delete_global_message", (data, cb) => {
+      handleDeleteMessage({ ...data, type: "global" }, cb);
     });
 
     socket.on("react_message", async (data) => {
