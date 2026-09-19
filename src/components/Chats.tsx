@@ -13,11 +13,63 @@ type Group = {
   created_at: string;
 };
 
-export default function Chats({ socket, currentUserId, currentUsername, onlineUsers, onUserClick }: { socket: Socket | null, currentUserId: number, currentUsername?: string, onlineUsers: number[], onUserClick?: (id: number) => void }) {
+export default function Chats({ 
+  socket, 
+  currentUserId, 
+  currentUsername, 
+  onlineUsers, 
+  onUserClick,
+  onUnreadDMsChange,
+  targetUserId,
+  onTargetUserHandled,
+}: { 
+  socket: Socket | null, 
+  currentUserId: number, 
+  currentUsername?: string, 
+  onlineUsers: number[], 
+  onUserClick?: (id: number) => void,
+  onUnreadDMsChange?: (count: number) => void,
+  targetUserId?: number | null,
+  onTargetUserHandled?: () => void,
+}) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [activeTab, setActiveTab] = useState<"friends" | "groups">("friends");
   const [activeChat, setActiveChat] = useState<Friend | Group | null>(null);
+
+  const activeChatRef = useRef<Friend | Group | null>(null);
+  const activeTabRef = useRef<"friends" | "groups">("friends");
+
+  useEffect(() => {
+    activeChatRef.current = activeChat;
+    activeTabRef.current = activeTab;
+  }, [activeChat, activeTab]);
+
+  useEffect(() => {
+    if (!targetUserId || !socket) return;
+    setActiveTab("friends");
+    // Check if target user is in friends
+    const existingFriend = friends.find((f) => f.id === targetUserId);
+    if (existingFriend) {
+      setActiveChat(existingFriend);
+      onTargetUserHandled?.();
+    } else {
+      socket.emit("get_user_profile", targetUserId, (profile: any) => {
+        if (profile) {
+          const fakeFriend: Friend = {
+            id: profile.id,
+            username: profile.username,
+            avatar: profile.avatar,
+            color: profile.color,
+            status: 1,
+            is_sender: false,
+          };
+          setActiveChat(fakeFriend);
+          onTargetUserHandled?.();
+        }
+      });
+    }
+  }, [targetUserId, socket, friends, onTargetUserHandled]);
   
   const [messages, setMessages] = useState<any[]>([]);
   const [text, setText] = useState("");
@@ -47,14 +99,56 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
     loadFriends();
     loadGroups();
     
+    // Global listener for new_message to dynamically update preview, timestamps, and unread counts
+    const onGlobalDMMessage = (msg: any) => {
+      let preview = "";
+      if (msg.type === "image") preview = "📷 Fotoğraf";
+      else if (msg.type === "voice") preview = "🎤 Ses kaydı";
+      else if (msg.type === "file") preview = `📎 ${msg.file_name || "Dosya"}`;
+      else preview = msg.content || "";
+
+      const otherId = msg.sender === currentUserId ? msg.receiver : msg.sender;
+
+      setFriends(prev => {
+        const friendExists = prev.some(f => f.id === otherId);
+        if (!friendExists) {
+          loadFriends();
+          return prev;
+        }
+
+        return prev.map(f => {
+          if (f.id === otherId) {
+            const isCurrentlyChatting = activeChatRef.current?.id === otherId && activeTabRef.current === "friends";
+            const isFromOther = msg.sender !== currentUserId;
+            return {
+              ...f,
+              lastMessageText: preview,
+              lastMessageTime: msg.created_at || new Date().toISOString(),
+              lastMessageSender: msg.sender,
+              unreadCount: isCurrentlyChatting ? 0 : (isFromOther ? (f.unreadCount || 0) + 1 : f.unreadCount)
+            };
+          }
+          return f;
+        });
+      });
+    };
+
+    socket.on("new_message", onGlobalDMMessage);
     socket.on("friends_updated", loadFriends);
     socket.on("groups_updated", loadGroups);
     
     return () => { 
+      socket.off("new_message", onGlobalDMMessage);
       socket.off("friends_updated", loadFriends); 
       socket.off("groups_updated", loadGroups);
     };
-  }, [socket]);
+  }, [socket, currentUserId]);
+
+  // Sync total unread DM count with parent App.tsx
+  useEffect(() => {
+    const totalUnread = friends.reduce((acc, f) => acc + (f.unreadCount || 0), 0);
+    onUnreadDMsChange?.(totalUnread);
+  }, [friends, onUnreadDMsChange]);
 
   useEffect(() => {
     if (!socket || !activeChat) return;
@@ -303,6 +397,33 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
     });
   };
 
+  // Format message preview timestamp
+  const formatChatTime = (dateStr?: string | null) => {
+    if (!dateStr) return "";
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "";
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+
+    if (isToday) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    if (isYesterday) {
+      return "Dün";
+    }
+    return d.toLocaleDateString([], { month: 'numeric', day: 'numeric' });
+  };
+
+  // Dynamic sorting: conversations with newest message time always on top!
+  const sortedFriends = [...friends].sort((a, b) => {
+    const timeA = a.lastMessageTime ? new Date(a.lastMessageTime).getTime() : 0;
+    const timeB = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : 0;
+    return timeB - timeA;
+  });
+
   return (
     <div className="flex-1 flex overflow-hidden bg-white dark:bg-slate-950 transition-colors duration-200">
       {/* Sidebar */}
@@ -328,27 +449,56 @@ export default function Chats({ socket, currentUserId, currentUsername, onlineUs
 
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 relative transition-colors duration-200">
           {activeTab === "friends" ? (
-            friends.length === 0 ? (
+            sortedFriends.length === 0 ? (
               <div className="p-6 text-center text-slate-400 dark:text-slate-500 text-sm">Arkadaş ekleyerek sohbete başlayın.</div>
             ) : (
-              friends.map(f => {
+              sortedFriends.map(f => {
                 const isOnline = onlineUsers.includes(f.id);
+                const unread = f.unreadCount || 0;
+                const timeFormatted = formatChatTime(f.lastMessageTime);
+
                 return (
                   <button 
                     key={f.id} 
-                    onClick={() => setActiveChat(f)}
-                    className={`w-full flex items-center gap-3 p-4 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors ${activeChat?.id === f.id ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}
+                    onClick={() => {
+                      setActiveChat(f);
+                      setFriends(prev => prev.map(item => item.id === f.id ? { ...item, unreadCount: 0 } : item));
+                    }}
+                    className={`w-full flex items-center gap-3 p-3.5 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors ${activeChat?.id === f.id ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}
                   >
                     <div className="relative flex-shrink-0">
                       <Avatar url={f.avatar} name={f.username} color={f.color} size={12} />
                       {isOnline && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-slate-900 rounded-full transition-colors"></div>}
                     </div>
-                    <div className="text-left overflow-hidden flex-1">
-                      <h3 className="font-semibold text-slate-800 dark:text-slate-100 truncate">{f.username}</h3>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{isOnline ? 'Çevrimiçi' : 'Çevrimdışı'}</p>
+                    <div className="text-left overflow-hidden flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1 mb-0.5">
+                        <h3 className="font-semibold text-slate-800 dark:text-slate-100 truncate text-sm">{f.username}</h3>
+                        {timeFormatted && (
+                          <span className={`text-[10px] shrink-0 font-medium ${unread > 0 ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-slate-400 dark:text-slate-500'}`}>
+                            {timeFormatted}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={`text-xs truncate flex-1 ${unread > 0 ? 'text-slate-900 dark:text-slate-100 font-medium' : 'text-slate-500 dark:text-slate-400'}`}>
+                          {f.lastMessageText ? (
+                            <span>
+                              {f.lastMessageSender === currentUserId && <span className="text-slate-400 dark:text-slate-500 font-normal">Sen: </span>}
+                              {f.lastMessageText}
+                            </span>
+                          ) : (
+                            <span className="italic opacity-80">{isOnline ? 'Çevrimiçi' : 'Çevrimdışı'}</span>
+                          )}
+                        </p>
+                        {unread > 0 && (
+                          <span className="px-1.5 py-0.5 min-w-[18px] h-[18px] text-center bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shrink-0 shadow-sm animate-pulse">
+                            {unread > 99 ? '99+' : unread}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </button>
-                )
+                );
               })
             )
           ) : (

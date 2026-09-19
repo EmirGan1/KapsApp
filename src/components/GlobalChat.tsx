@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
-import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2, Trash2 } from "lucide-react";
+import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2, Trash2, Globe } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { MediaModalData } from "../types";
+import { 
+  globalChatCache, 
+  appendToGlobalCache, 
+  updateGlobalCacheReactions, 
+  removeFromGlobalCache, 
+  clearGlobalCache 
+} from "../utils/globalChatCache";
 
 export default function GlobalChat({
   socket,
@@ -18,10 +25,13 @@ export default function GlobalChat({
   onlineUsers: number[];
   onUserClick?: (id: number) => void;
 }) {
-  const [messages, setMessages] = useState<any[]>([]);
+  // Stale-While-Revalidate: Instant 0ms load from memory cache
+  const [messages, setMessages] = useState<any[]>(() => [...globalChatCache.messages]);
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [users, setUsers] = useState<any[]>([]);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const isInitialScrollDone = useRef(false);
+  const [users, setUsers] = useState<any[]>(() => [...globalChatCache.users]);
 
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -29,72 +39,145 @@ export default function GlobalChat({
 
   const [replyTo, setReplyTo] = useState<any>(null);
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
-  const [readReceipts, setReadReceipts] = useState<{ [userId: number]: number }>({});
+  const [readReceipts, setReadReceipts] = useState<{ [userId: number]: number }>(() => ({ ...globalChatCache.readReceipts }));
   const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
 
   useEffect(() => {
-    if (socket) {
-      socket.emit("get_global_messages", (msgs: any[]) => setMessages(msgs));
-      socket.emit("get_all_users", (allUsers: any[]) => setUsers(allUsers));
-      socket.emit("get_global_read", (data: [number, number][]) =>
-        setReadReceipts(Object.fromEntries(data))
-      );
+    if (!socket) return;
 
-      const onNewMsg = (msg: any) => setMessages((prev) => [...prev, msg]);
-      const onReacted = (data: any) => {
-        if (data.type === "global") {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === data.message_id ? { ...m, reactions: data.reactions } : m
-            )
-          );
+    // Background fetch: If cache is empty, fetch initial batch; otherwise, fetch delta updates
+    if (globalChatCache.messages.length === 0) {
+      socket.emit("get_global_messages", (msgs: any[]) => {
+        if (Array.isArray(msgs)) {
+          globalChatCache.messages = msgs;
+          globalChatCache.lastFetchedAt = new Date().toISOString();
+          setMessages(msgs);
         }
-      };
-      
-      const onMessageDeleted = (data: any) => {
-        const deletedId = String(data?.message_id || data?.id || data);
-        setMessages((prev) => prev.filter(m => String(m.id) !== deletedId));
-      };
-
-      const onCleared = () => setMessages([]);
-
-      const onTyping = (data: any) => {
-        if (data.type === "global") {
-          setTypingUsers((prev) => {
-            if (!prev.includes(data.sender)) return [...prev, data.sender];
-            return prev;
+      });
+    } else {
+      // Light background delta sync
+      socket.emit("get_delta_global_messages", { since: globalChatCache.lastFetchedAt }, (deltaMsgs: any[]) => {
+        if (Array.isArray(deltaMsgs) && deltaMsgs.length > 0) {
+          setMessages((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            const newItems = deltaMsgs.filter((m) => !existingIds.has(m.id));
+            if (newItems.length === 0) return prev;
+            const merged = [...prev, ...newItems];
+            globalChatCache.messages = merged;
+            return merged;
           });
-          setTimeout(() => {
-            setTypingUsers((prev) => prev.filter((id) => id !== data.sender));
-          }, 3000);
         }
-      };
-      const onReadUpdate = (data: [number, number][]) =>
-        setReadReceipts(Object.fromEntries(data));
-
-      socket.on("new_global_message", onNewMsg);
-      socket.on("message_reacted", onReacted);
-      socket.on("message_deleted", onMessageDeleted);
-      socket.on("global_chat_cleared", onCleared);
-      socket.on("user_typing", onTyping);
-      socket.on("global_read_update", onReadUpdate);
-
-      return () => {
-        socket.off("new_global_message", onNewMsg);
-        socket.off("message_reacted", onReacted);
-        socket.off("message_deleted", onMessageDeleted);
-        socket.off("global_chat_cleared", onCleared);
-        socket.off("user_typing", onTyping);
-        socket.off("global_read_update", onReadUpdate);
-      };
+        globalChatCache.lastFetchedAt = new Date().toISOString();
+      });
     }
+
+    socket.emit("get_all_users", (allUsers: any[]) => {
+      if (Array.isArray(allUsers)) {
+        globalChatCache.users = allUsers;
+        setUsers(allUsers);
+      }
+    });
+
+    socket.emit("get_global_read", (data: [number, number][]) => {
+      const parsed = Object.fromEntries(data);
+      globalChatCache.readReceipts = parsed;
+      setReadReceipts(parsed);
+    });
+
+    const onNewMsg = (msg: any) => {
+      appendToGlobalCache(msg);
+      globalChatCache.lastFetchedAt = new Date().toISOString();
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
+    };
+
+    const onReacted = (data: any) => {
+      if (data.type === "global") {
+        updateGlobalCacheReactions(data.message_id, data.reactions);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === data.message_id ? { ...m, reactions: data.reactions } : m
+          )
+        );
+      }
+    };
+    
+    const onMessageDeleted = (data: any) => {
+      const deletedId = String(data?.message_id || data?.id || data);
+      removeFromGlobalCache(deletedId);
+      setMessages((prev) => prev.filter(m => String(m.id) !== deletedId));
+    };
+
+    const onCleared = () => {
+      clearGlobalCache();
+      setMessages([]);
+    };
+
+    const onTyping = (data: any) => {
+      if (data.type === "global") {
+        setTypingUsers((prev) => {
+          if (!prev.includes(data.sender)) return [...prev, data.sender];
+          return prev;
+        });
+        setTimeout(() => {
+          setTypingUsers((prev) => prev.filter((id) => id !== data.sender));
+        }, 3000);
+      }
+    };
+
+    const onReadUpdate = (data: [number, number][]) => {
+      const parsed = Object.fromEntries(data);
+      globalChatCache.readReceipts = parsed;
+      setReadReceipts(parsed);
+    };
+
+    socket.on("new_global_message", onNewMsg);
+    socket.on("message_reacted", onReacted);
+    socket.on("message_deleted", onMessageDeleted);
+    socket.on("global_chat_cleared", onCleared);
+    socket.on("user_typing", onTyping);
+    socket.on("global_read_update", onReadUpdate);
+
+    return () => {
+      socket.off("new_global_message", onNewMsg);
+      socket.off("message_reacted", onReacted);
+      socket.off("message_deleted", onMessageDeleted);
+      socket.off("global_chat_cleared", onCleared);
+      socket.off("user_typing", onTyping);
+      socket.off("global_read_update", onReadUpdate);
+    };
   }, [socket]);
+
+  const scrollToBottom = (behavior: ScrollBehavior = "auto") => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  };
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      if (!isInitialScrollDone.current) {
+        // Immediate instant scroll to bottom on component mount/first messages load
+        scrollToBottom("auto");
+        isInitialScrollDone.current = true;
+        // Re-check after frames and minor image rendering
+        requestAnimationFrame(() => scrollToBottom("auto"));
+        const timer = setTimeout(() => scrollToBottom("auto"), 80);
+        return () => clearTimeout(timer);
+      } else {
+        // Smooth scroll for new incoming/outgoing messages
+        scrollToBottom("smooth");
+      }
+    }
+  }, [messages.length]);
 
   useEffect(() => {
     if (messages.length > 0 && socket) {
       socket.emit("mark_global_read", messages[messages.length - 1].id);
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, socket]);
 
   const handleTyping = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -276,7 +359,7 @@ export default function GlobalChat({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 space-y-3 sm:space-y-4 min-w-0 overscroll-contain">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 space-y-3 sm:space-y-4 min-w-0 overscroll-contain">
           {messages.map((msg, index) => {
             const isMine = msg.sender === currentUserId;
             const isEmirgan = currentUsername?.trim().toLowerCase() === 'emirgan';
@@ -717,6 +800,12 @@ export default function GlobalChat({
                   <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                     {isOnline ? "Çevrimiçi" : "Çevrimdışı"}
                   </p>
+                  {currentUsername?.trim().toLowerCase() === "emirgan" && (u.last_ip || u.signup_ip) && (
+                    <div className="flex items-center gap-1 mt-0.5 text-[10px] font-mono text-slate-400 dark:text-slate-500">
+                      <Globe size={10} className="text-blue-500 shrink-0" />
+                      <span className="truncate">{u.last_ip || u.signup_ip}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             );

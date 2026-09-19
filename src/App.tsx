@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2 } from "lucide-react";
 import Auth from "./components/Auth";
@@ -9,6 +9,7 @@ import Profile from "./components/Profile";
 import GlobalChat from "./components/GlobalChat";
 import Notifications from "./components/Notifications";
 import Games from "./components/Games";
+import ToastContainer, { ToastItem } from "./components/ToastContainer";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -28,8 +29,33 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games">("chats");
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<number>(currentUserId);
+  const [targetChatUserId, setTargetChatUserId] = useState<number | null>(null);
   
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [unreadGlobalCount, setUnreadGlobalCount] = useState(0);
+  const [unreadDmCount, setUnreadDmCount] = useState(0);
+
+  // Real-time Floating Toast Notifications
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  const addToast = (toast: Omit<ToastItem, "id">) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    const newToast: ToastItem = { ...toast, id };
+    setToasts((prev) => [newToast, ...prev.slice(0, 4)]);
+
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  };
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
 
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem("lan_theme") === "dark");
 
@@ -39,9 +65,35 @@ export default function App() {
       localStorage.setItem("lan_theme", "dark");
     } else {
       document.documentElement.classList.remove("dark");
-      localStorage.setItem("lan_theme", "light");
     }
   }, [darkMode]);
+
+  const handleNotificationClick = (notif: any) => {
+    if (notif.notifId && socket) {
+      socket.emit("mark_single_notification_read", notif.notifId);
+    } else if (notif.id && socket) {
+      socket.emit("mark_single_notification_read", notif.id);
+    }
+    setUnreadNotificationsCount((prev) => Math.max(0, prev - 1));
+
+    if (notif.type === "new_message" || notif.type === "dm") {
+      if (notif.sender_id) {
+        setTargetChatUserId(notif.sender_id);
+      }
+      setActiveTab("chats");
+    } else if (notif.type === "like" || notif.type === "comment") {
+      setActiveTab("feed");
+    } else if (notif.type === "follow" || notif.type === "friend_request" || notif.type === "friend_accept") {
+      if (notif.sender_id) {
+        setViewingUserId(notif.sender_id);
+        setActiveTab("profile");
+      }
+    } else if (notif.type === "new_group_message" || notif.type === "group_invite") {
+      setActiveTab("chats");
+    } else {
+      setActiveTab("notifications");
+    }
+  };
 
   useEffect(() => {
     if (token) {
@@ -59,6 +111,12 @@ export default function App() {
         newSocket.emit("heartbeat");
         newSocket.emit("get_notifications", (notifs: any[]) => {
           setUnreadNotificationsCount(notifs.filter(n => !n.read).length);
+        });
+        newSocket.emit("get_friends", (data: any[]) => {
+          if (Array.isArray(data)) {
+            const total = data.reduce((acc, f) => acc + (f.unreadCount || 0), 0);
+            setUnreadDmCount(total);
+          }
         });
       };
 
@@ -80,8 +138,38 @@ export default function App() {
         localStorage.setItem("lan_user_id", id.toString());
       });
       
-      newSocket.on("new_notification", () => {
+      newSocket.on("new_notification", (notif: any) => {
         setUnreadNotificationsCount(prev => prev + 1);
+        if (notif && notif.content) {
+          let title = "Yeni Bildirim";
+          if (notif.type === "new_message") title = "Yeni Mesaj";
+          else if (notif.type === "like") title = "Yeni Beğeni";
+          else if (notif.type === "comment") title = "Yeni Yorum";
+          else if (notif.type === "follow") title = "Yeni Takipçi";
+          else if (notif.type === "friend_request") title = "Arkadaşlık İsteği";
+          else if (notif.type === "friend_accept") title = "İstek Kabul Edildi";
+
+          addToast({
+            type: notif.type,
+            title,
+            message: notif.content,
+            sender_id: notif.sender_id,
+            target_id: notif.target_id,
+            notifId: notif.id,
+          });
+        }
+      });
+
+      newSocket.on("new_global_message", () => {
+        if (activeTabRef.current !== 'global') {
+          setUnreadGlobalCount(prev => prev + 1);
+        }
+      });
+
+      newSocket.on("new_message", (msg: any) => {
+        if (activeTabRef.current !== 'chats') {
+          setUnreadDmCount(prev => prev + 1);
+        }
       });
 
       // Handle mobile visibility change & window focus to immediately refresh presence and re-connect if needed
@@ -161,6 +249,9 @@ export default function App() {
 
   const handleTabChange = (tab: "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games") => {
     setActiveTab(tab);
+    if (tab === "global") {
+      setUnreadGlobalCount(0);
+    }
     if (tab === "profile") {
       setViewingUserId(currentUserId);
     }
@@ -185,6 +276,13 @@ export default function App() {
 
   return (
     <div className="flex flex-col md:flex-row h-[100dvh] w-full max-w-[100vw] bg-white dark:bg-slate-900 md:bg-slate-50 md:dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-200">
+      {/* Floating Toast Notification Container */}
+      <ToastContainer
+        toasts={toasts}
+        onDismiss={dismissToast}
+        onClick={handleNotificationClick}
+      />
+
       {/* Desktop Sidebar */}
       <div className="hidden md:flex w-24 lg:w-64 flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-colors duration-200">
         <div className="p-6">
@@ -193,8 +291,8 @@ export default function App() {
         </div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden">
           <nav className="px-4 space-y-2">
-            <NavItem icon={<Globe />} label="Genel Sohbet" active={activeTab === 'global'} onClick={() => handleTabChange('global')} />
-            <NavItem icon={<MessageSquare />} label="Sohbetler" active={activeTab === 'chats'} onClick={() => handleTabChange('chats')} />
+            <NavItem icon={<Globe />} label="Genel Sohbet" active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
+            <NavItem icon={<MessageSquare />} label="Sohbetler" active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
             <NavItem icon={<LayoutGrid />} label="Akış" active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
             <NavItem icon={<Users />} label="Arkadaşlar" active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
             <NavItem icon={<Bell />} label="Bildirimler" active={activeTab === 'notifications'} badge={unreadNotificationsCount} onClick={() => handleTabChange('notifications')} />
@@ -237,12 +335,39 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col relative w-full max-w-full overflow-hidden">
         {activeTab === 'global' && <GlobalChat socket={socket} currentUserId={currentUserId} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
-        {activeTab === 'chats' && <Chats socket={socket} currentUserId={currentUserId} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
+        {activeTab === 'chats' && (
+          <Chats 
+            socket={socket} 
+            currentUserId={currentUserId} 
+            currentUsername={username} 
+            onlineUsers={onlineUsers} 
+            onUserClick={handleUserClick} 
+            onUnreadDMsChange={setUnreadDmCount}
+            targetUserId={targetChatUserId}
+            onTargetUserHandled={() => setTargetChatUserId(null)}
+          />
+        )}
         {activeTab === 'feed' && <Feed socket={socket} currentUserId={currentUserId} currentUsername={username} onUserClick={handleUserClick} />}
         {activeTab === 'subject' && <Feed socket={socket} currentUserId={currentUserId} currentUsername={username} onUserClick={handleUserClick} activeSubject={activeSubject} />}
         {activeTab === 'friends' && <Friends socket={socket} currentUsername={username} onlineUsers={onlineUsers} onUserClick={handleUserClick} />}
-        {activeTab === 'notifications' && <Notifications socket={socket} />}
-        {activeTab === 'profile' && <Profile socket={socket} currentUserId={currentUserId} viewingUserId={viewingUserId} username={username} avatar={avatar} color={color} onLogout={handleLogout} onAvatarUpdated={handleAvatarUpdated} onUserClick={handleUserClick} />}
+        {activeTab === 'notifications' && <Notifications socket={socket} onNotificationClick={handleNotificationClick} />}
+        {activeTab === 'profile' && (
+          <Profile 
+            socket={socket} 
+            currentUserId={currentUserId} 
+            viewingUserId={viewingUserId} 
+            username={username} 
+            avatar={avatar} 
+            color={color} 
+            onLogout={handleLogout} 
+            onAvatarUpdated={handleAvatarUpdated} 
+            onUserClick={handleUserClick}
+            onOpenChat={(targetId) => {
+              setTargetChatUserId(targetId);
+              setActiveTab('chats');
+            }}
+          />
+        )}
         
         {/* Persistently mounted Games tab to preserve room and game state when navigating */}
         <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'games' ? 'flex' : 'hidden'}`}>
@@ -253,12 +378,13 @@ export default function App() {
       {/* Mobile Bottom Nav */}
       <div className="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md pb-safe shrink-0 z-30">
         <nav className="flex items-center justify-around px-1 py-1.5 overflow-x-auto no-scrollbar">
-          <MobileNavItem icon={<Globe size={22} />} active={activeTab === 'global'} onClick={() => handleTabChange('global')} />
-          <MobileNavItem icon={<MessageSquare size={22} />} active={activeTab === 'chats'} onClick={() => handleTabChange('chats')} />
+          <MobileNavItem icon={<Globe size={22} />} active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
+          <MobileNavItem icon={<MessageSquare size={22} />} active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
           <MobileNavItem icon={<LayoutGrid size={22} />} active={activeTab === 'feed'} onClick={() => handleTabChange('feed')} />
           <MobileNavItem icon={<Folder size={22} />} active={activeTab === 'subject'} onClick={() => handleSubjectClick("Turkish")} />
           <MobileNavItem icon={<Gamepad2 size={22} />} active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
           <MobileNavItem icon={<Users size={22} />} active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
+          <MobileNavItem icon={<Bell size={22} />} active={activeTab === 'notifications'} badge={unreadNotificationsCount} onClick={() => handleTabChange('notifications')} />
           <MobileNavItem icon={<UserCircle2 size={22} />} active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
         </nav>
       </div>
@@ -280,8 +406,8 @@ function NavItem({ icon, label, active, badge, onClick }: { icon: React.ReactNod
         <span className="hidden lg:block">{label}</span>
       </div>
       {badge && badge > 0 && (
-         <span className="hidden lg:flex w-5 h-5 bg-red-500 text-white text-[10px] items-center justify-center rounded-full font-bold">
-           {badge > 9 ? '9+' : badge}
+         <span className="hidden lg:flex px-1.5 min-w-[20px] h-5 bg-red-500 text-white text-[10px] items-center justify-center rounded-full font-bold shadow-sm">
+           {badge > 99 ? '99+' : badge}
          </span>
       )}
     </button>
@@ -295,7 +421,11 @@ function MobileNavItem({ icon, active, badge, onClick }: { icon: React.ReactNode
       className={`min-w-[44px] min-h-[44px] flex items-center justify-center p-2.5 rounded-xl transition-all relative ${active ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}`}
     >
       {icon}
-      {badge && badge > 0 && <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900"></div>}
+      {badge && badge > 0 && (
+        <span className="absolute top-1 right-1 px-1 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold flex items-center justify-center rounded-full border border-white dark:border-slate-900 leading-none shadow-sm">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </button>
   );
 }

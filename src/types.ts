@@ -5,6 +5,8 @@ export interface User {
   color?: string;
   token?: string;
   last_seen: string;
+  signup_ip?: string | null;
+  last_ip?: string | null;
 }
 
 export interface Post {
@@ -75,6 +77,46 @@ export interface Friend {
   color?: string;
   status: 0 | 1; // 0 = pending, 1 = accepted
   is_sender: boolean; // Did current user send the request?
+  signup_ip?: string | null;
+  last_ip?: string | null;
+  lastMessageText?: string | null;
+  lastMessageTime?: string | null;
+  lastMessageSender?: number | null;
+  unreadCount?: number;
+}
+
+export interface TableChatMessage {
+  id: string | number;
+  senderId: number;
+  username: string;
+  avatar?: string | null;
+  color?: string | null;
+  text: string;
+  time: string;
+}
+
+export interface AppNotification {
+  id: number;
+  user_id: number;
+  type: 'new_message' | 'dm' | 'like' | 'comment' | 'follow' | 'friend_request' | 'friend_accept' | 'group_invite' | 'new_group_message' | string;
+  content: string;
+  read: number;
+  sender_id?: number | null;
+  target_id?: number | null;
+  created_at: string;
+}
+
+export interface UserProfileData {
+  id: number;
+  username: string;
+  avatar: string | null;
+  color?: string;
+  followersCount: number;
+  followingCount: number;
+  isFollowing: boolean;
+  friendStatus?: 'none' | 'pending_sent' | 'pending_received' | 'friends';
+  signup_ip?: string | null;
+  last_ip?: string | null;
 }
 
 export interface MediaModalData {

@@ -169,6 +169,10 @@ async function initDb() {
   try { await client.execute("ALTER TABLE posts ADD COLUMN media_type TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE posts ADD COLUMN subject TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE users ADD COLUMN uno_wins INTEGER DEFAULT 0"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN signup_ip TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN last_ip TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE notifications ADD COLUMN sender_id INTEGER"); } catch(e){}
+  try { await client.execute("ALTER TABLE notifications ADD COLUMN target_id INTEGER"); } catch(e){}
 }
 
 async function startServer() {
@@ -176,6 +180,20 @@ async function startServer() {
   
   const app = express();
   const PORT = 3000;
+  
+  // Render / proxy setup for accurate client IP detection
+  app.set("trust proxy", true);
+
+  const getClientIp = (req: express.Request): string => {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.trim()) {
+      return forwarded.split(",")[0].trim();
+    }
+    if (Array.isArray(forwarded) && forwarded.length > 0) {
+      return forwarded[0].split(",")[0].trim();
+    }
+    return req.ip || req.socket.remoteAddress || "Bilinmiyor";
+  };
   
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -273,9 +291,10 @@ async function startServer() {
         : colors[Math.floor(Math.random() * colors.length)]; // Fallback if all colors used
 
       const lastSeen = new Date().toISOString();
+      const clientIp = getClientIp(req);
       const insertResult = await client.execute({
-        sql: "INSERT INTO users (username, password, color, token, last_seen) VALUES (?, ?, ?, ?, ?)",
-        args: [username, hash, randomColor, token, lastSeen]
+        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp]
       });
       
       res.json({ token, username, id: Number(insertResult.lastInsertRowid), color: randomColor });
@@ -301,9 +320,10 @@ async function startServer() {
             const colors = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-yellow-500", "bg-purple-500", "bg-pink-500", "bg-indigo-500", "bg-teal-500"];
             color = colors[Math.floor(Math.random() * colors.length)];
           }
+          const clientIp = getClientIp(req);
           await client.execute({
-            sql: "UPDATE users SET token = ?, color = ? WHERE id = ?",
-            args: [token, color, user.id]
+            sql: "UPDATE users SET token = ?, color = ?, last_ip = ?, last_seen = ? WHERE id = ?",
+            args: [token, color, clientIp, new Date().toISOString(), user.id]
           });
           res.json({ token, username: user.username, avatar: user.avatar, id: user.id, color });
         } else {
@@ -480,7 +500,7 @@ async function startServer() {
   const onlineUsers = new Map<number, string>();
   const disconnectTimers = new Map<number, NodeJS.Timeout>();
   const globalRead = new Map<number, number>();
-  const chatRead = new Map<number, Map<number, number>>();
+  const chatRead = new Map<string | number, Map<number, number>>();
   
   const okeyRooms = new Map<string, any>();
 
@@ -883,7 +903,30 @@ async function startServer() {
         args: [token]
       });
       if (userRes.rows.length === 0) return next(new Error("Invalid token"));
-      socket.data.user = userRes.rows[0];
+      const userObj = userRes.rows[0];
+      
+      // Update last_ip and last_seen on authenticated socket connection
+      const clientIpHeader = socket.handshake.headers["x-forwarded-for"];
+      let socketIp = "Bilinmiyor";
+      if (typeof clientIpHeader === "string" && clientIpHeader.trim()) {
+        socketIp = clientIpHeader.split(",")[0].trim();
+      } else if (Array.isArray(clientIpHeader) && clientIpHeader.length > 0) {
+        socketIp = clientIpHeader[0].split(",")[0].trim();
+      } else if (socket.handshake.address) {
+        socketIp = socket.handshake.address;
+      }
+
+      if (socketIp && socketIp !== "Bilinmiyor") {
+        try {
+          await client.execute({
+            sql: "UPDATE users SET last_ip = ?, last_seen = ? WHERE id = ?",
+            args: [socketIp, new Date().toISOString(), userObj.id]
+          });
+          userObj.last_ip = socketIp;
+        } catch (e) {}
+      }
+
+      socket.data.user = userObj;
       next();
     } catch(e) {
       next(new Error("DB error"));
@@ -949,10 +992,25 @@ async function startServer() {
         const followingRes = await client.execute({ sql: "SELECT COUNT(*) as count FROM followers WHERE follower_id = ?", args: [targetId] });
         
         let isFollowing = false;
+        let friendStatus: 'none' | 'pending_sent' | 'pending_received' | 'friends' = 'none';
+
         if (targetId !== user.id) {
-           const checkRes = await client.execute({ sql: "SELECT * FROM followers WHERE follower_id = ? AND following_id = ?", args: [user.id, targetId] });
+           const checkRes = await client.execute({ sql: "SELECT id FROM followers WHERE follower_id = ? AND following_id = ?", args: [user.id, targetId] });
            isFollowing = checkRes.rows.length > 0;
+
+           const frRes = await client.execute({
+             sql: "SELECT * FROM friends WHERE (user1 = ? AND user2 = ?) OR (user1 = ? AND user2 = ?)",
+             args: [user.id, targetId, targetId, user.id]
+           });
+           if (frRes.rows.length > 0) {
+             const fr = frRes.rows[0];
+             if (fr.status === 1) friendStatus = 'friends';
+             else if (fr.user1 === user.id) friendStatus = 'pending_sent';
+             else friendStatus = 'pending_received';
+           }
         }
+
+        const isEmirgan = user.username && user.username.trim().toLowerCase() === "emirgan";
 
         cb({ 
           id: u.id, 
@@ -961,10 +1019,46 @@ async function startServer() {
           color: u.color,
           followersCount: Number(followersRes.rows[0]?.count || 0),
           followingCount: Number(followingRes.rows[0]?.count || 0),
-          isFollowing
+          isFollowing,
+          friendStatus,
+          ...(isEmirgan ? { signup_ip: u.signup_ip || null, last_ip: u.last_ip || null } : {})
         });
       } else {
         cb(null);
+      }
+    });
+
+    socket.on("get_followers", async (targetId, cb) => {
+      try {
+        const res = await client.execute({
+          sql: `SELECT u.id, u.username, u.avatar, u.color 
+                FROM followers f 
+                JOIN users u ON f.follower_id = u.id 
+                WHERE f.following_id = ? 
+                ORDER BY f.id DESC`,
+          args: [targetId]
+        });
+        cb(res.rows);
+      } catch (err) {
+        console.error("get_followers error:", err);
+        cb([]);
+      }
+    });
+
+    socket.on("get_following", async (targetId, cb) => {
+      try {
+        const res = await client.execute({
+          sql: `SELECT u.id, u.username, u.avatar, u.color 
+                FROM followers f 
+                JOIN users u ON f.following_id = u.id 
+                WHERE f.follower_id = ? 
+                ORDER BY f.id DESC`,
+          args: [targetId]
+        });
+        cb(res.rows);
+      } catch (err) {
+        console.error("get_following error:", err);
+        cb([]);
       }
     });
 
@@ -980,14 +1074,7 @@ async function startServer() {
         await client.execute({ sql: "INSERT INTO followers (follower_id, following_id, created_at) VALUES (?, ?, ?)", args: [user.id, targetId, new Date().toISOString()] });
         
         // Notify
-        await client.execute({
-          sql: "INSERT INTO notifications (user_id, type, content, created_at) VALUES (?, ?, ?, ?)",
-          args: [targetId, 'follow', `${user.username} seni takip etmeye başladı.`, new Date().toISOString()]
-        });
-        const targetSockId = onlineUsers.get(Number(targetId));
-        if (targetSockId) {
-          io.to(targetSockId).emit("notifications_updated");
-        }
+        await addNotification(Number(targetId), 'follow', `${user.username} seni takip etmeye başladı.`, user.id);
       }
       
       // Update both users
@@ -1113,6 +1200,15 @@ async function startServer() {
           sql: "INSERT INTO likes (post_id, user_id) VALUES (?, ?)",
           args: [postId, user.id]
         });
+        try {
+          const postOwnerRes = await client.execute({ sql: "SELECT user_id FROM posts WHERE id = ?", args: [postId] });
+          if (postOwnerRes.rows.length > 0) {
+            const postOwnerId = Number(postOwnerRes.rows[0].user_id);
+            if (postOwnerId !== user.id) {
+              await addNotification(postOwnerId, "like", `${user.username} gönderini beğendi.`, user.id, Number(postId));
+            }
+          }
+        } catch (e) {}
       }
       io.emit("feed_updated");
     });
@@ -1168,6 +1264,16 @@ async function startServer() {
         sql: "INSERT INTO comments (post_id, user_id, content, created_at) VALUES (?, ?, ?, ?)",
         args: [data.postId, user.id, data.content, new Date().toISOString()]
       });
+      try {
+        const postOwnerRes = await client.execute({ sql: "SELECT user_id FROM posts WHERE id = ?", args: [data.postId] });
+        if (postOwnerRes.rows.length > 0) {
+          const postOwnerId = Number(postOwnerRes.rows[0].user_id);
+          if (postOwnerId !== user.id) {
+            const snippet = String(data.content || "").slice(0, 30);
+            await addNotification(postOwnerId, "comment", `${user.username} gönderine yorum yaptı: "${snippet}${snippet.length >= 30 ? '...' : ''}"`, user.id, Number(data.postId));
+          }
+        }
+      } catch (e) {}
       io.emit("feed_updated");
       io.emit("comments_updated", data.postId);
     });
@@ -1195,15 +1301,18 @@ async function startServer() {
       if(cb) cb();
     });
 
-    const addNotification = async (userId: number, type: string, content: string) => {
+    const addNotification = async (userId: number, type: string, content: string, senderId?: number, targetId?: number) => {
       if (userId === user.id) return;
       const res = await client.execute({
-        sql: "INSERT INTO notifications (user_id, type, content, read, created_at) VALUES (?, ?, ?, 0, ?)",
-        args: [userId, type, content, new Date().toISOString()]
+        sql: "INSERT INTO notifications (user_id, type, content, read, sender_id, target_id, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)",
+        args: [userId, type, content, senderId || null, targetId || null, new Date().toISOString()]
       });
       const newNotifRes = await client.execute({ sql: "SELECT * FROM notifications WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const s = onlineUsers.get(userId);
-      if (s) io.to(s).emit("new_notification", newNotifRes.rows[0]);
+      if (s) {
+        io.to(s).emit("new_notification", newNotifRes.rows[0]);
+        io.to(s).emit("notifications_updated");
+      }
     };
 
     socket.on("get_notifications", async (cb) => {
@@ -1221,8 +1330,17 @@ async function startServer() {
       });
     });
 
+    socket.on("mark_single_notification_read", async (notifId: number, cb) => {
+      await client.execute({
+        sql: "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+        args: [notifId, user.id]
+      });
+      if (cb) cb({ success: true });
+    });
+
     // Friends
     socket.on("get_friends", async (cb) => {
+      const isEmirgan = user.username && user.username.trim().toLowerCase() === "emirgan";
       const friendsRes = await client.execute({
         sql: "SELECT * FROM friends WHERE user1 = ? OR user2 = ?",
         args: [user.id, user.id]
@@ -1230,12 +1348,51 @@ async function startServer() {
       const result = await Promise.all(friendsRes.rows.map(async (f: any) => {
         const otherId = f.user1 === user.id ? f.user2 : f.user1;
         const otherUser = await getUser(otherId as number);
+        let lastMessageText: string | null = null;
+        let lastMessageTime: string | null = null;
+        let lastMessageSender: number | null = null;
+        let unreadCount = 0;
+
+        if (f.status === 1 && otherUser) {
+          try {
+            const lastMsgRes = await client.execute({
+              sql: "SELECT id, sender, receiver, type, content, file_name, created_at FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY id DESC LIMIT 1",
+              args: [user.id, otherId, otherId, user.id]
+            });
+            if (lastMsgRes.rows.length > 0) {
+              const lm = lastMsgRes.rows[0];
+              lastMessageTime = lm.created_at as string;
+              lastMessageSender = lm.sender as number;
+              if (lm.type === "image") lastMessageText = "📷 Fotoğraf";
+              else if (lm.type === "voice") lastMessageText = "🎤 Ses kaydı";
+              else if (lm.type === "file") lastMessageText = `📎 ${lm.file_name || "Dosya"}`;
+              else lastMessageText = (lm.content as string) || "";
+            }
+
+            const roomId = `dm_${Math.min(user.id, otherId)}_${Math.max(user.id, otherId)}`;
+            const lastReadId = chatRead.get(roomId)?.get(Number(user.id)) || 0;
+            if (lastReadId > 0) {
+              const unreadRes = await client.execute({
+                sql: "SELECT COUNT(*) as cnt FROM messages WHERE sender = ? AND receiver = ? AND id > ?",
+                args: [otherId, user.id, lastReadId]
+              });
+              unreadCount = Number(unreadRes.rows[0]?.cnt || 0);
+            }
+          } catch (e) {}
+        }
+
         return {
           id: otherUser?.id,
           username: otherUser?.username,
           avatar: otherUser?.avatar,
+          color: otherUser?.color,
           status: f.status,
-          is_sender: f.user1 === user.id
+          is_sender: f.user1 === user.id,
+          lastMessageText,
+          lastMessageTime,
+          lastMessageSender,
+          unreadCount,
+          ...(isEmirgan ? { signup_ip: otherUser?.signup_ip || null, last_ip: otherUser?.last_ip || null } : {})
         };
       }));
       cb(result.filter(x => x.id));
@@ -1243,8 +1400,12 @@ async function startServer() {
 
     socket.on("search_users", async (query, cb) => {
       if(!query) return cb([]);
+      const isEmirgan = user.username && user.username.trim().toLowerCase() === "emirgan";
+      const selectCols = isEmirgan 
+        ? "id, username, avatar, color, signup_ip, last_ip" 
+        : "id, username, avatar, color";
       const usersRes = await client.execute({
-        sql: "SELECT id, username, avatar FROM users WHERE id != ? AND username LIKE ? LIMIT 20",
+        sql: `SELECT ${selectCols} FROM users WHERE id != ? AND username LIKE ? LIMIT 20`,
         args: [user.id, `%${query}%`]
       });
       cb(usersRes.rows);
@@ -1260,9 +1421,14 @@ async function startServer() {
           sql: "INSERT INTO friends (user1, user2, status) VALUES (?, ?, 0)",
           args: [user.id, targetId]
         });
-        const targetSocket = onlineUsers.get(targetId);
-        if (targetSocket) io.to(targetSocket).emit("friends_updated");
-        await addNotification(targetId, "friend_request", `${user.username} sana arkadaşlık isteği gönderdi.`);
+        const targetSocket = onlineUsers.get(Number(targetId));
+        if (targetSocket) {
+          io.to(targetSocket).emit("friends_updated");
+          io.to(targetSocket).emit("profile_updated", user.id);
+        }
+        io.to(socket.id).emit("friends_updated");
+        io.to(socket.id).emit("profile_updated", targetId);
+        await addNotification(Number(targetId), "friend_request", `${user.username} sana arkadaşlık isteği gönderdi.`, user.id);
       }
       if(cb) cb();
     });
@@ -1277,15 +1443,39 @@ async function startServer() {
           sql: "UPDATE friends SET status = 1 WHERE id = ?",
           args: [friendRes.rows[0].id]
         });
-        const targetSocket = onlineUsers.get(targetId);
-        if (targetSocket) io.to(targetSocket).emit("friends_updated");
-        await addNotification(targetId, "friend_accept", `${user.username} arkadaşlık isteğini kabul etti.`);
+        const targetSocket = onlineUsers.get(Number(targetId));
+        if (targetSocket) {
+          io.to(targetSocket).emit("friends_updated");
+          io.to(targetSocket).emit("profile_updated", user.id);
+        }
+        io.to(socket.id).emit("friends_updated");
+        io.to(socket.id).emit("profile_updated", targetId);
+        await addNotification(Number(targetId), "friend_accept", `${user.username} arkadaşlık isteğini kabul etti.`, user.id);
       }
       if(cb) cb();
     });
 
+    socket.on("remove_friend", async (targetId, cb) => {
+      await client.execute({
+        sql: "DELETE FROM friends WHERE (user1 = ? AND user2 = ?) OR (user1 = ? AND user2 = ?)",
+        args: [user.id, targetId, targetId, user.id]
+      });
+      const targetSocket = onlineUsers.get(Number(targetId));
+      if (targetSocket) {
+        io.to(targetSocket).emit("friends_updated");
+        io.to(targetSocket).emit("profile_updated", user.id);
+      }
+      io.to(socket.id).emit("friends_updated");
+      io.to(socket.id).emit("profile_updated", targetId);
+      if(cb) cb({ success: true });
+    });
+
     socket.on("get_all_users", async (cb) => {
-      const usersRes = await client.execute("SELECT id, username, avatar, color FROM users");
+      const isEmirgan = user.username && user.username.trim().toLowerCase() === "emirgan";
+      const selectCols = isEmirgan 
+        ? "id, username, avatar, color, signup_ip, last_ip" 
+        : "id, username, avatar, color";
+      const usersRes = await client.execute(`SELECT ${selectCols} FROM users`);
       cb(usersRes.rows);
     });
 
@@ -1418,7 +1608,7 @@ async function startServer() {
       const targetSocket = onlineUsers.get(receiver);
       if (targetSocket) io.to(targetSocket).emit("new_message", newMsg);
       socket.emit("new_message", newMsg); // echo back
-      await addNotification(receiver, "new_message", `${user.username} sana yeni bir mesaj gönderdi.`);
+      await addNotification(receiver, "new_message", `${user.username} sana yeni bir mesaj gönderdi.`, user.id);
     });
 
     const populateMessage = async (m: any, type: "global" | "group") => {
@@ -1450,6 +1640,20 @@ async function startServer() {
       const msgs = await client.execute("SELECT * FROM (SELECT * FROM global_messages ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC");
       const populated = await Promise.all(msgs.rows.map(m => populateMessage(m, "global")));
       cb(populated);
+    });
+
+    socket.on("get_delta_global_messages", async (data: { since?: string }, cb) => {
+      try {
+        if (!data?.since) return cb([]);
+        const deltaRes = await client.execute({
+          sql: "SELECT * FROM global_messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 100",
+          args: [data.since]
+        });
+        const populated = await Promise.all(deltaRes.rows.map(m => populateMessage(m, "global")));
+        cb(populated);
+      } catch (err) {
+        cb([]);
+      }
     });
 
     socket.on("send_global_message", async (data) => {
@@ -1744,6 +1948,7 @@ async function startServer() {
             socket.emit("okey_hand", player.hand || []);
           }
           socket.emit("okey_state", getSanitizedRoom(room));
+          socket.emit("okey_chat_history", room.tableMessages || []);
         }
       }
     });
@@ -1757,6 +1962,7 @@ async function startServer() {
         status: "waiting",
         hostId: user.id,
         creatorId: user.id,
+        tableMessages: [],
         players: [{
           id: user.id,
           username: user.username,
@@ -1789,6 +1995,10 @@ async function startServer() {
       let room = okeyRooms.get(roomId);
       if (!room) return;
 
+      if (!room.tableMessages) {
+        room.tableMessages = [];
+      }
+
       const existingPlayer = room.players.find((p: any) => p.id === user.id);
       if (!existingPlayer && room.players.length < 4 && room.status === 'waiting') {
         room.players.push({
@@ -1814,8 +2024,33 @@ async function startServer() {
 
       socket.join(`okey_${roomId}`);
       socket.data.currentOkeyRoom = roomId;
+      socket.emit("okey_chat_history", room.tableMessages || []);
       broadcastOkeyRoom(roomId);
       emitRooms();
+    });
+
+    // In-Game Temporary Table Chat (RAM-Only / No-DB)
+    socket.on("send_okey_chat", ({ roomId, text }: { roomId: string; text: string }) => {
+      if (!roomId || !text || typeof text !== "string" || !text.trim()) return;
+      const room = okeyRooms.get(roomId);
+      if (!room) return;
+      if (!room.players.some((p: any) => p.id === user.id)) return;
+
+      if (!room.tableMessages) room.tableMessages = [];
+      const chatMsg = {
+        id: `tbl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        senderId: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        color: user.color,
+        text: text.trim().slice(0, 300),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      room.tableMessages.push(chatMsg);
+      if (room.tableMessages.length > 50) {
+        room.tableMessages.shift();
+      }
+      io.to(`okey_${roomId}`).emit("okey_chat_message", chatMsg);
     });
 
     socket.on("start_okey_game", (roomId) => {

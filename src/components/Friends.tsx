@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
 import { User, Friend } from "../types";
-import { Search, UserPlus, Check, Clock, UserRound, UserX, AlertTriangle } from "lucide-react";
+import { Search, UserPlus, Check, Clock, UserRound, UserX, AlertTriangle, Shield, Globe } from "lucide-react";
 
 export default function Friends({ 
   socket, 
@@ -107,7 +107,15 @@ export default function Friends({
                   <div key={user.id} className="flex items-center justify-between p-4">
                     <div className="flex items-center gap-3">
                       {user.avatar ? <img src={user.avatar} className="w-10 h-10 rounded-full object-cover" /> : <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center"><UserRound size={20} className="text-slate-400" /></div>}
-                      <span className="font-medium text-slate-700">{user.username}</span>
+                      <div>
+                        <span className="font-medium text-slate-700">{user.username}</span>
+                        {isEmirgan && (user.last_ip || user.signup_ip) && (
+                          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] font-mono text-slate-500">
+                            <Globe size={11} className="text-blue-500 shrink-0" />
+                            <span>IP: {user.last_ip || user.signup_ip}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {isFriend ? (
@@ -177,6 +185,12 @@ export default function Friends({
                       <div className="truncate">
                         <h3 className="font-semibold text-slate-800 hover:text-blue-600 transition-colors truncate">{friend.username}</h3>
                         <p className="text-xs text-slate-500">{isOnline ? "Çevrimiçi" : "Çevrimdışı"}</p>
+                        {isEmirgan && (friend.last_ip || friend.signup_ip) && (
+                          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] font-mono text-slate-500">
+                            <Globe size={11} className="text-blue-500 shrink-0" />
+                            <span className="truncate">IP: {friend.last_ip || friend.signup_ip}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     {isEmirgan && (

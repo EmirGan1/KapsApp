@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Gamepad2, Users, RefreshCcw, LogOut, Plus, Play, 
   ArrowDown, CheckCircle2, Trophy, Sparkles, Layers, 
-  AlertCircle, ChevronRight, HelpCircle, Check, Crown
+  AlertCircle, ChevronRight, HelpCircle, Check, Crown,
+  MessageSquare, Send, X
 } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import Avatar from './Avatar';
@@ -13,6 +14,7 @@ import {
   autoSortPairs, 
   checkClassicOkeyWin 
 } from '../utils/okeyEngine';
+import { TableChatMessage } from '../types';
 
 const INITIAL_RACK_SIZE = 30; // 2 rows x 15 slots
 
@@ -59,6 +61,30 @@ export default function OkeyGame({
   // Messages / feedback
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  // In-Game Temporary Table Chat state (RAM-Only / No-DB)
+  const [tableChatMessages, setTableChatMessages] = useState<TableChatMessage[]>([]);
+  const [isTableChatOpen, setIsTableChatOpen] = useState(false);
+  const isTableChatOpenRef = useRef(false);
+  const [unreadTableChatCount, setUnreadTableChatCount] = useState(0);
+  const [tableChatInput, setTableChatInput] = useState('');
+  const tableChatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    isTableChatOpenRef.current = isTableChatOpen;
+    if (isTableChatOpen) {
+      setUnreadTableChatCount(0);
+      setTimeout(() => {
+        tableChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    }
+  }, [isTableChatOpen]);
+
+  useEffect(() => {
+    if (isTableChatOpen) {
+      tableChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [tableChatMessages, isTableChatOpen]);
 
   // Track double click timing
   const lastClickRef = useRef<{ slot: number; time: number }>({ slot: -1, time: 0 });
@@ -120,11 +146,24 @@ export default function OkeyGame({
       setTimeout(() => setErrorMessage(null), 3500);
     };
 
+    const onTableChatHistory = (msgs: TableChatMessage[]) => {
+      setTableChatMessages(msgs || []);
+    };
+
+    const onTableChatMessage = (msg: TableChatMessage) => {
+      setTableChatMessages(prev => [...prev, msg]);
+      if (!isTableChatOpenRef.current) {
+        setUnreadTableChatCount(prev => prev + 1);
+      }
+    };
+
     socket.on("okey_rooms_list", onRoomsList);
     socket.on("okey_room_created", onRoomCreated);
     socket.on("okey_state", onRoomState);
     socket.on("okey_hand", onHand);
     socket.on("okey_error", onError);
+    socket.on("okey_chat_history", onTableChatHistory);
+    socket.on("okey_chat_message", onTableChatMessage);
 
     return () => {
       socket.off("okey_rooms_list", onRoomsList);
@@ -132,6 +171,8 @@ export default function OkeyGame({
       socket.off("okey_state", onRoomState);
       socket.off("okey_hand", onHand);
       socket.off("okey_error", onError);
+      socket.off("okey_chat_history", onTableChatHistory);
+      socket.off("okey_chat_message", onTableChatMessage);
     };
   }, [socket]);
 
@@ -149,12 +190,21 @@ export default function OkeyGame({
     socket.emit("join_okey", roomId);
   };
 
+  const sendTableMessage = (msgText: string) => {
+    if (!socket || !currentRoom || !msgText.trim()) return;
+    socket.emit("send_okey_chat", { roomId: currentRoom.id, text: msgText.trim() });
+    setTableChatInput('');
+  };
+
   const leaveRoom = () => {
     if (!socket) return;
     socket.emit("leave_okey");
     setCurrentRoom(null);
     setRack(Array(INITIAL_RACK_SIZE).fill(null));
     setSelectedSlot(null);
+    setTableChatMessages([]);
+    setIsTableChatOpen(false);
+    setUnreadTableChatCount(0);
   };
 
   const startGame = () => {
@@ -615,9 +665,31 @@ export default function OkeyGame({
             )
           )}
 
+          {/* Table Chat Toggle Button */}
+          <button
+            onClick={() => {
+              setIsTableChatOpen(prev => !prev);
+              if (!isTableChatOpen) setUnreadTableChatCount(0);
+            }}
+            className={`relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              isTableChatOpen
+                ? 'bg-blue-600 text-white shadow-lg ring-2 ring-blue-400'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+            }`}
+            title="Masa İçi Geçici Sohbeti Aç/Kapat"
+          >
+            <MessageSquare size={14} className={isTableChatOpen ? 'text-white' : 'text-blue-400'} />
+            <span className="hidden sm:inline">Sohbet</span>
+            {unreadTableChatCount > 0 && !isTableChatOpen && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-red-500 text-[9px] font-black text-white ring-2 ring-slate-900 animate-bounce">
+                {unreadTableChatCount > 9 ? '9+' : unreadTableChatCount}
+              </span>
+            )}
+          </button>
+
           <button 
             onClick={leaveRoom}
-            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 rounded-lg text-xs font-medium transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
             title="Masadan Ayrıl"
           >
             <LogOut size={14} /> <span className="hidden sm:inline">Ayrıl</span>
@@ -1110,6 +1182,107 @@ export default function OkeyGame({
             }}
           >
             <TileView tile={touchDragState.tile} size="md" />
+          </div>
+        )}
+
+        {/* Floating In-Game Table Chat Drawer / Panel (RAM-Only) */}
+        {isTableChatOpen && (
+          <div className="fixed sm:absolute bottom-16 sm:bottom-20 right-2 sm:right-4 z-50 w-[92vw] sm:w-80 h-[360px] max-h-[50vh] bg-slate-900/95 border border-slate-700/80 rounded-2xl shadow-2xl backdrop-blur-md flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
+            {/* Drawer Header */}
+            <div className="px-3 py-2 bg-slate-800/90 border-b border-slate-700/60 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <MessageSquare size={14} className="text-blue-400" />
+                <span className="text-xs font-bold text-slate-200">Masa Sohbeti</span>
+                <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded-md border border-slate-700">
+                  Geçici (RAM)
+                </span>
+              </div>
+              <button
+                onClick={() => setIsTableChatOpen(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/60 transition-colors cursor-pointer"
+                title="Sohbeti Kapat"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            {/* Quick Predefined Messages for fast gameplay */}
+            <div className="px-2 py-1.5 bg-slate-800/40 border-b border-slate-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+              {["Bol şans! 🍀", "İyi oyundu! 👏", "Hızlı oyna :) ⏳", "Tebrikler! 🏆", "Seri dizdim 🔥"].map(quick => (
+                <button
+                  key={quick}
+                  type="button"
+                  onClick={() => sendTableMessage(quick)}
+                  className="text-[10px] whitespace-nowrap px-2 py-0.5 rounded-full bg-slate-800 hover:bg-blue-600 hover:text-white text-slate-300 border border-slate-700 transition-colors shrink-0 cursor-pointer"
+                >
+                  {quick}
+                </button>
+              ))}
+            </div>
+
+            {/* Messages Body */}
+            <div className="flex-1 p-2.5 overflow-y-auto space-y-2 text-xs">
+              {tableChatMessages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 p-4">
+                  <MessageSquare size={24} className="text-slate-600 mb-1 opacity-50" />
+                  <p className="text-[11px] font-medium">Masada henüz mesaj yok.</p>
+                  <p className="text-[10px] text-slate-600 mt-0.5">Mesajlar masa kapandığında bellekten otomatik silinir.</p>
+                </div>
+              ) : (
+                tableChatMessages.map(msg => {
+                  const isMe = msg.senderId === currentUserId;
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                      {!isMe && (
+                        <div className="flex items-center gap-1 mb-0.5 text-[10px] text-slate-400">
+                          <span className="font-semibold text-slate-300">{msg.username}</span>
+                          <span>•</span>
+                          <span>{msg.time}</span>
+                        </div>
+                      )}
+                      <div className={`px-2.5 py-1.5 rounded-xl max-w-[85%] break-words leading-relaxed text-[11px] ${
+                        isMe 
+                          ? 'bg-blue-600 text-white rounded-br-xs' 
+                          : 'bg-slate-800 text-slate-100 rounded-bl-xs border border-slate-700/60'
+                      }`}>
+                        {msg.text}
+                      </div>
+                      {isMe && (
+                        <span className="text-[9px] text-slate-500 mt-0.5 mr-1">{msg.time}</span>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+              <div ref={tableChatEndRef} />
+            </div>
+
+            {/* Chat Input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (tableChatInput.trim()) {
+                  sendTableMessage(tableChatInput);
+                }
+              }}
+              className="p-2 bg-slate-900 border-t border-slate-800 flex items-center gap-1.5 shrink-0"
+            >
+              <input
+                type="text"
+                value={tableChatInput}
+                onChange={(e) => setTableChatInput(e.target.value)}
+                placeholder="Masaya mesaj yaz..."
+                maxLength={200}
+                className="flex-1 bg-slate-800 border border-slate-700 text-slate-100 text-xs px-2.5 py-1.5 rounded-xl focus:outline-none focus:border-blue-500 transition-colors placeholder:text-slate-500"
+              />
+              <button
+                type="submit"
+                disabled={!tableChatInput.trim()}
+                className="p-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white rounded-xl transition-colors shrink-0 cursor-pointer"
+              >
+                <Send size={14} />
+              </button>
+            </form>
           </div>
         )}
 
