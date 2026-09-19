@@ -36,8 +36,11 @@ const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 // Memoized Voice Room Card for Lobby
@@ -153,17 +156,25 @@ const VoiceVideoParticipantCard = React.memo(({
   const menuRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Attach stream to video element
+  // Callback ref to attach stream to video element immediately on mount
+  const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    if (node && stream && !participant.isVideoOff) {
+      if (node.srcObject !== stream) {
+        node.srcObject = stream;
+      }
+      node.play().catch(() => {});
+    }
+  }, [stream, participant.isVideoOff]);
+
+  // Attach stream to video element when stream or status changes
   useEffect(() => {
     if (videoRef.current) {
       if (stream && !participant.isVideoOff) {
-        const hasVideoTracks = stream.getVideoTracks().some(t => t.readyState === 'live' && t.enabled !== false);
-        if (hasVideoTracks || isSelf) {
+        if (videoRef.current.srcObject !== stream) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(() => {});
-        } else {
-          videoRef.current.srcObject = null;
         }
+        videoRef.current.play().catch(() => {});
       } else {
         videoRef.current.srcObject = null;
       }
@@ -197,7 +208,7 @@ const VoiceVideoParticipantCard = React.memo(({
       {showVideo ? (
         <div className="absolute inset-0 w-full h-full bg-black">
           <video
-            ref={videoRef}
+            ref={setVideoRef}
             autoPlay
             playsInline
             muted={isSelf || isDeafened}
@@ -359,6 +370,7 @@ export default function VoiceChat({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const remoteAudioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -419,6 +431,7 @@ export default function VoiceChat({
       }
     });
     peerConnectionsRef.current.clear();
+    pendingCandidatesRef.current.clear();
 
     // Clean remote audio elements
     remoteAudioElementsRef.current.forEach((audio) => {
@@ -432,6 +445,24 @@ export default function VoiceChat({
     setIsSpeakingLocal(false);
     setMediaPermissionError(null);
   }, []);
+
+  // Helper to process queued ICE candidates after remote description is set
+  const processQueuedCandidates = async (remoteSocketId: string, pc: RTCPeerConnection) => {
+    const queue = pendingCandidatesRef.current.get(remoteSocketId);
+    if (queue && queue.length > 0) {
+      while (queue.length > 0) {
+        const candidate = queue.shift();
+        if (candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.warn("Failed to apply queued ICE candidate:", e);
+          }
+        }
+      }
+    }
+    pendingCandidatesRef.current.delete(remoteSocketId);
+  };
 
   // Setup Local Media (Audio + Video)
   const setupLocalMedia = useCallback(async () => {
@@ -544,13 +575,14 @@ export default function VoiceChat({
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionsRef.current.set(remoteSocketId, pc);
 
-    // Add local tracks (audio and video)
+    // 2. Add local tracks to peer connection
     if (currentLocalStream) {
       currentLocalStream.getTracks().forEach(track => {
         pc.addTrack(track, currentLocalStream);
       });
     }
 
+    // 4. ICE candidate exchange
     pc.onicecandidate = (event) => {
       if (event.candidate && socket) {
         socket.emit("voice_ice_candidate", {
@@ -560,29 +592,36 @@ export default function VoiceChat({
       }
     };
 
+    // 2. Track matching and stream handling
     pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      if (remoteStream) {
-        // Save stream in remoteStreams state for video rendering
-        setRemoteStreams(prev => {
-          const next = new Map(prev);
+      const remoteStream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      
+      setRemoteStreams(prev => {
+        const next = new Map(prev);
+        const existing = next.get(remoteSocketId);
+        if (existing) {
+          if (!existing.getTracks().some(t => t.id === event.track.id)) {
+            existing.addTrack(event.track);
+          }
+          next.set(remoteSocketId, new MediaStream(existing.getTracks()));
+        } else {
           next.set(remoteSocketId, remoteStream);
-          return next;
-        });
-
-        // Setup audio element fallback for background audio playback
-        let audioEl = remoteAudioElementsRef.current.get(remoteSocketId);
-        if (!audioEl) {
-          audioEl = new Audio();
-          audioEl.autoplay = true;
-          (audioEl as any).playsInline = true;
-          remoteAudioElementsRef.current.set(remoteSocketId, audioEl);
-          document.body.appendChild(audioEl);
         }
-        audioEl.srcObject = remoteStream;
-        audioEl.muted = isDeafenedRef.current;
-        audioEl.play().catch(e => console.warn("Remote audio play blocked:", e));
+        return next;
+      });
+
+      // Background audio element fallback to guarantee audio playback
+      let audioEl = remoteAudioElementsRef.current.get(remoteSocketId);
+      if (!audioEl) {
+        audioEl = new Audio();
+        audioEl.autoplay = true;
+        (audioEl as any).playsInline = true;
+        remoteAudioElementsRef.current.set(remoteSocketId, audioEl);
+        document.body.appendChild(audioEl);
       }
+      audioEl.srcObject = remoteStream;
+      audioEl.muted = isDeafenedRef.current;
+      audioEl.play().catch(e => console.warn("Remote audio play:", e));
     };
 
     pc.onconnectionstatechange = () => {
@@ -669,6 +708,7 @@ export default function VoiceChat({
           pc.close();
           peerConnectionsRef.current.delete(data.socketId);
         }
+        pendingCandidatesRef.current.delete(data.socketId);
         const audioEl = remoteAudioElementsRef.current.get(data.socketId);
         if (audioEl) {
           audioEl.pause();
@@ -772,6 +812,7 @@ export default function VoiceChat({
       const pc = createPeerConnection(data.senderSocketId, stream);
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        await processQueuedCandidates(data.senderSocketId, pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("voice_answer", {
@@ -788,6 +829,7 @@ export default function VoiceChat({
       if (pc) {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          await processQueuedCandidates(data.senderSocketId, pc);
         } catch (err) {
           console.warn("Error handling voice answer:", err);
         }
@@ -795,13 +837,18 @@ export default function VoiceChat({
     };
 
     const handleVoiceIceCandidate = async (data: { senderSocketId: string; candidate: any }) => {
+      if (!data?.senderSocketId || !data?.candidate) return;
       const pc = peerConnectionsRef.current.get(data.senderSocketId);
-      if (pc && data.candidate) {
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
         } catch (err) {
           console.warn("Error adding ICE candidate:", err);
         }
+      } else {
+        const queue = pendingCandidatesRef.current.get(data.senderSocketId) || [];
+        queue.push(data.candidate);
+        pendingCandidatesRef.current.set(data.senderSocketId, queue);
       }
     };
 
@@ -860,30 +907,13 @@ export default function VoiceChat({
   // Join Room Handler
   const handleJoinRoom = async (roomId: string) => {
     if (!socket) return;
-    const stream = await setupLocalMedia();
+    await setupLocalMedia();
 
     socket.emit("join_voice_room", { roomId }, async (res: any) => {
       if (res && res.success && res.room) {
         setCurrentRoom(res.room);
-
-        // Connect to existing peers in the room
-        if (res.existingPeers && Array.isArray(res.existingPeers)) {
-          for (const peer of res.existingPeers) {
-            if (peer.socketId && peer.id !== currentUserId) {
-              const pc = createPeerConnection(peer.socketId, stream);
-              try {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                socket.emit("voice_offer", {
-                  targetSocketId: peer.socketId,
-                  offer
-                });
-              } catch (err) {
-                console.warn("Error sending offer to peer:", err);
-              }
-            }
-          }
-        }
+        // Existing peers in the room will automatically receive 'voice_user_joined' from the server
+        // and initiate the offer to this new client. This prevents offer collisions.
       } else {
         cleanupWebRTC();
         alert(res?.message || "Odaya katılınamadı.");
