@@ -601,7 +601,10 @@ async function startServer() {
   const userLiveLocations = new Map<number, UserLiveLocation>();
 
   const emitUserLocations = () => {
-    io.emit("update_user_locations", Array.from(userLiveLocations.values()));
+    const locList = Array.from(userLiveLocations.values());
+    console.log("Gönderilen toplam konum sayısı (aktif+pasif):", locList.length);
+    io.emit("update_user_locations", locList);
+    io.emit("all_user_locations", locList);
   };
   
   // High-performance User Cache with TTL to reduce database round-trips
@@ -1399,6 +1402,11 @@ async function startServer() {
     socket.emit("your_id", userIdNum);
     io.emit("online_users", Array.from(onlineUsers.keys()));
 
+    // Immediately send all known locations (active + passive) to newly connected socket
+    const initialLocations = Array.from(userLiveLocations.values());
+    socket.emit("update_user_locations", initialLocations);
+    socket.emit("all_user_locations", initialLocations);
+
     // Active ping / heartbeat to keep presence fresh when tab becomes visible
     socket.on("heartbeat", () => {
       if (disconnectTimers.has(userIdNum)) {
@@ -1453,9 +1461,18 @@ async function startServer() {
     });
 
     socket.on("get_user_locations", (cb) => {
+      const allLocs = Array.from(userLiveLocations.values());
+      console.log("Gönderilen toplam konum sayısı (aktif+pasif):", allLocs.length);
       if (typeof cb === "function") {
-        cb(Array.from(userLiveLocations.values()));
+        cb(allLocs);
       }
+    });
+
+    socket.on("request_all_locations", () => {
+      const allLocs = Array.from(userLiveLocations.values());
+      console.log("Gönderilen toplam konum sayısı (aktif+pasif):", allLocs.length);
+      socket.emit("all_user_locations", allLocs);
+      socket.emit("update_user_locations", allLocs);
     });
 
     socket.on("stop_sharing_location", () => {

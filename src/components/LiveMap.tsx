@@ -37,7 +37,15 @@ function formatLastSeen(lastSeen?: number): string {
   const date = new Date(lastSeen);
   const hours = date.getHours().toString().padStart(2, "0");
   const minutes = date.getMinutes().toString().padStart(2, "0");
-  return `${hours}:${minutes}`;
+  const timeStr = `${hours}:${minutes}`;
+  const now = Date.now();
+  const diffSec = Math.max(0, Math.floor((now - lastSeen) / 1000));
+  if (diffSec < 60) return `${timeStr} (Az önce)`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${timeStr} (${diffMin} dk önce)`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${timeStr} (${diffHours} sa önce)`;
+  return timeStr;
 }
 
 interface LiveMapProps {
@@ -96,7 +104,7 @@ export default function LiveMap({
 
     const html = `
       <div class="relative flex items-center justify-center group cursor-pointer" 
-           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.6; filter: grayscale(100%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
+           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.5; filter: grayscale(100%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
         ${isActive ? `
           <!-- Glowing Pulse Radar Effect -->
           <div class="absolute inset-0 rounded-full animate-ping opacity-60 pointer-events-none" style="background-color: ${glowColor};"></div>
@@ -350,7 +358,8 @@ export default function LiveMap({
   useEffect(() => {
     if (!socket) return;
 
-    // Fetch current user locations
+    // 1. Fetch current user locations on mount (both active and passive)
+    socket.emit("request_all_locations");
     socket.emit("get_user_locations", (locations: UserLiveLocation[]) => {
       if (Array.isArray(locations)) {
         setUsersLocations(locations);
@@ -364,9 +373,11 @@ export default function LiveMap({
     };
 
     socket.on("update_user_locations", handleUpdateUserLocations);
+    socket.on("all_user_locations", handleUpdateUserLocations);
 
     return () => {
       socket.off("update_user_locations", handleUpdateUserLocations);
+      socket.off("all_user_locations", handleUpdateUserLocations);
     };
   }, [socket]);
 
@@ -401,6 +412,8 @@ export default function LiveMap({
         combinedList.push(myObj);
       }
     }
+
+    console.log("Haritaya basılan toplam marker sayısı:", combinedList.length);
 
     combinedList.forEach((user) => {
       if (!user.lat || !user.lng) return;
