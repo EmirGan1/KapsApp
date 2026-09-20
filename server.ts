@@ -229,7 +229,11 @@ async function initDb() {
 }
 
 async function startServer() {
-  await initDb();
+  try {
+    await initDb();
+  } catch (dbErr) {
+    console.error("Database initialization error (proceeding with server boot):", dbErr);
+  }
   
   const app = express();
   const PORT = 3000;

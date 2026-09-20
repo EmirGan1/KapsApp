@@ -13,7 +13,7 @@ import VoiceChat from "./components/VoiceChat";
 import LiveMap from "./components/LiveMap";
 import Announcements, { AnnouncementItem } from "./components/Announcements";
 import AnnouncementModal from "./components/AnnouncementModal";
-import ToastContainer, { ToastItem } from "./components/ToastContainer";
+import ToastContainer, { ToastItem, ToastMessageEntry } from "./components/ToastContainer";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -58,11 +58,17 @@ export default function App() {
   };
 
   const addToast = (toast: Omit<ToastItem, "id">) => {
+    const isDm = toast.type === "new_message" || toast.type === "dm";
+    const colonIdx = toast.message.indexOf(":");
+    const parsedSender = toast.sender_name || (colonIdx !== -1 ? toast.message.substring(0, colonIdx).trim() : (toast.title || "Kullanıcı"));
+    const parsedText = colonIdx !== -1 ? toast.message.substring(colonIdx + 1).trim() : toast.message;
+    const nowTimeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
     setToasts((prev) => {
       // Find if an active toast from the same sender / category already exists
       const existingIndex = prev.findIndex((t) => {
         if (toast.sender_id && t.sender_id) {
-          return Number(t.sender_id) === Number(toast.sender_id) && t.type === toast.type;
+          return Number(t.sender_id) === Number(toast.sender_id) && (isDm ? (t.type === "new_message" || t.type === "dm") : t.type === toast.type);
         }
         return false;
       });
@@ -77,33 +83,63 @@ export default function App() {
           clearTimeout(existingTimer);
         }
 
-        // Reset auto-dismiss timer (4500ms)
+        // Reset auto-dismiss timer (6000ms)
         const newTimer = setTimeout(() => {
           dismissToast(existingToast.id);
-        }, 4500);
+        }, 6000);
         toastTimersRef.current.set(existingToast.id, newTimer);
+
+        const newMsgEntry: ToastMessageEntry = {
+          id: Math.random().toString(36).substring(2, 9),
+          text: parsedText,
+          time: nowTimeStr,
+        };
+
+        const existingMessages = existingToast.messages && existingToast.messages.length > 0
+          ? existingToast.messages
+          : [
+              {
+                id: "init-" + existingToast.id,
+                text: existingToast.message.includes(":") ? existingToast.message.substring(existingToast.message.indexOf(":") + 1).trim() : existingToast.message,
+                time: nowTimeStr,
+              },
+            ];
 
         // Update the existing toast in place
         const updatedList = [...prev];
         updatedList[existingIndex] = {
           ...existingToast,
           message: toast.message,
-          title: toast.title,
+          sender_name: parsedSender,
+          title: isDm ? `${parsedSender} (${newCount} yeni mesaj)` : toast.title,
           notifId: toast.notifId || existingToast.notifId,
           target_id: toast.target_id || existingToast.target_id,
           count: newCount,
+          messages: [...existingMessages, newMsgEntry],
         };
         return updatedList;
       }
 
       // If no existing toast to stack with, create a new one
       const id = Math.random().toString(36).substring(2, 9);
-      const newToast: ToastItem = { ...toast, id, count: 1 };
+      const newMsgEntry: ToastMessageEntry = {
+        id: Math.random().toString(36).substring(2, 9),
+        text: parsedText,
+        time: nowTimeStr,
+      };
 
-      // Set auto-dismiss timer
+      const newToast: ToastItem = {
+        ...toast,
+        id,
+        sender_name: parsedSender,
+        count: 1,
+        messages: [newMsgEntry],
+      };
+
+      // Set auto-dismiss timer (6000ms)
       const timer = setTimeout(() => {
         dismissToast(id);
-      }, 4500);
+      }, 6000);
       toastTimersRef.current.set(id, timer);
 
       return [newToast, ...prev.slice(0, 4)];
@@ -127,6 +163,9 @@ export default function App() {
   }, [darkMode]);
 
   const handleNotificationClick = (notif: any) => {
+    if (notif.id) {
+      dismissToast(notif.id);
+    }
     if (notif.notifId && socket) {
       socket.emit("mark_single_notification_read", notif.notifId);
     } else if (notif.id && socket) {
