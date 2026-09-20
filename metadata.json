@@ -1,6 +1,6 @@
 {
   "name": "KapsApp",
-  "description": "Yerel ağ üzerinde çalışan anlık sohbet uygulaması",
+  "description": "KapsApp ile canlı harita üzerinde arkadaşlarınızla buluşun, sesli sohbet edin ve Okey, UNO, Gartic gibi oyunları birlikte oynayın.",
   "requestFramePermissions": ["camera", "microphone", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
