@@ -645,7 +645,11 @@ async function startServer() {
 
   const loadLastKnownLocationsFromDb = async () => {
     try {
-      const res = await client.execute("SELECT userId, username, avatar, color, lat, lng, status, lastSeen FROM last_known_locations");
+      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      const res = await client.execute({
+        sql: "SELECT userId, username, avatar, color, lat, lng, status, lastSeen FROM last_known_locations WHERE lastSeen >= ? ORDER BY lastSeen DESC LIMIT 150",
+        args: [sevenDaysAgo]
+      });
       for (const row of res.rows) {
         const uid = Number(row.userId);
         if (uid && !userLiveLocations.has(uid)) {
@@ -663,7 +667,7 @@ async function startServer() {
           });
         }
       }
-      console.log(`Veritabanından ${res.rows.length} adet son bilinen konum (pasif) yüklendi.`);
+      console.log(`Veritabanından ${res.rows.length} adet son bilinen konum (pasif, son 7 gün) yüklendi.`);
     } catch (err) {
       console.error("Error loading last_known_locations from DB:", err);
     }
@@ -671,6 +675,25 @@ async function startServer() {
 
   // Load cold-start last known locations from DB
   loadLastKnownLocationsFromDb();
+
+  // Aggressive Memory Watcher & Garbage Collection (Render 512MB RAM Optimization)
+  setInterval(() => {
+    try {
+      const memoryUsage = process.memoryUsage();
+      const heapUsedMb = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+      const rssMb = Math.round(memoryUsage.rss / 1024 / 1024);
+      
+      // If heap exceeds 180MB or RSS exceeds 300MB, trigger GC
+      if ((heapUsedMb > 180 || rssMb > 300) && typeof (global as any).gc === "function") {
+        console.log(`[MemoryWatcher] RAM threshold reached (Heap: ${heapUsedMb}MB, RSS: ${rssMb}MB). Triggering manual GC...`);
+        (global as any).gc();
+        const afterGc = process.memoryUsage();
+        console.log(`[MemoryWatcher] Manual GC complete. New Heap: ${Math.round(afterGc.heapUsed / 1024 / 1024)}MB`);
+      }
+    } catch (gcErr) {
+      // Ignore
+    }
+  }, 3 * 60 * 1000); // Every 3 minutes
 
   const emitUserLocations = () => {
     const locList = Array.from(userLiveLocations.values());
