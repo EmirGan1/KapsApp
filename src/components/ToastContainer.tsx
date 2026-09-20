@@ -2,25 +2,20 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { MessageSquare, Heart, MessageCircle, UserPlus, UserCheck, Bell, Users, X, ChevronDown, ChevronUp, ArrowRight } from "lucide-react";
 
-export interface ToastMessageEntry {
-  id: string;
-  text: string;
-  time: string;
-}
-
 export interface ToastItem {
   id: string;
   type: string;
+  senderId?: number | null;
+  senderName?: string;
+  senderAvatar?: string | null;
+  senderColor?: string;
   title?: string;
-  message: string;
-  sender_id?: number | null;
-  sender_name?: string;
-  sender_avatar?: string | null;
-  sender_color?: string;
+  messages: string[];
+  lastMessage: string;
+  unreadCount: number;
+  timestamp: number;
   target_id?: number | null;
   notifId?: number;
-  count?: number;
-  messages?: ToastMessageEntry[];
 }
 
 export default function ToastContainer({
@@ -108,17 +103,11 @@ export default function ToastContainer({
         {toasts.map((toast) => {
           const isDm = toast.type === "new_message" || toast.type === "dm";
           const isExpanded = expandedIds.has(toast.id);
-          const totalCount = toast.count || 1;
-          const hasMultipleMessages = totalCount > 1;
-
-          const colonIdx = toast.message.indexOf(":");
-          const hasSenderColon = colonIdx !== -1;
-          const sender = toast.sender_name || (hasSenderColon ? toast.message.substring(0, colonIdx).trim() : "");
-          const latestMessageText = hasSenderColon ? toast.message.substring(colonIdx + 1).trim() : toast.message;
+          const hasMultipleMessages = toast.unreadCount > 1;
 
           return (
             <motion.div
-              key={toast.id}
+              key={toast.senderId ? `dm-sender-${toast.senderId}` : toast.id}
               id={`toast-item-${toast.id}`}
               initial={{ opacity: 0, y: -16, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -137,11 +126,11 @@ export default function ToastContainer({
                     {isDm ? (
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 truncate">
-                          {sender || toast.title || "Yeni Mesaj"}
+                          {toast.senderName || toast.title || "Yeni Mesaj"}
                         </span>
                         {hasMultipleMessages && (
                           <span className="px-2 py-0.5 bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25 rounded-full text-[10px] font-extrabold shadow-sm shrink-0 whitespace-nowrap">
-                            {totalCount} yeni mesaj
+                            {toast.unreadCount} yeni mesaj
                           </span>
                         )}
                       </div>
@@ -154,7 +143,7 @@ export default function ToastContainer({
                         )}
                         {hasMultipleMessages && (
                           <span className="px-1.5 py-0.5 bg-blue-600 dark:bg-blue-500 text-white rounded-full text-[10px] font-extrabold shadow-sm shrink-0">
-                            +{totalCount}
+                            +{toast.unreadCount}
                           </span>
                         )}
                       </>
@@ -163,7 +152,7 @@ export default function ToastContainer({
 
                   {/* Compact Preview of Latest Message */}
                   <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-medium leading-snug line-clamp-2 mt-0.5">
-                    {isDm ? latestMessageText : toast.message}
+                    {toast.lastMessage}
                   </p>
 
                   {!isExpanded && (
@@ -219,16 +208,13 @@ export default function ToastContainer({
                     className="overflow-hidden"
                   >
                     <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
-                      {toast.messages.map((msg, idx) => (
+                      {toast.messages.map((msgText, idx) => (
                         <div
-                          key={msg.id || idx}
+                          key={idx}
                           className="bg-slate-50 dark:bg-slate-800/70 hover:bg-blue-50/60 dark:hover:bg-blue-950/30 border border-slate-100 dark:border-slate-800/80 rounded-xl p-2 flex items-start justify-between gap-2 text-xs transition-colors"
                         >
                           <span className="text-slate-800 dark:text-slate-200 break-words font-medium flex-1">
-                            {msg.text}
-                          </span>
-                          <span className="text-[10px] text-slate-400 dark:text-slate-500 shrink-0 font-medium select-none pt-0.5">
-                            {msg.time}
+                            {msgText}
                           </span>
                         </div>
                       ))}

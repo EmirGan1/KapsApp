@@ -22,6 +22,7 @@ export default function Chats({
   onUnreadDMsChange,
   targetUserId,
   onTargetUserHandled,
+  onActiveChatUserChange,
 }: { 
   socket: Socket | null, 
   currentUserId: number, 
@@ -31,6 +32,7 @@ export default function Chats({
   onUnreadDMsChange?: (count: number) => void,
   targetUserId?: number | null,
   onTargetUserHandled?: () => void,
+  onActiveChatUserChange?: (userId: number | null) => void,
 }) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -43,7 +45,12 @@ export default function Chats({
   useEffect(() => {
     activeChatRef.current = activeChat;
     activeTabRef.current = activeTab;
-  }, [activeChat, activeTab]);
+    if (activeTab === "friends" && activeChat && "username" in activeChat) {
+      onActiveChatUserChange?.((activeChat as Friend).id);
+    } else {
+      onActiveChatUserChange?.(null);
+    }
+  }, [activeChat, activeTab, onActiveChatUserChange]);
 
   useEffect(() => {
     if (!targetUserId || !socket) return;

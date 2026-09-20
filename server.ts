@@ -236,7 +236,7 @@ async function startServer() {
   }
   
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   
   // Render / proxy setup for accurate client IP detection
   app.set("trust proxy", true);
@@ -4245,7 +4245,13 @@ async function startServer() {
         disconnectTimers.set(userIdNum, timer);
       }
 
-      // Memory hygiene: Remove all listeners on the disconnected socket
+      // Memory hygiene: Leave all rooms and remove all listeners on the disconnected socket
+      try {
+        if (socket.rooms && socket.rooms.size > 0) {
+          socket.rooms.forEach((r) => socket.leave(r));
+        }
+      } catch (e) {}
+
       try {
         socket.removeAllListeners();
       } catch (e) {}

@@ -13,7 +13,7 @@ import VoiceChat from "./components/VoiceChat";
 import LiveMap from "./components/LiveMap";
 import Announcements, { AnnouncementItem } from "./components/Announcements";
 import AnnouncementModal from "./components/AnnouncementModal";
-import ToastContainer, { ToastItem, ToastMessageEntry } from "./components/ToastContainer";
+import ToastContainer, { ToastItem } from "./components/ToastContainer";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -47,6 +47,8 @@ export default function App() {
   // Real-time Floating Toast Notifications with Stacking / Grouping
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  const [activeDmChatUserId, setActiveDmChatUserId] = useState<number | null>(null);
+  const activeDmChatUserIdRef = useRef<number | null>(null);
 
   const dismissToast = (id: string) => {
     const timer = toastTimersRef.current.get(id);
@@ -57,99 +59,97 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const addToast = (toast: Omit<ToastItem, "id">) => {
-    const isDm = toast.type === "new_message" || toast.type === "dm";
-    const colonIdx = toast.message.indexOf(":");
-    const parsedSender = toast.sender_name || (colonIdx !== -1 ? toast.message.substring(0, colonIdx).trim() : (toast.title || "Kullanıcı"));
-    const parsedText = colonIdx !== -1 ? toast.message.substring(colonIdx + 1).trim() : toast.message;
-    const nowTimeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const addToast = (incoming: {
+    type: string;
+    title?: string;
+    text: string;
+    senderId?: number | null;
+    senderName?: string;
+    senderAvatar?: string | null;
+    senderColor?: string;
+    target_id?: number | null;
+    notifId?: number;
+  }) => {
+    const isDm = incoming.type === "new_message" || incoming.type === "dm";
+    const senderId = incoming.senderId ? Number(incoming.senderId) : null;
 
-    setToasts((prev) => {
-      // Find if an active toast from the same sender / category already exists
-      const existingIndex = prev.findIndex((t) => {
-        if (toast.sender_id && t.sender_id) {
-          return Number(t.sender_id) === Number(toast.sender_id) && (isDm ? (t.type === "new_message" || t.type === "dm") : t.type === toast.type);
+    // 2. AKTİF SOHBETTE İKEN BİLDİRİMİ ENGELLE
+    if (isDm && senderId && activeTabRef.current === "chats" && activeDmChatUserIdRef.current === senderId) {
+      return;
+    }
+
+    const toastId = isDm && senderId ? `dm-notify-${senderId}` : `notif-${incoming.notifId || Math.random().toString(36).substring(2, 9)}`;
+
+    setToasts((prevNotifications) => {
+      // 1. Bu kullanıcıdan daha önce gelen açık bir bildirim kartı var mı?
+      const existingIndex = prevNotifications.findIndex((n) => {
+        if (isDm && senderId && n.senderId) {
+          return Number(n.senderId) === senderId;
         }
-        return false;
+        return n.id === toastId;
       });
 
       if (existingIndex !== -1) {
-        const existingToast = prev[existingIndex];
-        const newCount = (existingToast.count || 1) + 1;
+        // 2. Varsa: YENİ KART AÇMA, mevcut kartı güncelle (STACKLE)
+        const updated = [...prevNotifications];
+        const target = updated[existingIndex];
 
-        // Clear existing dismiss timer for this toast
-        const existingTimer = toastTimersRef.current.get(existingToast.id);
+        // Reset auto-dismiss timer (6000ms)
+        const existingTimer = toastTimersRef.current.get(target.id);
         if (existingTimer) {
           clearTimeout(existingTimer);
         }
-
-        // Reset auto-dismiss timer (6000ms)
         const newTimer = setTimeout(() => {
-          dismissToast(existingToast.id);
+          dismissToast(target.id);
         }, 6000);
-        toastTimersRef.current.set(existingToast.id, newTimer);
+        toastTimersRef.current.set(target.id, newTimer);
 
-        const newMsgEntry: ToastMessageEntry = {
-          id: Math.random().toString(36).substring(2, 9),
-          text: parsedText,
-          time: nowTimeStr,
+        updated[existingIndex] = {
+          ...target,
+          messages: [...(target.messages || []), incoming.text],
+          lastMessage: incoming.text,
+          unreadCount: (target.unreadCount || 1) + 1,
+          timestamp: Date.now(),
+          senderName: incoming.senderName || target.senderName,
+          senderAvatar: incoming.senderAvatar || target.senderAvatar,
+          notifId: incoming.notifId || target.notifId,
+          target_id: incoming.target_id || target.target_id,
+        };
+        return updated;
+      } else {
+        // 3. Yoksa: İlk kez bir bildirim kartı oluştur
+        const newToast: ToastItem = {
+          id: toastId,
+          type: incoming.type,
+          senderId: senderId,
+          senderName: incoming.senderName,
+          senderAvatar: incoming.senderAvatar,
+          senderColor: incoming.senderColor,
+          title: incoming.title,
+          messages: [incoming.text],
+          lastMessage: incoming.text,
+          unreadCount: 1,
+          timestamp: Date.now(),
+          target_id: incoming.target_id,
+          notifId: incoming.notifId,
         };
 
-        const existingMessages = existingToast.messages && existingToast.messages.length > 0
-          ? existingToast.messages
-          : [
-              {
-                id: "init-" + existingToast.id,
-                text: existingToast.message.includes(":") ? existingToast.message.substring(existingToast.message.indexOf(":") + 1).trim() : existingToast.message,
-                time: nowTimeStr,
-              },
-            ];
+        // Set auto-dismiss timer (6000ms)
+        const timer = setTimeout(() => {
+          dismissToast(toastId);
+        }, 6000);
+        toastTimersRef.current.set(toastId, timer);
 
-        // Update the existing toast in place
-        const updatedList = [...prev];
-        updatedList[existingIndex] = {
-          ...existingToast,
-          message: toast.message,
-          sender_name: parsedSender,
-          title: isDm ? `${parsedSender} (${newCount} yeni mesaj)` : toast.title,
-          notifId: toast.notifId || existingToast.notifId,
-          target_id: toast.target_id || existingToast.target_id,
-          count: newCount,
-          messages: [...existingMessages, newMsgEntry],
-        };
-        return updatedList;
+        return [...prevNotifications, newToast];
       }
-
-      // If no existing toast to stack with, create a new one
-      const id = Math.random().toString(36).substring(2, 9);
-      const newMsgEntry: ToastMessageEntry = {
-        id: Math.random().toString(36).substring(2, 9),
-        text: parsedText,
-        time: nowTimeStr,
-      };
-
-      const newToast: ToastItem = {
-        ...toast,
-        id,
-        sender_name: parsedSender,
-        count: 1,
-        messages: [newMsgEntry],
-      };
-
-      // Set auto-dismiss timer (6000ms)
-      const timer = setTimeout(() => {
-        dismissToast(id);
-      }, 6000);
-      toastTimersRef.current.set(id, timer);
-
-      return [newToast, ...prev.slice(0, 4)];
     });
   };
 
   const activeTabRef = useRef(activeTab);
   useEffect(() => {
     activeTabRef.current = activeTab;
-  }, [activeTab]);
+    activeDmChatUserIdRef.current = activeTab === "chats" ? activeDmChatUserId : null;
+  }, [activeTab, activeDmChatUserId]);
 
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem("lan_theme") === "dark");
 
@@ -168,21 +168,22 @@ export default function App() {
     }
     if (notif.notifId && socket) {
       socket.emit("mark_single_notification_read", notif.notifId);
-    } else if (notif.id && socket) {
+    } else if (notif.id && socket && typeof notif.id === "number") {
       socket.emit("mark_single_notification_read", notif.id);
     }
     setUnreadNotificationsCount((prev) => Math.max(0, prev - 1));
 
+    const senderId = notif.senderId || notif.sender_id;
     if (notif.type === "new_message" || notif.type === "dm") {
-      if (notif.sender_id) {
-        setTargetChatUserId(notif.sender_id);
+      if (senderId) {
+        setTargetChatUserId(senderId);
       }
       setActiveTab("chats");
     } else if (notif.type === "like" || notif.type === "comment") {
       setActiveTab("feed");
     } else if (notif.type === "follow" || notif.type === "friend_request" || notif.type === "friend_accept") {
-      if (notif.sender_id) {
-        setViewingUserId(notif.sender_id);
+      if (senderId) {
+        setViewingUserId(senderId);
         setActiveTab("profile");
       }
     } else if (notif.type === "new_group_message" || notif.type === "group_invite") {
@@ -246,11 +247,17 @@ export default function App() {
           else if (notif.type === "friend_request") title = "Arkadaşlık İsteği";
           else if (notif.type === "friend_accept") title = "İstek Kabul Edildi";
 
+          const colonIdx = notif.content.indexOf(":");
+          const hasColon = colonIdx !== -1;
+          const senderName = hasColon ? notif.content.substring(0, colonIdx).trim() : undefined;
+          const text = hasColon ? notif.content.substring(colonIdx + 1).trim() : notif.content;
+
           addToast({
             type: notif.type,
             title,
-            message: notif.content,
-            sender_id: notif.sender_id,
+            text,
+            senderId: notif.sender_id,
+            senderName,
             target_id: notif.target_id,
             notifId: notif.id,
           });
@@ -520,6 +527,7 @@ export default function App() {
             onUnreadDMsChange={setUnreadDmCount}
             targetUserId={targetChatUserId}
             onTargetUserHandled={() => setTargetChatUserId(null)}
+            onActiveChatUserChange={setActiveDmChatUserId}
           />
         )}
         {activeTab === 'feed' && <Feed socket={socket} currentUserId={currentUserId} currentUsername={username} onUserClick={handleUserClick} />}
