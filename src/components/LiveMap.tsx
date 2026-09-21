@@ -9,7 +9,6 @@ import {
   Crosshair, 
   Users, 
   ShieldAlert, 
-  MessageSquare,
   User as UserIcon
 } from "lucide-react";
 
@@ -65,6 +64,7 @@ interface LiveMapProps {
   username: string;
   avatar: string | null;
   color?: string;
+  isActive?: boolean;
   onUserClick: (userId: number) => void;
   onOpenChat?: (userId: number) => void;
 }
@@ -75,6 +75,7 @@ export default function LiveMap({
   username,
   avatar,
   color,
+  isActive = true,
   onUserClick,
   onOpenChat
 }: LiveMapProps) {
@@ -82,6 +83,25 @@ export default function LiveMap({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<number, L.Marker>>(new Map());
   const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Stable refs for callbacks
+  const socketRef = useRef<Socket | null>(socket);
+  const currentUserIdRef = useRef<number>(currentUserId);
+  const usernameRef = useRef<string>(username);
+  const avatarRef = useRef<string | null>(avatar);
+  const colorRef = useRef<string | undefined>(color);
+  const onUserClickRef = useRef<(userId: number) => void>(onUserClick);
+  const onOpenChatRef = useRef<((userId: number) => void) | undefined>(onOpenChat);
+
+  useEffect(() => {
+    socketRef.current = socket;
+    currentUserIdRef.current = currentUserId;
+    usernameRef.current = username;
+    avatarRef.current = avatar;
+    colorRef.current = color;
+    onUserClickRef.current = onUserClick;
+    onOpenChatRef.current = onOpenChat;
+  }, [socket, currentUserId, username, avatar, color, onUserClick, onOpenChat]);
 
   const [isSharing, setIsSharing] = useState<boolean>(() => {
     const stored = localStorage.getItem("location_service_enabled");
@@ -89,8 +109,14 @@ export default function LiveMap({
     if (stored === "false") return false;
     return localStorage.getItem("isLocationActive") === "true";
   });
+  const isSharingRef = useRef<boolean>(isSharing);
+  useEffect(() => {
+    isSharingRef.current = isSharing;
+  }, [isSharing]);
+
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [geoError, setGeoError] = useState<string | null>(null);
+  
   const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(() => {
     try {
       const saved = localStorage.getItem("last_known_coords");
@@ -98,32 +124,37 @@ export default function LiveMap({
     } catch (e) {}
     return null;
   });
+  const myCoordsRef = useRef<{ lat: number; lng: number } | null>(myCoords);
+  useEffect(() => {
+    myCoordsRef.current = myCoords;
+  }, [myCoords]);
+
   const [usersLocations, setUsersLocations] = useState<UserLiveLocation[]>([]);
   const [showUsersPanel, setShowUsersPanel] = useState<boolean>(false);
 
   // Helper to create compact HTML Marker Icon with Active/Passive (Silik) Visual Styles
   const createCustomMarkerIcon = useCallback((user: UserLiveLocation, isMe: boolean) => {
-    const isCurrentUser = isMe || user.userId === currentUserId;
-    const isActive = user.isLocationActive !== false;
+    const isCurrentUser = isMe || user.userId === currentUserIdRef.current;
+    const isActiveUser = user.isLocationActive !== false;
     
-    const ringColor = isActive 
+    const ringColor = isActiveUser 
       ? (isCurrentUser ? "#3b82f6" : (user.color || "#10b981"))
       : "#64748b";
     
-    const glowColor = isActive
+    const glowColor = isActiveUser
       ? (isCurrentUser ? "rgba(59, 130, 246, 0.45)" : "rgba(16, 185, 129, 0.45)")
       : "transparent";
 
     const initial = (user.username?.[0] || "U").toUpperCase();
 
     const avatarHtml = user.avatar
-      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full pointer-events-none ${!isActive ? 'grayscale opacity-75' : ''}" />`
-      : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs pointer-events-none" style="background-color: ${isActive ? (user.color || '#6366f1') : '#475569'};">${initial}</div>`;
+      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full pointer-events-none ${!isActiveUser ? 'grayscale opacity-75' : ''}" />`
+      : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs pointer-events-none" style="background-color: ${isActiveUser ? (user.color || '#6366f1') : '#475569'};">${initial}</div>`;
 
     const html = `
       <div class="relative flex items-center justify-center pointer-events-auto" 
-           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.55; filter: grayscale(85%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
-        ${isActive ? `
+           style="width: 48px; height: 48px; ${!isActiveUser ? 'opacity: 0.55; filter: grayscale(85%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
+        ${isActiveUser ? `
           <!-- Pulsing Radar Glow for Active Live Users -->
           <div class="absolute inset-0 rounded-full animate-ping opacity-50 pointer-events-none" style="background-color: ${glowColor};"></div>
           <div class="absolute inset-1 rounded-full animate-pulse opacity-30 pointer-events-none" style="background-color: ${ringColor};"></div>
@@ -131,16 +162,16 @@ export default function LiveMap({
         
         <!-- Avatar Circle (Fixed & Non-draggable) -->
         <div class="relative z-10 w-10 h-10 rounded-full p-0.5 shadow-xl border-2 transition-transform duration-200 hover:scale-110" 
-             style="background-color: #0f172a; border-color: ${ringColor}; ${isActive ? `box-shadow: 0 0 14px ${glowColor};` : 'box-shadow: 0 2px 4px rgba(0,0,0,0.5);'}">
+             style="background-color: #0f172a; border-color: ${ringColor}; ${isActiveUser ? `box-shadow: 0 0 14px ${glowColor};` : 'box-shadow: 0 2px 4px rgba(0,0,0,0.5);'}">
           <div class="w-full h-full rounded-full overflow-hidden bg-slate-800">
             ${avatarHtml}
           </div>
           ${isCurrentUser ? `
-            <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 ${isActive ? 'bg-blue-500' : 'bg-slate-600'} rounded-full border border-slate-900 flex items-center justify-center text-[7px] font-black text-white">
+            <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 ${isActiveUser ? 'bg-blue-500' : 'bg-slate-600'} rounded-full border border-slate-900 flex items-center justify-center text-[7px] font-black text-white">
               ★
             </div>
           ` : (
-            !isActive 
+            !isActiveUser 
               ? '<div class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-slate-600 rounded-full border border-slate-900 flex items-center justify-center text-[7px] text-slate-300">✕</div>' 
               : '<div class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border border-slate-900"></div>'
           )}
@@ -148,7 +179,7 @@ export default function LiveMap({
 
         <!-- Floating Username Label -->
         <div class="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap px-1.5 py-0.2 rounded-md text-[10px] font-semibold shadow-md pointer-events-none ${
-          !isActive ? 'bg-slate-800/90 text-slate-400 border border-slate-700/60' : 'bg-slate-900/90 text-white border border-white/10'
+          !isActiveUser ? 'bg-slate-800/90 text-slate-400 border border-slate-700/60' : 'bg-slate-900/90 text-white border border-white/10'
         }">
           ${isCurrentUser ? 'Siz' : user.username}
         </div>
@@ -162,23 +193,23 @@ export default function LiveMap({
       iconAnchor: [24, 24],
       popupAnchor: [0, -26]
     });
-  }, [currentUserId]);
+  }, []);
 
   // Create Popup Content with Lightweight Native DOM & Tailwind Classes
   const createPopupContent = useCallback((user: UserLiveLocation, isMe: boolean) => {
-    const isCurrentUser = isMe || user.userId === currentUserId;
-    const isActive = user.isLocationActive !== false;
+    const isCurrentUser = isMe || user.userId === currentUserIdRef.current;
+    const isActiveUser = user.isLocationActive !== false;
     const initial = (user.username?.[0] || "U").toUpperCase();
     
     const avatarHtml = user.avatar
-      ? `<img src="${user.avatar}" class="w-10 h-10 rounded-full object-cover border-2 ${isActive ? 'border-slate-700' : 'border-slate-600 grayscale opacity-75'}" />`
-      : `<div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm ${!isActive ? 'grayscale opacity-75 bg-slate-600' : ''}" style="${isActive ? `background-color: ${user.color || '#6366f1'}` : ''}">${initial}</div>`;
+      ? `<img src="${user.avatar}" class="w-10 h-10 rounded-full object-cover border-2 ${isActiveUser ? 'border-slate-700' : 'border-slate-600 grayscale opacity-75'}" />`
+      : `<div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm ${!isActiveUser ? 'grayscale opacity-75 bg-slate-600' : ''}" style="${isActiveUser ? `background-color: ${user.color || '#6366f1'}` : ''}">${initial}</div>`;
 
-    const statusText = isActive 
+    const statusText = isActiveUser 
       ? (user.status || "Aktif Çevrimiçi")
       : `Son Görülme: ${formatLastSeen(user.lastSeen || user.updatedAt)}`;
 
-    const statusColor = isActive
+    const statusColor = isActiveUser
       ? (user.status?.includes("Okey") ? "#f59e0b" : user.status?.includes("UNO") ? "#ef4444" : user.status?.includes("Çiz") ? "#8b5cf6" : "#10b981")
       : "#94a3b8";
 
@@ -194,7 +225,7 @@ export default function LiveMap({
           </div>
           <div class="flex items-center gap-1.5 text-[11px] text-slate-300 mt-0.5">
             <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background-color: ${statusColor}"></span>
-            <span class="truncate ${!isActive ? 'text-slate-400 font-medium' : 'text-slate-200'}">${statusText}</span>
+            <span class="truncate ${!isActiveUser ? 'text-slate-400 font-medium' : 'text-slate-200'}">${statusText}</span>
           </div>
         </div>
       </div>
@@ -226,21 +257,21 @@ export default function LiveMap({
       btnProfile.addEventListener("click", (e) => {
         e.stopPropagation();
         e.preventDefault();
-        onUserClick(user.userId);
+        onUserClickRef.current?.(user.userId);
       });
     }
 
     const btnChat = container.querySelector(".btn-popup-chat");
-    if (btnChat && onOpenChat) {
+    if (btnChat) {
       btnChat.addEventListener("click", (e) => {
         e.stopPropagation();
         e.preventDefault();
-        onOpenChat(user.userId);
+        onOpenChatRef.current?.(user.userId);
       });
     }
 
     return container;
-  }, [currentUserId, onUserClick, onOpenChat]);
+  }, []);
 
   // Stop location sharing: Keeps the marker at last known coordinates, emits passive event, and marks as inactive/silik
   const stopLocationSharing = useCallback((isError = false) => {
@@ -254,22 +285,26 @@ export default function LiveMap({
     localStorage.setItem("isLocationActive", "false");
 
     const lastSeenTime = Date.now();
+    const currentCoords = myCoordsRef.current;
+    const cId = currentUserIdRef.current;
+    const s = socketRef.current;
+
     const payload = {
-      userId: currentUserId,
-      lastLat: myCoords?.lat,
-      lastLng: myCoords?.lng,
+      userId: cId,
+      lastLat: currentCoords?.lat,
+      lastLng: currentCoords?.lng,
       lastSeen: lastSeenTime
     };
 
-    if (socket) {
-      socket.emit("stop_sharing_location", payload);
-      socket.emit("location:disabled", payload);
-      socket.emit("user:passive", payload);
+    if (s) {
+      s.emit("stop_sharing_location", payload);
+      s.emit("location:disabled", payload);
+      s.emit("user:passive", payload);
     }
 
     // Update current user's local state to passive mode without deleting marker
     setUsersLocations((prev) => {
-      const idx = prev.findIndex((u) => u.userId === currentUserId);
+      const idx = prev.findIndex((u) => u.userId === cId);
       if (idx >= 0) {
         const updated = [...prev];
         updated[idx] = {
@@ -279,16 +314,16 @@ export default function LiveMap({
           lastSeen: lastSeenTime
         };
         return updated;
-      } else if (myCoords && isValidCoordinate(myCoords.lat, myCoords.lng)) {
+      } else if (currentCoords && isValidCoordinate(currentCoords.lat, currentCoords.lng)) {
         return [
           ...prev,
           {
-            userId: currentUserId,
-            username,
-            avatar,
-            color: color || "#3b82f6",
-            lat: myCoords.lat,
-            lng: myCoords.lng,
+            userId: cId,
+            username: usernameRef.current,
+            avatar: avatarRef.current,
+            color: colorRef.current || "#3b82f6",
+            lat: currentCoords.lat,
+            lng: currentCoords.lng,
             status: isError ? "Konum İzni Yok" : "Konum Kapalı",
             isLocationActive: false,
             lastSeen: lastSeenTime
@@ -301,7 +336,7 @@ export default function LiveMap({
     if (mapInstanceRef.current) {
       mapInstanceRef.current.invalidateSize();
     }
-  }, [socket, currentUserId, myCoords, username, avatar, color]);
+  }, []);
 
   // High-accuracy Automated Geolocation fetch
   const fetchAndSendPosition = useCallback((shouldFlyTo: boolean = false) => {
@@ -333,17 +368,19 @@ export default function LiveMap({
         setIsLocating(false);
         setGeoError(null);
 
-        if (shouldFlyTo && mapInstanceRef.current) {
-          mapInstanceRef.current.flyTo([latitude, longitude], 14, {
+        const map = mapInstanceRef.current;
+        if (shouldFlyTo && map) {
+          map.flyTo([latitude, longitude], 15, {
             animate: true,
             duration: 1.2
           });
-          mapInstanceRef.current.invalidateSize();
+          map.invalidateSize();
         }
 
-        if (socket) {
-          socket.emit("update_user_location", { lat: latitude, lng: longitude });
-          socket.emit("share_location", { lat: latitude, lng: longitude });
+        const s = socketRef.current;
+        if (s) {
+          s.emit("update_user_location", { lat: latitude, lng: longitude });
+          s.emit("share_location", { lat: latitude, lng: longitude });
         }
       },
       (err) => {
@@ -364,7 +401,7 @@ export default function LiveMap({
         maximumAge: 60000
       }
     );
-  }, [socket, stopLocationSharing]);
+  }, [stopLocationSharing]);
 
   // Start periodic tracking (1-minute periodic GPS update)
   const startLocationSharing = useCallback(() => {
@@ -386,18 +423,20 @@ export default function LiveMap({
     }, 60000);
   }, [fetchAndSendPosition]);
 
-  // Handle beforeunload and visibilitychange for clean offline state
+  // Handle beforeunload for clean offline state
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (socket && (isSharing || myCoords)) {
+      const s = socketRef.current;
+      const coords = myCoordsRef.current;
+      if (s && (isSharingRef.current || coords)) {
         const payload = {
-          userId: currentUserId,
-          lastLat: myCoords?.lat,
-          lastLng: myCoords?.lng,
+          userId: currentUserIdRef.current,
+          lastLat: coords?.lat,
+          lastLng: coords?.lng,
           lastSeen: Date.now()
         };
-        socket.emit("stop_sharing_location", payload);
-        socket.emit("location:disabled", payload);
+        s.emit("stop_sharing_location", payload);
+        s.emit("location:disabled", payload);
       }
     };
 
@@ -405,21 +444,21 @@ export default function LiveMap({
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [socket, isSharing, myCoords, currentUserId]);
+  }, []);
 
-  // Initialize Leaflet Map with touch and resize optimizations
+  // Initialize Leaflet Map ONCE on mount with robust tile rendering
   useEffect(() => {
     if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
 
-    // Default center Istanbul / Turkey coordinate or user's last known location
-    const initialLat = myCoords && isValidCoordinate(myCoords.lat, myCoords.lng) ? myCoords.lat : 41.0082;
-    const initialLng = myCoords && isValidCoordinate(myCoords.lat, myCoords.lng) ? myCoords.lng : 28.9784;
+    const savedCoords = myCoordsRef.current;
+    const initialLat = savedCoords && isValidCoordinate(savedCoords.lat, savedCoords.lng) ? savedCoords.lat : 41.0082;
+    const initialLng = savedCoords && isValidCoordinate(savedCoords.lat, savedCoords.lng) ? savedCoords.lng : 28.9784;
     const defaultCenter: [number, number] = [initialLat, initialLng];
     
     const map = L.map(mapContainerRef.current, {
       center: defaultCenter,
-      zoom: myCoords ? 14 : 11,
+      zoom: savedCoords ? 14 : 11,
       zoomControl: false,
       attributionControl: false
     });
@@ -445,7 +484,7 @@ export default function LiveMap({
     });
     resizeObserver.observe(mapContainerRef.current);
 
-    // Check saved state: Only auto-start if explicitly set to true
+    // Check saved state: auto-start if previously enabled
     const savedEnabled = localStorage.getItem("location_service_enabled");
     const legacySaved = localStorage.getItem("isLocationActive");
     const isLocationOn = savedEnabled === "true" || (savedEnabled === null && legacySaved === "true");
@@ -463,27 +502,32 @@ export default function LiveMap({
         clearInterval(intervalIdRef.current);
         intervalIdRef.current = null;
       }
+      markersRef.current.forEach((marker) => {
+        map.removeLayer(marker);
+      });
+      markersRef.current.clear();
       map.remove();
       mapInstanceRef.current = null;
     };
-  }, [startLocationSharing]);
+  }, []); // Run ONCE on mount
 
-  // Multi-frame Invalidate Size on state/coords changes to guarantee no gray screen
+  // Invalidate Size on Tab Focus or Container Visibility Change
   useEffect(() => {
+    if (!isActive) return;
     const map = mapInstanceRef.current;
     if (!map) return;
 
     map.invalidateSize();
-    const t1 = setTimeout(() => map.invalidateSize(), 100);
-    const t2 = setTimeout(() => map.invalidateSize(), 300);
-    const raf = requestAnimationFrame(() => map.invalidateSize());
+    const t1 = setTimeout(() => map.invalidateSize(), 50);
+    const t2 = setTimeout(() => map.invalidateSize(), 200);
+    const t3 = setTimeout(() => map.invalidateSize(), 500);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
-      cancelAnimationFrame(raf);
+      clearTimeout(t3);
     };
-  }, [myCoords, isSharing, showUsersPanel]);
+  }, [isActive, myCoords, isSharing, showUsersPanel]);
 
   // Socket.io Real-time Location synchronization
   useEffect(() => {
@@ -547,7 +591,7 @@ export default function LiveMap({
 
     // Merge or update current user's location pin
     const selfIndex = combinedList.findIndex(u => u.userId === currentUserId);
-    if (myCoords) {
+    if (myCoords && isValidCoordinate(myCoords.lat, myCoords.lng)) {
       const myObj: UserLiveLocation = {
         userId: currentUserId,
         username,
@@ -568,7 +612,7 @@ export default function LiveMap({
     }
 
     combinedList.forEach((user) => {
-      if (typeof user.lat !== "number" || typeof user.lng !== "number" || isNaN(user.lat) || isNaN(user.lng)) return;
+      if (!isValidCoordinate(user.lat, user.lng)) return;
       activeUserIds.add(user.userId);
       const isMe = user.userId === currentUserId;
 
@@ -770,21 +814,21 @@ export default function LiveMap({
 
             {/* Other Users */}
             {usersLocations.filter(u => u.userId !== currentUserId).map((user) => {
-              const isActive = user.isLocationActive !== false;
+              const isActiveUser = user.isLocationActive !== false;
               return (
                 <div
                   key={user.userId}
                   onClick={() => handleFocusUser(user)}
                   className={`p-2 rounded-2xl border cursor-pointer transition-all flex items-center justify-between group ${
-                    isActive 
+                    isActiveUser 
                       ? "bg-slate-800/60 border-slate-700/50 hover:bg-slate-800" 
                       : "bg-slate-850/40 border-slate-800/40 hover:bg-slate-800/40 opacity-75"
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div 
-                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shadow shrink-0 ${!isActive ? 'grayscale opacity-75 bg-slate-600' : ''}`}
-                      style={isActive ? { backgroundColor: user.color || "#10b981" } : undefined}
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shadow shrink-0 ${!isActiveUser ? 'grayscale opacity-75 bg-slate-600' : ''}`}
+                      style={isActiveUser ? { backgroundColor: user.color || "#10b981" } : undefined}
                     >
                       {user.avatar ? (
                         <img src={user.avatar} alt={user.username} className="w-full h-full rounded-full object-cover" />
@@ -795,14 +839,14 @@ export default function LiveMap({
                     <div className="min-w-0">
                       <div className="flex items-center gap-1">
                         <span className="text-xs font-bold text-white truncate block">{user.username}</span>
-                        {isActive ? (
+                        {isActiveUser ? (
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                         ) : (
                           <span className="w-1.5 h-1.5 rounded-full bg-slate-500 shrink-0"></span>
                         )}
                       </div>
                       <span className="text-[9px] text-slate-400 truncate block">
-                        {isActive ? (user.status || "Çevrimiçi") : `Son Görülme: ${formatLastSeen(user.lastSeen || user.updatedAt)}`}
+                        {isActiveUser ? (user.status || "Çevrimiçi") : `Son Görülme: ${formatLastSeen(user.lastSeen || user.updatedAt)}`}
                       </span>
                     </div>
                   </div>

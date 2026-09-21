@@ -610,32 +610,36 @@ async function startServer() {
       const isEmirgan = usernameStr === "emirgan" || authUser.is_admin === 1 || (authUser as any).role === "admin";
       
       for (const tbl of ["messages", "global_messages", "group_messages"]) {
-        const msgRes = await client.execute({ 
-          sql: `SELECT id, sender, group_id, receiver FROM ${tbl} WHERE id = ? OR id = ?`, 
-          args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
-        });
-        if (msgRes.rows.length > 0) {
-          const foundMsg = msgRes.rows[0];
-          const senderId = Number(foundMsg.sender);
-          
-          if (senderId !== Number(authUser.id) && !isEmirgan) {
-            return res.status(403).json({ error: "Bu mesajı silme yetkiniz yok." });
-          }
-          await client.execute({ 
-            sql: `DELETE FROM ${tbl} WHERE id = ? OR id = ?`, 
+        try {
+          const msgRes = await client.execute({ 
+            sql: `SELECT * FROM ${tbl} WHERE id = ? OR id = ?`, 
             args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
           });
-          
-          const payload = { 
-            message_id: messageId, 
-            id: messageId, 
-            messageId: messageId,
-            group_id: foundMsg.group_id,
-            receiver: foundMsg.receiver
-          };
-          io.emit("message_deleted", payload);
-          io.emit("message:deleted", payload);
-          return res.json({ success: true, message_id: messageId, messageId: messageId });
+          if (msgRes.rows.length > 0) {
+            const foundMsg = msgRes.rows[0];
+            const senderId = Number(foundMsg.sender);
+            
+            if (senderId !== Number(authUser.id) && !isEmirgan) {
+              return res.status(403).json({ error: "Bu mesajı silme yetkiniz yok." });
+            }
+            await client.execute({ 
+              sql: `DELETE FROM ${tbl} WHERE id = ? OR id = ?`, 
+              args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
+            });
+            
+            const payload = { 
+              message_id: messageId, 
+              id: messageId, 
+              messageId: messageId,
+              group_id: (foundMsg as any).group_id,
+              receiver: (foundMsg as any).receiver
+            };
+            io.emit("message_deleted", payload);
+            io.emit("message:deleted", payload);
+            return res.json({ success: true, message_id: messageId, messageId: messageId });
+          }
+        } catch (e) {
+          console.error(`Error querying ${tbl} for deletion:`, e);
         }
       }
       return res.status(404).json({ error: "Mesaj bulunamadı." });
@@ -2856,7 +2860,7 @@ async function startServer() {
       for (const tbl of tablesToTry) {
         try {
           const res = await client.execute({ 
-            sql: `SELECT id, sender, group_id, receiver FROM ${tbl} WHERE id = ? OR id = ?`, 
+            sql: `SELECT * FROM ${tbl} WHERE id = ? OR id = ?`, 
             args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
           });
           if (res.rows.length > 0) {
@@ -2865,7 +2869,7 @@ async function startServer() {
             break;
           }
         } catch (e) {
-          // ignore error
+          console.error(`Error querying ${tbl} for message ${rawId}:`, e);
         }
       }
 

@@ -380,7 +380,9 @@ export default function GlobalChat({
 
   const handleDeleteMessage = (messageId: number) => {
     if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
-      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      const idStr = String(messageId);
+      removeFromGlobalCache(idStr);
+      setMessages((prev) => prev.filter((m) => String(m.id) !== idStr));
       if (socket) {
         socket.emit("delete_message", { message_id: messageId, id: messageId, type: "global" }, (res: any) => {
           if (res?.error) {
@@ -388,7 +390,6 @@ export default function GlobalChat({
             socket.emit("get_global_messages", setMessages);
           }
         });
-        socket.emit("delete_global_message", { message_id: messageId, id: messageId });
       }
     }
   };

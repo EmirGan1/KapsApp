@@ -562,20 +562,22 @@ export default function App() {
           />
         )}
         
-        {activeTab === 'map' && (
+        {/* Persistently mounted LiveMap tab to prevent re-initialization and gray tiles when switching tabs */}
+        <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'map' ? 'flex' : 'hidden'}`}>
           <LiveMap 
             socket={socket} 
             currentUserId={currentUserId} 
             username={username} 
             avatar={avatar} 
             color={color} 
+            isActive={activeTab === 'map'}
             onUserClick={handleUserClick}
             onOpenChat={(targetId) => {
               setTargetChatUserId(targetId);
               setActiveTab('chats');
             }}
           />
-        )}
+        </div>
         
         {/* Persistently mounted Voice Chat tab to preserve audio connection when switching tabs */}
         <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'voice' ? 'flex' : 'hidden'}`}>
