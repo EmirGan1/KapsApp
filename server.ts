@@ -1729,16 +1729,51 @@ async function startServer() {
       socket.emit("update_user_locations", allLocs);
     });
 
-    socket.on("stop_sharing_location", () => {
-      const existing = userLiveLocations.get(userIdNum);
-      if (existing) {
+    const handleStopLocationSharing = (payload?: { lastLat?: number; lastLng?: number; lastSeen?: number }) => {
+      let existing = userLiveLocations.get(userIdNum);
+      const now = Date.now();
+      if (!existing && payload?.lastLat && payload?.lastLng) {
+        existing = {
+          userId: userIdNum,
+          username: user.username,
+          avatar: user.avatar,
+          color: user.color || "#3b82f6",
+          lat: payload.lastLat,
+          lng: payload.lastLng,
+          status: "Konum Kapalı",
+          updatedAt: now,
+          isLocationActive: false,
+          lastSeen: payload.lastSeen || now
+        };
+        userLiveLocations.set(userIdNum, existing);
+      } else if (existing) {
         existing.isLocationActive = false;
-        existing.lastSeen = Date.now();
+        existing.lastSeen = payload?.lastSeen || now;
         existing.status = "Konum Kapalı";
+        if (payload?.lastLat && payload?.lastLng) {
+          existing.lat = payload.lastLat;
+          existing.lng = payload.lastLng;
+        }
+      }
+
+      if (existing) {
         emitUserLocations();
         saveLastLocationToDb(existing);
+        io.emit("user:location_status", {
+          userId: userIdNum,
+          isLive: false,
+          isLocationActive: false,
+          lastSeen: existing.lastSeen,
+          lat: existing.lat,
+          lng: existing.lng,
+          status: existing.status
+        });
       }
-    });
+    };
+
+    socket.on("stop_sharing_location", handleStopLocationSharing);
+    socket.on("location:disabled", handleStopLocationSharing);
+    socket.on("user:passive", handleStopLocationSharing);
 
     const getUser = async (id: number) => {
       const numId = Number(id);
@@ -4367,6 +4402,15 @@ async function startServer() {
         existingLoc.status = "Çevrimdışı";
         emitUserLocations();
         saveLastLocationToDb(existingLoc);
+        io.emit("user:location_status", {
+          userId: userIdNum,
+          isLive: false,
+          isLocationActive: false,
+          lastSeen: existingLoc.lastSeen,
+          lat: existingLoc.lat,
+          lng: existingLoc.lng,
+          status: existingLoc.status
+        });
       }
 
       try {

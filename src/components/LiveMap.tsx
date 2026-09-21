@@ -39,7 +39,9 @@ function formatLastSeen(lastSeen?: number): string {
   if (diffMin < 60) return `${timeStr} (${diffMin} dk önce)`;
   const diffHours = Math.floor(diffMin / 60);
   if (diffHours < 24) return `${timeStr} (${diffHours} sa önce)`;
-  return timeStr;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return `Dün ${timeStr}`;
+  return `${diffDays} gün önce ${timeStr}`;
 }
 
 interface LiveMapProps {
@@ -74,11 +76,17 @@ export default function LiveMap({
   });
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [geoError, setGeoError] = useState<string | null>(null);
-  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(() => {
+    try {
+      const saved = localStorage.getItem("last_known_coords");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
   const [usersLocations, setUsersLocations] = useState<UserLiveLocation[]>([]);
   const [showUsersPanel, setShowUsersPanel] = useState<boolean>(false);
 
-  // Helper to create compact HTML Marker Icon
+  // Helper to create compact HTML Marker Icon with Active/Passive (Silik) Visual Styles
   const createCustomMarkerIcon = useCallback((user: UserLiveLocation, isMe: boolean) => {
     const isCurrentUser = isMe || user.userId === currentUserId;
     const isActive = user.isLocationActive !== false;
@@ -94,14 +102,14 @@ export default function LiveMap({
     const initial = (user.username?.[0] || "U").toUpperCase();
 
     const avatarHtml = user.avatar
-      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full pointer-events-none" />`
+      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full pointer-events-none ${!isActive ? 'grayscale opacity-75' : ''}" />`
       : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs pointer-events-none" style="background-color: ${isActive ? (user.color || '#6366f1') : '#475569'};">${initial}</div>`;
 
     const html = `
       <div class="relative flex items-center justify-center pointer-events-auto" 
-           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.6; filter: grayscale(100%);' : 'opacity: 1;'} transition: all 0.2s ease;">
+           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.55; filter: grayscale(85%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
         ${isActive ? `
-          <!-- Pulsing Radar Glow -->
+          <!-- Pulsing Radar Glow for Active Live Users -->
           <div class="absolute inset-0 rounded-full animate-ping opacity-50 pointer-events-none" style="background-color: ${glowColor};"></div>
           <div class="absolute inset-1 rounded-full animate-pulse opacity-30 pointer-events-none" style="background-color: ${ringColor};"></div>
         ` : ''}
@@ -113,11 +121,13 @@ export default function LiveMap({
             ${avatarHtml}
           </div>
           ${isCurrentUser ? `
-            <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-blue-500 rounded-full border border-slate-900 flex items-center justify-center text-[7px] font-black text-white">
+            <div class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 ${isActive ? 'bg-blue-500' : 'bg-slate-600'} rounded-full border border-slate-900 flex items-center justify-center text-[7px] font-black text-white">
               ★
             </div>
           ` : (
-            !isActive ? '<div class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-slate-600 rounded-full border border-slate-900 flex items-center justify-center text-[7px] text-slate-300">✕</div>' : ''
+            !isActive 
+              ? '<div class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-slate-600 rounded-full border border-slate-900 flex items-center justify-center text-[7px] text-slate-300">✕</div>' 
+              : '<div class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border border-slate-900"></div>'
           )}
         </div>
 
@@ -217,11 +227,70 @@ export default function LiveMap({
     return container;
   }, [currentUserId, onUserClick, onOpenChat]);
 
+  // Stop location sharing: Keeps the marker at last known coordinates, emits passive event, and marks as inactive/silik
+  const stopLocationSharing = useCallback((isError = false) => {
+    if (intervalIdRef.current !== null) {
+      clearInterval(intervalIdRef.current);
+      intervalIdRef.current = null;
+    }
+    setIsSharing(false);
+    setIsLocating(false);
+    localStorage.setItem("location_service_enabled", "false");
+    localStorage.setItem("isLocationActive", "false");
+
+    const lastSeenTime = Date.now();
+    const payload = {
+      userId: currentUserId,
+      lastLat: myCoords?.lat,
+      lastLng: myCoords?.lng,
+      lastSeen: lastSeenTime
+    };
+
+    if (socket) {
+      socket.emit("stop_sharing_location", payload);
+      socket.emit("location:disabled", payload);
+      socket.emit("user:passive", payload);
+    }
+
+    // Update current user's local state to passive mode without deleting marker
+    setUsersLocations((prev) => {
+      const idx = prev.findIndex((u) => u.userId === currentUserId);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          isLocationActive: false,
+          status: isError ? "Konum İzni Yok" : "Konum Kapalı",
+          lastSeen: lastSeenTime
+        };
+        return updated;
+      } else if (myCoords) {
+        return [
+          ...prev,
+          {
+            userId: currentUserId,
+            username,
+            avatar,
+            color: color || "#3b82f6",
+            lat: myCoords.lat,
+            lng: myCoords.lng,
+            status: isError ? "Konum İzni Yok" : "Konum Kapalı",
+            isLocationActive: false,
+            lastSeen: lastSeenTime
+          }
+        ];
+      }
+      return prev;
+    });
+  }, [socket, currentUserId, myCoords, username, avatar, color]);
+
   // High-accuracy Automated Geolocation fetch
   const fetchAndSendPosition = useCallback((shouldFlyTo: boolean = false) => {
     if (!navigator.geolocation) {
       console.warn("Tarayıcınız konum servisini (Geolocation API) desteklemiyor.");
       setIsLocating(false);
+      setGeoError("Tarayıcınız Geolocation API desteklemiyor.");
+      stopLocationSharing(true);
       return;
     }
 
@@ -229,7 +298,12 @@ export default function LiveMap({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-        setMyCoords({ lat: latitude, lng: longitude });
+        const coords = { lat: latitude, lng: longitude };
+        setMyCoords(coords);
+        try {
+          localStorage.setItem("last_known_coords", JSON.stringify(coords));
+        } catch (e) {}
+
         setIsSharing(true);
         setIsLocating(false);
         setGeoError(null);
@@ -243,22 +317,28 @@ export default function LiveMap({
 
         if (socket) {
           socket.emit("update_user_location", { lat: latitude, lng: longitude });
+          socket.emit("share_location", { lat: latitude, lng: longitude });
         }
       },
       (err) => {
         console.warn("Konum izni alınamadı:", err.message);
         setIsLocating(false);
         if (err.code === 1) { // PERMISSION_DENIED
-          setGeoError("Konum erişimi kapalı veya izin verilmedi.");
+          setGeoError("Konum erişimi kapalı veya tarayıcı izni reddedildi.");
+        } else if (err.code === 2) {
+          setGeoError("Konum bilgisi alınamadı (GPS kapalı veya sinyal yok).");
+        } else {
+          setGeoError("Konum zaman aşımına uğradı.");
         }
+        stopLocationSharing(true);
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 300000 // 5 minutes cache to prevent unnecessary GPS & battery consumption
+        timeout: 12000,
+        maximumAge: 60000
       }
     );
-  }, [socket]);
+  }, [socket, stopLocationSharing]);
 
   // Start periodic tracking (1-minute periodic GPS update)
   const startLocationSharing = useCallback(() => {
@@ -280,36 +360,33 @@ export default function LiveMap({
     }, 60000);
   }, [fetchAndSendPosition]);
 
-  // Stop location sharing
-  const stopLocationSharing = useCallback(() => {
-    if (intervalIdRef.current !== null) {
-      clearInterval(intervalIdRef.current);
-      intervalIdRef.current = null;
-    }
-    setIsSharing(false);
-    setIsLocating(false);
-    setMyCoords(null);
-    localStorage.setItem("location_service_enabled", "false");
-    localStorage.setItem("isLocationActive", "false");
+  // Handle beforeunload and visibilitychange for clean offline state
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (socket && (isSharing || myCoords)) {
+        const payload = {
+          userId: currentUserId,
+          lastLat: myCoords?.lat,
+          lastLng: myCoords?.lng,
+          lastSeen: Date.now()
+        };
+        socket.emit("stop_sharing_location", payload);
+        socket.emit("location:disabled", payload);
+      }
+    };
 
-    // Remove user's pin layer immediately
-    const myMarker = markersRef.current.get(currentUserId);
-    if (myMarker && mapInstanceRef.current) {
-      mapInstanceRef.current.removeLayer(myMarker);
-      markersRef.current.delete(currentUserId);
-    }
-
-    if (socket) {
-      socket.emit("stop_sharing_location");
-    }
-  }, [socket, currentUserId]);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [socket, isSharing, myCoords, currentUserId]);
 
   // Initialize Leaflet Map with touch and resize optimizations
   useEffect(() => {
     if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
 
-    // Default center Istanbul / Turkey coordinate
+    // Default center Istanbul / Turkey coordinate or user's last known location
     const defaultCenter: [number, number] = myCoords ? [myCoords.lat, myCoords.lng] : [41.0082, 28.9784];
     const map = L.map(mapContainerRef.current, {
       center: defaultCenter,
@@ -369,18 +446,49 @@ export default function LiveMap({
       }
     };
 
+    const handleLocationStatus = (data: {
+      userId: number;
+      isLive?: boolean;
+      isLocationActive?: boolean;
+      lastSeen?: number;
+      lat?: number;
+      lng?: number;
+      status?: string;
+    }) => {
+      if (!data || !data.userId) return;
+      setUsersLocations((prev) => {
+        const index = prev.findIndex((u) => u.userId === data.userId);
+        const isLive = data.isLocationActive !== undefined ? data.isLocationActive : data.isLive;
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = {
+            ...updated[index],
+            isLocationActive: isLive,
+            lastSeen: data.lastSeen || updated[index].lastSeen,
+            status: data.status || (isLive ? "Aktif Çevrimiçi" : "Konum Kapalı"),
+            lat: data.lat ?? updated[index].lat,
+            lng: data.lng ?? updated[index].lng
+          };
+          return updated;
+        }
+        return prev;
+      });
+    };
+
     socket.on("update_user_locations", handleUpdateUserLocations);
     socket.on("all_user_locations", handleUpdateUserLocations);
+    socket.on("user:location_status", handleLocationStatus);
 
     socket.emit("request_all_locations");
 
     return () => {
       socket.off("update_user_locations", handleUpdateUserLocations);
       socket.off("all_user_locations", handleUpdateUserLocations);
+      socket.off("user:location_status", handleLocationStatus);
     };
   }, [socket]);
 
-  // Incremental Marker Sync (Strictly Non-Draggable, High Performance)
+  // Incremental Marker Sync (Strictly Non-Draggable, High Performance, Preserves Passive Markers)
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -388,9 +496,9 @@ export default function LiveMap({
     const activeUserIds = new Set<number>();
     const combinedList: UserLiveLocation[] = [...usersLocations];
 
-    if (myCoords && isSharing) {
-      const existingMyIndex = combinedList.findIndex(u => u.userId === currentUserId);
-      const existingServerState = existingMyIndex >= 0 ? combinedList[existingMyIndex] : null;
+    // Merge or update current user's location pin
+    const selfIndex = combinedList.findIndex(u => u.userId === currentUserId);
+    if (myCoords) {
       const myObj: UserLiveLocation = {
         userId: currentUserId,
         username,
@@ -398,26 +506,20 @@ export default function LiveMap({
         color: color || "#3b82f6",
         lat: myCoords.lat,
         lng: myCoords.lng,
-        status: "Haritada Aktif (Siz)",
-        isLocationActive: true,
-        lastSeen: Date.now()
+        status: isSharing ? "Haritada Aktif (Siz)" : "Konum Kapalı (Siz)",
+        isLocationActive: isSharing,
+        lastSeen: selfIndex >= 0 && !isSharing ? (combinedList[selfIndex].lastSeen || Date.now()) : Date.now()
       };
 
-      if (existingMyIndex >= 0) {
-        combinedList[existingMyIndex] = myObj;
+      if (selfIndex >= 0) {
+        combinedList[selfIndex] = myObj;
       } else {
         combinedList.push(myObj);
-      }
-    } else {
-      // If current user is not sharing, ensure removed from combined list
-      const selfIndex = combinedList.findIndex(u => u.userId === currentUserId);
-      if (selfIndex >= 0) {
-        combinedList.splice(selfIndex, 1);
       }
     }
 
     combinedList.forEach((user) => {
-      if (!user.lat || !user.lng) return;
+      if (typeof user.lat !== "number" || typeof user.lng !== "number" || isNaN(user.lat) || isNaN(user.lng)) return;
       activeUserIds.add(user.userId);
       const isMe = user.userId === currentUserId;
 
@@ -445,7 +547,7 @@ export default function LiveMap({
       }
     });
 
-    // Clean up disconnected or removed user pins
+    // Clean up markers for users that no longer exist in state or DB
     markersRef.current.forEach((marker, uid) => {
       if (!activeUserIds.has(uid)) {
         map.removeLayer(marker);
@@ -529,7 +631,7 @@ export default function LiveMap({
           {/* Privacy & Location Sharing Toggle Button */}
           {isSharing ? (
             <button
-              onClick={stopLocationSharing}
+              onClick={() => stopLocationSharing(false)}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold shadow-xl shadow-red-600/30 border border-red-500 transition-all hover:scale-105 active:scale-95 cursor-pointer"
               title="Konumunuzu başkalarından gizleyin"
             >
