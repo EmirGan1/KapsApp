@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import path from "path";
+import compression from "compression";
 import { createServer as createViteServer } from "vite";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -9,14 +10,9 @@ import multer from "multer";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
-import v8 from "v8";
 import { createClient } from "@libsql/client";
 import dotenv from "dotenv";
 
-// Micro-container V8 memory optimization: disable heavy background sweepers
-try {
-  v8.setFlagsFromString("--noconcurrent_sweeping");
-} catch (e) {}
 import { 
   generateDeck, 
   checkClassicOkeyWin,
@@ -247,8 +243,51 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 5000;
   
+  // Production Performance & Security Headers
+  app.disable("x-powered-by");
+  app.set("etag", "strong");
+  
+  // High-performance Gzip / Brotli compression for API responses & assets
+  app.use(compression({
+    level: 6,
+    threshold: 1024,
+    filter: (req, res) => {
+      if (req.headers["x-no-compression"]) {
+        return false;
+      }
+      return compression.filter(req, res);
+    }
+  }));
+
   // Reverse proxy setup for accurate client IP detection (Nginx / PM2 / Cloud)
   app.set("trust proxy", true);
+
+  // In-Memory Query Cache with TTL for High-Concurrency Performance (1.5 GB Architecture)
+  const queryCache = new Map<string, { data: any; expiresAt: number }>();
+  const getCachedQuery = <T>(key: string): T | null => {
+    const cached = queryCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data as T;
+    }
+    if (cached) {
+      queryCache.delete(key);
+    }
+    return null;
+  };
+  const setCachedQuery = <T>(key: string, data: T, ttlSeconds = 30): void => {
+    if (queryCache.size > 5000) {
+      const oldestKey = queryCache.keys().next().value;
+      if (oldestKey) queryCache.delete(oldestKey);
+    }
+    queryCache.set(key, { data, expiresAt: Date.now() + ttlSeconds * 1000 });
+  };
+  const invalidateCachePrefix = (prefix: string): void => {
+    for (const key of queryCache.keys()) {
+      if (key.startsWith(prefix)) {
+        queryCache.delete(key);
+      }
+    }
+  };
 
   const getClientIp = (req: express.Request): string => {
     const forwarded = req.headers["x-forwarded-for"];
@@ -584,15 +623,22 @@ async function startServer() {
     }
   });
 
-  // Performance-Friendly Top 10 Leaderboard (Okey & UNO)
+  // Performance-Friendly Top 10 Leaderboard (Okey & UNO) with TTL In-Memory Caching
   app.get("/api/leaderboard", async (req, res) => {
     try {
       const type = req.query.type === "uno" ? "uno" : "okey";
+      const cacheKey = `leaderboard:${type}`;
+      const cached = getCachedQuery(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+
       const orderCol = type === "uno" ? "uno_wins" : "okey_wins";
       const result = await client.execute({
         sql: `SELECT id, username, avatar, color, COALESCE(okey_wins, 0) AS okey_wins, COALESCE(uno_wins, 0) AS uno_wins FROM users ORDER BY COALESCE(${orderCol}, 0) DESC, id ASC LIMIT 10`,
         args: []
       });
+      setCachedQuery(cacheKey, result.rows, 45); // 45 seconds TTL
       res.json(result.rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -731,23 +777,22 @@ async function startServer() {
   // Load cold-start last known locations from DB
   loadLastKnownLocationsFromDb();
 
-  // Aggressive Memory Watcher & Garbage Collection (Render 512MB RAM Micro-container)
-  if (typeof (global as any).gc === "function") {
-    setInterval(() => {
-      try {
-        const memoryUsage = process.memoryUsage();
-        const heapUsedMb = Math.round(memoryUsage.heapUsed / 1024 / 1024);
-        const rssMb = Math.round(memoryUsage.rss / 1024 / 1024);
-        
-        // Immediate GC trigger if heap exceeds 180MB or RSS exceeds 320MB
-        if (heapUsedMb > 180 || rssMb > 320) {
-          (global as any).gc();
-        }
-      } catch (gcErr) {
-        // Ignore
+  // High-Performance Passive Memory Watcher (1.5 GB VDS Architecture - Heap Ceiling: 1200 MB)
+  const MEMORY_WARNING_THRESHOLD_MB = 1000; // ~83% of 1200MB limit
+  setInterval(() => {
+    try {
+      const memoryUsage = process.memoryUsage();
+      const heapUsedMb = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+      const rssMb = Math.round(memoryUsage.rss / 1024 / 1024);
+      
+      if (heapUsedMb > MEMORY_WARNING_THRESHOLD_MB) {
+        console.warn(`[High Memory Notification] Heap: ${heapUsedMb}MB, RSS: ${rssMb}MB. Performing soft cleanup of volatile in-memory caches.`);
+        queryCache.clear();
       }
-    }, 15000); // Check every 15 seconds
-  }
+    } catch (e) {
+      // Ignore
+    }
+  }, 60000); // Passive monitor runs once every 60s (zero event-loop latency)
 
   // Periodic Cleanup of Stale In-Memory Records (>24h inactive)
   setInterval(() => {
