@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { createServer } from "http";
@@ -266,6 +267,34 @@ async function startServer() {
     }).catch(err => console.error("Access log error:", err));
   };
   
+  // CORS Configuration
+  const allowedOrigins = [
+    "https://kapsapp.online",
+    "https://www.kapsapp.online",
+    "https://kapsapp.onrender.com",
+    "http://localhost:5173",
+    "http://localhost:3000"
+  ];
+
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (
+        allowedOrigins.includes(origin) ||
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+        origin.endsWith(".kapsapp.online") ||
+        origin.endsWith(".onrender.com") ||
+        origin.endsWith(".run.app")
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+  }));
+
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
@@ -311,7 +340,13 @@ async function startServer() {
 
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    cors: { 
+      origin: (origin, callback) => {
+        callback(null, true);
+      },
+      methods: ["GET", "POST"],
+      credentials: true 
+    },
     perMessageDeflate: false,
     maxHttpBufferSize: 1e6 // 1 MB limit to prevent large buffers from bloating RAM
   });

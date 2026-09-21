@@ -1,26 +1,21 @@
-// Dinamik Backend ve API Base URL Yapılandırması
-// VITE_API_URL veya VITE_BACKEND_URL tanımlıysa doğrudan onu kullanır,
-// aksi takdirde vercel.json veya vite dev proxy tünelini baz alır.
-export const BACKEND_URL = (
-  (import.meta.env.VITE_API_URL as string | undefined) ||
-  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
-  ""
-).replace(/\/$/, "");
+// Frontend API & Socket URL Yapılandırması
+// Tüm istekler göreceli (relative path) olarak gönderilir: /api/* ve /socket.io/*
+// Bu sayede kullanıcı kapsapp.online veya www.kapsapp.online üzerinden bağlandığında
+// tarayıcı aynı origin'e istek atar ve CORS engeli oluşmaz.
 
 /**
- * Göreceli API yolunu tam URL'e dönüştürür (Eğer harici backend tanımlıysa başına ekler).
+ * Göreceli API yolunu döndürür. (örn: /api/login)
  */
 export function getApiUrl(path: string): string {
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  return BACKEND_URL ? `${BACKEND_URL}${cleanPath}` : cleanPath;
+  return path.startsWith("/") ? path : `/${path}`;
 }
 
 /**
  * Socket.IO sunucu URL'ini döndürür.
- * Tanımlı bir backend URL yoksa undefined dönerek tarayıcının mevcut host/proxy'sini kullanmasını sağlar.
+ * Göreceli bağlantı için undefined döner (mevcut origin üzerinden bağlanır).
  */
 export function getSocketUrl(): string | undefined {
-  return BACKEND_URL || undefined;
+  return undefined;
 }
 
 /**
