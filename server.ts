@@ -1557,8 +1557,8 @@ async function startServer() {
       }
     });
 
-    // Real-time Geolocation Sync (RAM ONLY - Jitter applied for 5651 & privacy protection)
-    socket.on("share_location", async (data: { lat: number; lng: number }) => {
+    // Real-time Geolocation Sync (RAM ONLY)
+    const handleLocationUpdate = async (data: { lat: number; lng: number; isManual?: boolean }) => {
       if (typeof data?.lat !== "number" || typeof data?.lng !== "number") return;
       if (isNaN(data.lat) || isNaN(data.lng)) return;
 
@@ -1573,9 +1573,10 @@ async function startServer() {
         userStatus = "Sesli/Görüntülü Sohbette";
       }
 
-      // Security Jitter (200-500 meters noise offset) to protect exact location
-      const safeLat = data.lat + (Math.random() - 0.5) * 0.005;
-      const safeLng = data.lng + (Math.random() - 0.5) * 0.005;
+      // If manual correction is provided (e.g. PC user correcting pin), use exact coordinates
+      // Otherwise apply light privacy jitter (200-500 meters offset)
+      const safeLat = data.isManual ? data.lat : (data.lat + (Math.random() - 0.5) * 0.005);
+      const safeLng = data.isManual ? data.lng : (data.lng + (Math.random() - 0.5) * 0.005);
 
       const locData: UserLiveLocation = {
         userId: userIdNum,
@@ -1594,7 +1595,10 @@ async function startServer() {
 
       emitUserLocations();
       saveLastLocationToDb(locData);
-    });
+    };
+
+    socket.on("share_location", handleLocationUpdate);
+    socket.on("update_user_location", handleLocationUpdate);
 
     socket.on("get_user_locations", (cb) => {
       const allLocs = Array.from(userLiveLocations.values());

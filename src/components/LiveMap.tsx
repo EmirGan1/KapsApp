@@ -5,18 +5,19 @@ import "leaflet/dist/leaflet.css";
 import { 
   MapPin, 
   Navigation, 
-  Eye, 
   EyeOff, 
   Crosshair, 
   Users, 
   ShieldAlert, 
   CheckCircle2, 
-  Layers, 
-  UserCircle2, 
-  MessageCircle, 
-  ExternalLink,
-  Sparkles,
-  Info
+  Info,
+  Search,
+  Move,
+  Check,
+  X,
+  RotateCcw,
+  Loader2,
+  MapPinned
 } from "lucide-react";
 
 export interface UserLiveLocation {
@@ -69,64 +70,99 @@ export default function LiveMap({
 }: LiveMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
-  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersRef = useRef<Map<number, L.Marker>>(new Map());
   const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isSharing, setIsSharing] = useState<boolean>(() => localStorage.getItem("isLocationActive") === "true");
   const [isLocating, setIsLocating] = useState<boolean>(false);
-  const [permissionStatus, setPermissionStatus] = useState<"prompt" | "granted" | "denied">("prompt");
   const [geoError, setGeoError] = useState<string | null>(null);
-  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [usersLocations, setUsersLocations] = useState<UserLiveLocation[]>([]);
-  const [selectedUser, setSelectedUser] = useState<UserLiveLocation | null>(null);
-  const [showUsersPanel, setShowUsersPanel] = useState<boolean>(false);
+  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(() => {
+    const savedManual = localStorage.getItem("kapsapp_manual_location");
+    const isManualSet = localStorage.getItem("kapsapp_is_manual_location") === "true";
+    if (isManualSet && savedManual) {
+      try {
+        const parsed = JSON.parse(savedManual);
+        if (typeof parsed?.lat === "number" && typeof parsed?.lng === "number") {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    return null;
+  });
 
-  // Standard 100% Free OpenStreetMap Tile Server (No API key or watermark required)
-  const OSM_TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-  const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const [isManualLocationSet, setIsManualLocationSet] = useState<boolean>(() => {
+    return localStorage.getItem("kapsapp_is_manual_location") === "true";
+  });
+
+  const [isEditingLocation, setIsEditingLocation] = useState<boolean>(false);
+  const [dragTempCoords, setDragTempCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [usersLocations, setUsersLocations] = useState<UserLiveLocation[]>([]);
+  const [, setSelectedUser] = useState<UserLiveLocation | null>(null);
+  const [showUsersPanel, setShowUsersPanel] = useState<boolean>(false);
+  const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [showSearchResults, setShowSearchResults] = useState<boolean>(false);
 
   // Helper to create custom HTML Marker Icon
-  const createCustomMarkerIcon = useCallback((user: UserLiveLocation, isMe: boolean) => {
+  const createCustomMarkerIcon = useCallback((user: UserLiveLocation, isMe: boolean, isEditing: boolean = false) => {
     const isCurrentUser = isMe || user.userId === currentUserId;
     const isActive = user.isLocationActive !== false;
-    const ringColor = isActive 
+    
+    let ringColor = isActive 
       ? (isCurrentUser ? "#3b82f6" : (user.color || "#10b981"))
       : "#64748b";
-    const glowColor = isActive
+    
+    let glowColor = isActive
       ? (isCurrentUser ? "rgba(59, 130, 246, 0.45)" : "rgba(16, 185, 129, 0.45)")
       : "transparent";
+
+    if (isCurrentUser && isEditing) {
+      ringColor = "#f59e0b";
+      glowColor = "rgba(245, 158, 11, 0.65)";
+    }
+
     const initial = (user.username?.[0] || "U").toUpperCase();
 
     const avatarHtml = user.avatar
-      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full" />`
-      : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs" style="background-color: ${isActive ? (user.color || '#6366f1') : '#475569'};">${initial}</div>`;
+      ? `<img src="${user.avatar}" alt="${user.username}" class="w-full h-full object-cover rounded-full pointer-events-none" />`
+      : `<div class="w-full h-full flex items-center justify-center rounded-full text-white font-bold text-xs pointer-events-none" style="background-color: ${isActive ? (user.color || '#6366f1') : '#475569'};">${initial}</div>`;
 
     const html = `
-      <div class="relative flex items-center justify-center group cursor-pointer" 
-           style="width: 48px; height: 48px; ${!isActive ? 'opacity: 0.5; filter: grayscale(100%);' : 'opacity: 1; filter: none;'} transition: all 0.3s ease;">
+      <div class="relative flex items-center justify-center group cursor-grab active:cursor-grabbing" 
+           style="width: 52px; height: 52px; ${!isActive ? 'opacity: 0.5; filter: grayscale(100%);' : 'opacity: 1; filter: none;'} transition: all 0.25s ease;">
         ${isActive ? `
           <!-- Glowing Pulse Radar Effect -->
-          <div class="absolute inset-0 rounded-full animate-ping opacity-60 pointer-events-none" style="background-color: ${glowColor};"></div>
+          <div class="absolute inset-0 rounded-full ${isEditing ? 'animate-ping' : 'animate-ping'} opacity-60 pointer-events-none" style="background-color: ${glowColor};"></div>
           <div class="absolute inset-1 rounded-full animate-pulse opacity-40 pointer-events-none" style="background-color: ${ringColor};"></div>
         ` : ''}
         
         <!-- Main Avatar Circle -->
-        <div class="relative z-10 w-10 h-10 rounded-full p-0.5 shadow-xl border-2 transition-all duration-300 transform hover:scale-110" 
-             style="background-color: #0f172a; border-color: ${ringColor}; ${isActive ? `box-shadow: 0 0 14px ${glowColor};` : 'box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);'}">
+        <div class="relative z-10 w-11 h-11 rounded-full p-0.5 shadow-xl border-2 transition-all duration-300 transform ${isEditing ? 'scale-125 ring-4 ring-amber-400/50' : 'hover:scale-110'}" 
+             style="background-color: #0f172a; border-color: ${ringColor}; ${isActive ? `box-shadow: 0 0 16px ${glowColor};` : 'box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);'}">
           <div class="w-full h-full rounded-full overflow-hidden bg-slate-800">
             ${avatarHtml}
           </div>
           ${isCurrentUser ? `
-            <div class="absolute -bottom-1 -right-1 w-4 h-4 ${isActive ? 'bg-blue-500' : 'bg-slate-500'} rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] font-black text-white">★</div>
+            <div class="absolute -bottom-1 -right-1 w-4 h-4 ${isEditing ? 'bg-amber-500' : (isActive ? 'bg-blue-500' : 'bg-slate-500')} rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] font-black text-white">
+              ${isEditing ? '✦' : '★'}
+            </div>
           ` : (
             !isActive ? '<div class="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-slate-600 rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] text-slate-300">✕</div>' : ''
           )}
         </div>
 
-        <!-- Floating Username Tag -->
-        <div class="absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-semibold shadow-md backdrop-blur-md pointer-events-none transition-all ${!isActive ? 'bg-slate-800/90 text-slate-400 border border-slate-700/60' : 'bg-slate-900/90 text-white border border-white/15'}">
-          ${isCurrentUser ? 'Siz' : user.username}
+        <!-- Floating Username / Drag Tag -->
+        <div class="absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-bold shadow-lg backdrop-blur-md pointer-events-none transition-all ${
+          isEditing 
+            ? 'bg-amber-500 text-slate-950 font-black border border-amber-300 animate-bounce' 
+            : (!isActive ? 'bg-slate-800/90 text-slate-400 border border-slate-700/60' : 'bg-slate-900/90 text-white border border-white/15')
+        }">
+          ${isEditing ? '📌 Sürükleyin' : (isCurrentUser ? 'Siz' : user.username)}
         </div>
       </div>
     `;
@@ -134,13 +170,13 @@ export default function LiveMap({
     return L.divIcon({
       className: "custom-leaflet-pin",
       html,
-      iconSize: [48, 48],
-      iconAnchor: [24, 24],
-      popupAnchor: [0, -26]
+      iconSize: [52, 52],
+      iconAnchor: [26, 26],
+      popupAnchor: [0, -28]
     });
   }, [currentUserId]);
 
-  // Create Popup Content with direct event listeners and stopPropagation
+  // Create Popup Content
   const createPopupContent = useCallback((user: UserLiveLocation, isMe: boolean) => {
     const isCurrentUser = isMe || user.userId === currentUserId;
     const isActive = user.isLocationActive !== false;
@@ -190,11 +226,15 @@ export default function LiveMap({
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
             <span>Mesaj</span>
           </button>
-        ` : ''}
+        ` : `
+          <button class="btn-popup-edit flex-1 py-1.5 px-2 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white text-xs font-semibold rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/30 cursor-pointer">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+            <span>Pinimi Taşı</span>
+          </button>
+        `}
       </div>
     `;
 
-    // Prevent Leaflet map dragging/clicking from capturing button events
     L.DomEvent.disableClickPropagation(container);
     L.DomEvent.disableScrollPropagation(container);
 
@@ -216,10 +256,23 @@ export default function LiveMap({
       });
     }
 
+    const btnEdit = container.querySelector(".btn-popup-edit");
+    if (btnEdit) {
+      btnEdit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        setDragTempCoords({ lat: user.lat, lng: user.lng });
+        setIsEditingLocation(true);
+        if (markersRef.current.get(user.userId)) {
+          markersRef.current.get(user.userId)?.closePopup();
+        }
+      });
+    }
+
     return container;
   }, [currentUserId, onUserClick, onOpenChat]);
 
-  // Stop location sharing (preserves pin in passive mode)
+  // Stop location sharing
   const stopLocationSharing = useCallback(() => {
     if (intervalIdRef.current !== null) {
       clearInterval(intervalIdRef.current);
@@ -227,16 +280,30 @@ export default function LiveMap({
     }
     setIsSharing(false);
     setIsLocating(false);
+    setIsEditingLocation(false);
     localStorage.setItem("isLocationActive", "false");
 
-    // Inform server so it marks isLocationActive: false with lastSeen
     if (socket) {
       socket.emit("stop_sharing_location");
     }
   }, [socket]);
 
-  // Fetch current position and send to server
-  const fetchAndSendPosition = useCallback((shouldFlyTo: boolean = false) => {
+  // High-accuracy Geolocation fetch
+  const fetchAndSendPosition = useCallback((shouldFlyTo: boolean = false, forceGps: boolean = false) => {
+    // If manual location is set and we're not forcing GPS, use manual location
+    if (!forceGps && isManualLocationSet && myCoords) {
+      setIsSharing(true);
+      setIsLocating(false);
+      setGeoError(null);
+      if (shouldFlyTo && mapInstanceRef.current) {
+        mapInstanceRef.current.flyTo([myCoords.lat, myCoords.lng], 14, { animate: true, duration: 1.2 });
+      }
+      if (socket) {
+        socket.emit("update_user_location", { lat: myCoords.lat, lng: myCoords.lng, isManual: true });
+      }
+      return;
+    }
+
     if (!navigator.geolocation) {
       setGeoError("Tarayıcınız konum servisini (Geolocation API) desteklemiyor.");
       setIsLocating(false);
@@ -246,7 +313,7 @@ export default function LiveMap({
     const geoOptions: PositionOptions = {
       enableHighAccuracy: true,
       timeout: 10000,
-      maximumAge: 0
+      maximumAge: 60000
     };
 
     navigator.geolocation.getCurrentPosition(
@@ -255,10 +322,8 @@ export default function LiveMap({
         setMyCoords({ lat: latitude, lng: longitude });
         setIsSharing(true);
         setIsLocating(false);
-        setPermissionStatus("granted");
         setGeoError(null);
 
-        // Center map on user if requested
         if (shouldFlyTo && mapInstanceRef.current) {
           mapInstanceRef.current.flyTo([latitude, longitude], 14, {
             animate: true,
@@ -266,44 +331,35 @@ export default function LiveMap({
           });
         }
 
-        // Share with server
         if (socket) {
-          socket.emit("share_location", { lat: latitude, lng: longitude });
+          socket.emit("update_user_location", { lat: latitude, lng: longitude });
         }
       },
       (err) => {
         setIsLocating(false);
         if (err.code === err.PERMISSION_DENIED) {
-          setPermissionStatus("denied");
-          setGeoError("Konum izni verilmedi; haritayı yalnızca izleyici olarak görüntülüyorsunuz.");
+          setGeoError("Konum izni verilmedi; 'Konumu Düzelt' butonu ile pininizi haritada manuel yerleştirebilirsiniz.");
         } else if (err.code === err.POSITION_UNAVAILABLE) {
-          setGeoError("Konum bilgisi alınamadı. GPS veya ağ servisinizi kontrol edin.");
+          setGeoError("Konum bilgisi alınamadı. 'Konumu Düzelt' ile manuel konum belirleyebilirsiniz.");
         } else if (err.code === err.TIMEOUT) {
-          setGeoError("Konum isteği zaman aşımına uğradı. Lütfen tekrar deneyin.");
+          setGeoError("Konum isteği zaman aşımına uğradı. Manuel olarak pininizi taşıyabilirsiniz.");
         } else {
           setGeoError("Konum alınırken bir hata oluştu: " + err.message);
         }
       },
       geoOptions
     );
-  }, [socket]);
+  }, [socket, isManualLocationSet, myCoords]);
 
-  // Start 1-minute interval location tracking
+  // Start tracking
   const startLocationSharing = useCallback(() => {
-    if (!navigator.geolocation) {
-      setGeoError("Tarayıcınız konum servisini (Geolocation API) desteklemiyor.");
-      return;
-    }
-
     setIsLocating(true);
     setGeoError(null);
     localStorage.setItem("isLocationActive", "true");
     setIsSharing(true);
 
-    // 1. Initial immediate location fetch
     fetchAndSendPosition(true);
 
-    // 2. Setup 60 seconds (1 minute) interval
     if (intervalIdRef.current !== null) {
       clearInterval(intervalIdRef.current);
     }
@@ -318,24 +374,20 @@ export default function LiveMap({
     if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
 
-    // Default center: Turkey / World center
-    const defaultCenter: [number, number] = [39.9334, 32.8597]; // Ankara
+    const defaultCenter: [number, number] = myCoords ? [myCoords.lat, myCoords.lng] : [39.9334, 32.8597];
     const map = L.map(mapContainerRef.current, {
       center: defaultCenter,
-      zoom: 6,
+      zoom: myCoords ? 14 : 6,
       zoomControl: false
     });
 
-    // Add zoom control at bottom right
     L.control.zoom({ position: "bottomright" }).addTo(map);
 
-    // Initial tile layer: Standard 100% Free OpenStreetMap (No API key / No watermark)
-    const tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 19
     }).addTo(map);
 
-    tileLayerRef.current = tileLayer;
     mapInstanceRef.current = map;
 
     // Restore location sharing state from localStorage
@@ -354,6 +406,28 @@ export default function LiveMap({
     };
   }, [startLocationSharing]);
 
+  // Handle map click during edit mode to reposition pin
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const handleMapClick = (e: L.LeafletMouseEvent) => {
+      if (isEditingLocation) {
+        const { lat, lng } = e.latlng;
+        setDragTempCoords({ lat, lng });
+        const myMarker = markersRef.current.get(currentUserId);
+        if (myMarker) {
+          myMarker.setLatLng([lat, lng]);
+        }
+      }
+    };
+
+    map.on("click", handleMapClick);
+    return () => {
+      map.off("click", handleMapClick);
+    };
+  }, [isEditingLocation, currentUserId]);
+
   // Socket.io Real-time Location synchronization
   useEffect(() => {
     if (!socket) return;
@@ -367,7 +441,6 @@ export default function LiveMap({
     socket.on("update_user_locations", handleUpdateUserLocations);
     socket.on("all_user_locations", handleUpdateUserLocations);
 
-    // Fetch current user locations on mount (single request)
     socket.emit("request_all_locations");
 
     return () => {
@@ -376,17 +449,17 @@ export default function LiveMap({
     };
   }, [socket]);
 
-  // Sync Markers on Map whenever usersLocations or myCoords change
+  // Sync Markers on Map whenever usersLocations, myCoords or isEditingLocation changes
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    // Prepare complete list of markers to display
     const activeUserIds = new Set<number>();
-
-    // If I have coordinates, ensure I am in the list with appropriate active/passive status
     const combinedList: UserLiveLocation[] = [...usersLocations];
-    if (myCoords) {
+
+    const currentCoords = (isEditingLocation && dragTempCoords) ? dragTempCoords : myCoords;
+
+    if (currentCoords) {
       const existingMyIndex = combinedList.findIndex(u => u.userId === currentUserId);
       const existingServerState = existingMyIndex >= 0 ? combinedList[existingMyIndex] : null;
       const myObj: UserLiveLocation = {
@@ -394,9 +467,11 @@ export default function LiveMap({
         username,
         avatar,
         color: color || "#3b82f6",
-        lat: myCoords.lat,
-        lng: myCoords.lng,
-        status: isSharing ? "Haritada Aktif (Siz)" : "Konum Kapalı (Siz)",
+        lat: currentCoords.lat,
+        lng: currentCoords.lng,
+        status: isSharing 
+          ? (isEditingLocation ? "Pin Düzenleniyor (Siz)" : "Haritada Aktif (Siz)") 
+          : "Konum Kapalı (Siz)",
         isLocationActive: isSharing,
         lastSeen: isSharing ? Date.now() : (existingServerState?.lastSeen || Date.now())
       };
@@ -408,31 +483,45 @@ export default function LiveMap({
       }
     }
 
-    console.log("Haritaya basılan toplam marker sayısı:", combinedList.length);
-
     combinedList.forEach((user) => {
       if (!user.lat || !user.lng) return;
       activeUserIds.add(user.userId);
       const isMe = user.userId === currentUserId;
 
       const existingMarker = markersRef.current.get(user.userId);
-      const icon = createCustomMarkerIcon(user, isMe);
+      const icon = createCustomMarkerIcon(user, isMe, isMe && isEditingLocation);
       const popupContent = createPopupContent(user, isMe);
 
       if (existingMarker) {
-        // Smoothly update position and icon
         existingMarker.setLatLng([user.lat, user.lng]);
         existingMarker.setIcon(icon);
         existingMarker.setPopupContent(popupContent);
+
+        if (isMe) {
+          if (isEditingLocation) {
+            existingMarker.dragging?.enable();
+          } else {
+            existingMarker.dragging?.disable();
+          }
+        }
       } else {
-        // Create new Leaflet Marker
-        const marker = L.marker([user.lat, user.lng], { icon })
+        const marker = L.marker([user.lat, user.lng], { 
+          icon,
+          draggable: isMe && isEditingLocation
+        })
           .addTo(map)
           .bindPopup(popupContent, {
             className: "custom-leaflet-popup",
             closeButton: false,
             offset: [0, -10]
           });
+
+        if (isMe) {
+          marker.on("dragend", (e: any) => {
+            const newPos = e.target.getLatLng();
+            setDragTempCoords({ lat: newPos.lat, lng: newPos.lng });
+          });
+        }
 
         marker.on("click", () => {
           setSelectedUser(user);
@@ -442,14 +531,14 @@ export default function LiveMap({
       }
     });
 
-    // Remove markers for users who were removed from list
+    // Remove markers for removed users
     markersRef.current.forEach((marker, uid) => {
       if (!activeUserIds.has(uid)) {
         map.removeLayer(marker);
         markersRef.current.delete(uid);
       }
     });
-  }, [usersLocations, myCoords, isSharing, currentUserId, username, avatar, color, createCustomMarkerIcon, createPopupContent]);
+  }, [usersLocations, myCoords, dragTempCoords, isSharing, isEditingLocation, currentUserId, username, avatar, color, createCustomMarkerIcon, createPopupContent]);
 
   // Center on user's own location
   const handleCenterOnMe = () => {
@@ -460,6 +549,111 @@ export default function LiveMap({
       });
     } else {
       startLocationSharing();
+    }
+  };
+
+  // Start Manual Pin Edit Mode
+  const handleStartManualEdit = () => {
+    const startPoint = myCoords || { lat: 41.0082, lng: 28.9784 }; // Istanbul fallback if no coords
+    setDragTempCoords(startPoint);
+    if (!myCoords) {
+      setMyCoords(startPoint);
+    }
+    setIsEditingLocation(true);
+    setGeoError(null);
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo([startPoint.lat, startPoint.lng], 15, {
+        animate: true,
+        duration: 1
+      });
+    }
+  };
+
+  // Confirm Manual Location
+  const handleConfirmManualLocation = () => {
+    const finalCoords = dragTempCoords || myCoords;
+    if (!finalCoords) return;
+
+    setMyCoords(finalCoords);
+    setIsManualLocationSet(true);
+    setIsEditingLocation(false);
+    setIsSharing(true);
+    localStorage.setItem("isLocationActive", "true");
+    localStorage.setItem("kapsapp_is_manual_location", "true");
+    localStorage.setItem("kapsapp_manual_location", JSON.stringify(finalCoords));
+
+    if (socket) {
+      socket.emit("update_user_location", { 
+        lat: finalCoords.lat, 
+        lng: finalCoords.lng, 
+        isManual: true 
+      });
+    }
+
+    setSuccessToast("📌 Pin konumunuz başarıyla kaydedildi ve sabitlendi.");
+    setTimeout(() => setSuccessToast(null), 4000);
+  };
+
+  // Cancel Manual Edit Mode
+  const handleCancelManualEdit = () => {
+    setIsEditingLocation(false);
+    setDragTempCoords(null);
+  };
+
+  // Reset to Automatic GPS
+  const handleResetToAutoGps = () => {
+    localStorage.removeItem("kapsapp_is_manual_location");
+    localStorage.removeItem("kapsapp_manual_location");
+    setIsManualLocationSet(false);
+    setIsEditingLocation(false);
+    setDragTempCoords(null);
+    fetchAndSendPosition(true, true);
+    setSuccessToast("🛰️ Otomatik GPS konumlandırmasına geri dönüldü.");
+    setTimeout(() => setSuccessToast(null), 3500);
+  };
+
+  // Search Location with OSM Nominatim
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (!val.trim() || val.trim().length < 2) {
+      setSearchResults([]);
+      setShowSearchResults(false);
+      return;
+    }
+    setIsSearching(true);
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val)}&countrycodes=tr&limit=5&addressdetails=1`
+        );
+        const data = await res.json();
+        setSearchResults(Array.isArray(data) ? data : []);
+        setShowSearchResults(true);
+      } catch (e) {
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+  };
+
+  const handleSelectSearchResult = (item: any) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lon);
+    if (isNaN(lat) || isNaN(lng)) return;
+
+    setShowSearchResults(false);
+    setSearchQuery(item.display_name.split(",")[0]);
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo([lat, lng], 15, { animate: true, duration: 1.2 });
+    }
+
+    setDragTempCoords({ lat, lng });
+    if (!isEditingLocation) {
+      setIsEditingLocation(true);
     }
   };
 
@@ -483,10 +677,11 @@ export default function LiveMap({
 
   return (
     <div className="relative w-full h-full flex flex-col bg-slate-950 overflow-hidden select-none">
-      {/* Top Floating Control Bar */}
-      <div className="absolute top-3 inset-x-3 z-[1000] flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-        {/* Left: Title & Live Presence Indicator */}
-        <div className="flex items-center gap-2.5 bg-slate-900/90 border border-slate-700/80 backdrop-blur-xl px-3.5 py-2 rounded-2xl shadow-xl pointer-events-auto">
+      {/* Top Floating Header & Controls */}
+      <div className="absolute top-3 inset-x-3 z-[1000] flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5 pointer-events-none">
+        
+        {/* Left: Brand Badge & Stats */}
+        <div className="flex items-center gap-2.5 bg-slate-900/90 border border-slate-700/80 backdrop-blur-xl px-3.5 py-2 rounded-2xl shadow-xl pointer-events-auto self-start">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/30">
             <MapPin size={18} />
           </div>
@@ -495,8 +690,13 @@ export default function LiveMap({
               Canlı Harita
               <span className="flex items-center gap-1 text-[10px] bg-emerald-500/20 text-emerald-400 font-semibold px-2 py-0.5 rounded-full border border-emerald-500/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                Anlık Senkron
+                Anlık
               </span>
+              {isManualLocationSet && (
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 font-semibold px-2 py-0.5 rounded-full border border-amber-500/30">
+                  Sabit Pin
+                </span>
+              )}
             </h2>
             <p className="text-[11px] text-slate-400">
               {activeCount} Aktif Paylaşım · {totalCount} Toplam Pin
@@ -504,8 +704,78 @@ export default function LiveMap({
           </div>
         </div>
 
-        {/* Right: Actions, Privacy Toggle & User List */}
-        <div className="flex items-center gap-2 pointer-events-auto flex-wrap">
+        {/* Center: Search Box (Nominatim / OSM District Search) */}
+        <div className="relative pointer-events-auto flex-1 max-w-sm self-center md:self-auto w-full md:w-auto">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/90 border border-slate-700/80 rounded-2xl shadow-xl backdrop-blur-xl focus-within:border-blue-500 transition-colors">
+            {isSearching ? (
+              <Loader2 size={16} className="text-blue-400 animate-spin shrink-0" />
+            ) : (
+              <Search size={16} className="text-slate-400 shrink-0" />
+            )}
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              onFocus={() => { if (searchResults.length > 0) setShowSearchResults(true); }}
+              placeholder="İlçe, semt veya şehir ara... (Örn: Kadıköy)"
+              className="bg-transparent border-none text-xs text-white placeholder-slate-400 focus:outline-none w-full"
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => { setSearchQuery(""); setSearchResults([]); setShowSearchResults(false); }}
+                className="text-slate-400 hover:text-white p-0.5"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Search Dropdown Results */}
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900/95 border border-slate-700/90 rounded-2xl shadow-2xl backdrop-blur-xl overflow-hidden z-[1050] max-h-56 overflow-y-auto no-scrollbar animate-in fade-in-50">
+              {searchResults.map((item, idx) => (
+                <div
+                  key={idx}
+                  onClick={() => handleSelectSearchResult(item)}
+                  className="px-3.5 py-2 hover:bg-blue-600/30 border-b border-slate-800/80 last:border-b-0 cursor-pointer text-left transition-colors flex items-start gap-2"
+                >
+                  <MapPinned size={14} className="text-blue-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-white truncate">{item.display_name.split(",")[0]}</p>
+                    <p className="text-[10px] text-slate-400 truncate">{item.display_name}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Right: Actions (Move Pin, Reset GPS, Users Drawer, Toggle Location) */}
+        <div className="flex items-center gap-2 pointer-events-auto flex-wrap self-end md:self-auto">
+          {/* Manual Pin Correction Button */}
+          {!isEditingLocation ? (
+            <button
+              onClick={handleStartManualEdit}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white text-xs font-semibold shadow-xl shadow-amber-600/20 border border-amber-500 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+              title="PC/Masaüstü için konumunuzu haritada tam yerine taşıyın"
+            >
+              <Move size={14} />
+              <span>Konumu Düzelt</span>
+            </button>
+          ) : null}
+
+          {/* Revert to Auto GPS (Visible if manual pin set) */}
+          {isManualLocationSet && !isEditingLocation && (
+            <button
+              onClick={handleResetToAutoGps}
+              className="flex items-center gap-1.5 px-2.5 py-2 rounded-2xl bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 shadow-xl transition-all"
+              title="Cihazın otomatik GPS konumuna geri dön"
+            >
+              <RotateCcw size={14} />
+              <span className="hidden sm:inline">GPS'e Dön</span>
+            </button>
+          )}
+
           {/* Active Users List Drawer Toggle */}
           <button
             onClick={() => setShowUsersPanel(!showUsersPanel)}
@@ -530,7 +800,7 @@ export default function LiveMap({
               title="Konumunuzu başkalarından gizleyin"
             >
               <EyeOff size={15} />
-              <span>Konumu Kapat</span>
+              <span className="hidden sm:inline">Konumu Kapat</span>
             </button>
           ) : (
             <button
@@ -540,25 +810,65 @@ export default function LiveMap({
               title="Konumunuzu diğer kullanıcılara gösterin"
             >
               <Navigation size={15} className={isLocating ? "animate-spin" : ""} />
-              <span>{isLocating ? "Konum Alınıyor..." : "Konumumu Paylaş"}</span>
+              <span>{isLocating ? "Alınıyor..." : "Konumu Aç"}</span>
             </button>
           )}
         </div>
       </div>
 
+      {/* Manual Pin Editing Sticky Confirmation Bar */}
+      {isEditingLocation && (
+        <div className="absolute top-24 md:top-20 inset-x-3 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 z-[1000] p-3 bg-gradient-to-r from-amber-950/95 to-slate-900/95 border-2 border-amber-500/90 text-amber-100 rounded-3xl backdrop-blur-2xl shadow-2xl flex flex-wrap items-center justify-between gap-3 animate-in slide-in-from-top-3 max-w-xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-300 shrink-0">
+              <Move size={16} className="animate-pulse" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">Pin Düzenleme Modu</p>
+              <p className="text-[11px] text-amber-200/90">
+                Pininizi sürükleyin veya haritada istediğiniz bir noktaya tıklayın.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              onClick={handleCancelManualEdit}
+              className="flex-1 sm:flex-initial px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition-colors"
+            >
+              İptal
+            </button>
+            <button
+              onClick={handleConfirmManualLocation}
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-amber-500/30 transition-all hover:scale-105 active:scale-95 cursor-pointer"
+            >
+              <Check size={14} />
+              <span>Konumu Onayla</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Success Notification Banner */}
+      {successToast && (
+        <div className="absolute top-24 inset-x-3 z-[1000] max-w-md mx-auto p-3 bg-emerald-950/90 border border-emerald-500/80 text-emerald-200 rounded-2xl backdrop-blur-xl shadow-2xl flex items-center gap-2.5 animate-in slide-in-from-top-3">
+          <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
+          <p className="text-xs font-medium">{successToast}</p>
+        </div>
+      )}
+
       {/* Permission Denied / Error Notification Banner */}
-      {geoError && (
-        <div className="absolute top-20 inset-x-3 z-[1000] max-w-xl mx-auto p-3 bg-amber-950/90 border border-amber-600/80 text-amber-200 rounded-2xl backdrop-blur-xl shadow-2xl flex items-center justify-between gap-3 animate-in slide-in-from-top-3">
+      {geoError && !isEditingLocation && (
+        <div className="absolute top-24 inset-x-3 z-[1000] max-w-xl mx-auto p-3 bg-amber-950/90 border border-amber-600/80 text-amber-200 rounded-2xl backdrop-blur-xl shadow-2xl flex items-center justify-between gap-3 animate-in slide-in-from-top-3">
           <div className="flex items-center gap-2.5 text-xs">
             <ShieldAlert size={18} className="text-amber-400 shrink-0" />
             <p className="leading-snug">{geoError}</p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
-              onClick={startLocationSharing}
-              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-semibold rounded-xl transition-colors shadow"
+              onClick={handleStartManualEdit}
+              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold rounded-xl transition-colors shadow"
             >
-              Tekrar Dene
+              Pini Taşı
             </button>
             <button
               onClick={() => setGeoError(null)}
@@ -609,6 +919,9 @@ export default function LiveMap({
                     <div className="flex items-center gap-1">
                       <span className="text-xs font-bold text-white truncate">{username}</span>
                       <span className={`text-[9px] px-1 py-0.2 rounded font-semibold ${isSharing ? 'bg-blue-500/20 text-blue-300' : 'bg-slate-700 text-slate-400'}`}>Siz</span>
+                      {isManualLocationSet && (
+                        <span className="text-[9px] bg-amber-500/20 text-amber-300 font-semibold px-1 py-0.2 rounded">Sabit</span>
+                      )}
                     </div>
                     <span className={`text-[10px] block ${isSharing ? 'text-blue-300' : 'text-slate-400'}`}>
                       {isSharing ? "Canlı Paylaşılıyor" : "Konum Kapalı (Pin Haritada)"}
@@ -671,7 +984,7 @@ export default function LiveMap({
         </div>
       )}
 
-      {/* Center on Me Floating FAB Button */}
+      {/* Floating Center On Me FAB */}
       <div className="absolute bottom-6 right-6 z-[1000] flex flex-col gap-2 pointer-events-auto">
         <button
           onClick={handleCenterOnMe}
@@ -682,13 +995,13 @@ export default function LiveMap({
         </button>
       </div>
 
-      {/* Main Full-Screen Leaflet Map DOM Canvas */}
+      {/* Leaflet Map DOM Canvas */}
       <div ref={mapContainerRef} className="w-full h-full z-0 relative" />
 
       {/* Bottom Floating Info Pill */}
       <div className="absolute bottom-4 left-4 z-[1000] pointer-events-none hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-slate-800 text-slate-400 text-[11px] backdrop-blur-md">
         <Info size={13} className="text-blue-400" />
-        <span>Konumlar yalnızca anlık oturum boyunca bellekte tutulur, veritabanına kaydedilmez.</span>
+        <span>PC ve mobil cihazlar için yüksek doğruluklu konum ve manuel pin sabitleme aktiftir.</span>
       </div>
     </div>
   );
