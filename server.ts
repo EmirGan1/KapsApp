@@ -598,23 +598,44 @@ async function startServer() {
     try {
       const token = req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const userRes = await client.execute({ sql: "SELECT id, username FROM users WHERE token = ?", args: [token] });
+      const userRes = await client.execute({ sql: "SELECT id, username, is_admin FROM users WHERE token = ?", args: [token] });
       if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
       const authUser = userRes.rows[0];
-      const messageId = Number(req.params.id);
       
-      const isEmirgan = authUser.username && (authUser.username as string).trim().toLowerCase() === 'emirgan';
+      const rawId = req.params.id;
+      const numId = Number(rawId);
+      const messageId = !isNaN(numId) ? numId : rawId;
+      
+      const usernameStr = authUser.username ? String(authUser.username).trim().toLowerCase() : "";
+      const isEmirgan = usernameStr === "emirgan" || authUser.is_admin === 1 || (authUser as any).role === "admin";
       
       for (const tbl of ["messages", "global_messages", "group_messages"]) {
-        const msgRes = await client.execute({ sql: `SELECT sender FROM ${tbl} WHERE id = ?`, args: [messageId] });
+        const msgRes = await client.execute({ 
+          sql: `SELECT id, sender, group_id, receiver FROM ${tbl} WHERE id = ? OR id = ?`, 
+          args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
+        });
         if (msgRes.rows.length > 0) {
-          const senderId = Number(msgRes.rows[0].sender);
+          const foundMsg = msgRes.rows[0];
+          const senderId = Number(foundMsg.sender);
+          
           if (senderId !== Number(authUser.id) && !isEmirgan) {
             return res.status(403).json({ error: "Bu mesajı silme yetkiniz yok." });
           }
-          await client.execute({ sql: `DELETE FROM ${tbl} WHERE id = ?`, args: [messageId] });
-          io.emit("message_deleted", { message_id: messageId, id: messageId });
-          return res.json({ success: true, message_id: messageId });
+          await client.execute({ 
+            sql: `DELETE FROM ${tbl} WHERE id = ? OR id = ?`, 
+            args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
+          });
+          
+          const payload = { 
+            message_id: messageId, 
+            id: messageId, 
+            messageId: messageId,
+            group_id: foundMsg.group_id,
+            receiver: foundMsg.receiver
+          };
+          io.emit("message_deleted", payload);
+          io.emit("message:deleted", payload);
+          return res.json({ success: true, message_id: messageId, messageId: messageId });
         }
       }
       return res.status(404).json({ error: "Mesaj bulunamadı." });
@@ -2805,17 +2826,19 @@ async function startServer() {
       if (typeof data === "number" || typeof data === "string") {
         rawId = data;
       } else if (data && typeof data === "object") {
-        rawId = data.message_id || data.id;
+        rawId = data.message_id || data.id || data.messageId;
         requestedType = data.type || "";
       }
       
-      const messageId = Number(rawId);
-      if (!messageId || isNaN(messageId)) {
+      const numId = Number(rawId);
+      const messageId = !isNaN(numId) ? numId : rawId;
+      if (!messageId) {
         if (cb) cb({ error: "Mesaj ID eksik." });
         return;
       }
 
-      const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
+      const usernameStr = user.username ? String(user.username).trim().toLowerCase() : "";
+      const isEmirgan = usernameStr === "emirgan" || user.is_admin === 1 || (user as any).role === "admin";
       const currentUserId = Number(user.id);
 
       // Search tables: prioritize requestedType if given, otherwise search all 3 tables
@@ -2832,7 +2855,10 @@ async function startServer() {
 
       for (const tbl of tablesToTry) {
         try {
-          const res = await client.execute({ sql: `SELECT id, sender, group_id, receiver FROM ${tbl} WHERE id = ?`, args: [messageId] });
+          const res = await client.execute({ 
+            sql: `SELECT id, sender, group_id, receiver FROM ${tbl} WHERE id = ? OR id = ?`, 
+            args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
+          });
           if (res.rows.length > 0) {
             foundTable = tbl;
             foundMsg = res.rows[0];
@@ -2849,7 +2875,7 @@ async function startServer() {
       }
 
       const originalSender = Number(foundMsg.sender);
-      // Backend yetki kontrolü: Kullanıcı mesajın sahibi değilse ve emirgan değilse işlemi reddet
+      // Backend yetki kontrolü: Kullanıcı mesajın sahibi değilse ve emirgan/admin değilse işlemi reddet
       if (originalSender !== currentUserId && !isEmirgan) {
         if (cb) cb({ error: "Bu mesajı silme yetkiniz yok." });
         return;
@@ -2857,21 +2883,28 @@ async function startServer() {
 
       try {
         // Kalıcı olarak DELETE FROM sorgusu ile sil
-        await client.execute({ sql: `DELETE FROM ${foundTable} WHERE id = ?`, args: [messageId] });
+        await client.execute({ 
+          sql: `DELETE FROM ${foundTable} WHERE id = ? OR id = ?`, 
+          args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
+        });
         
         const resolvedType = foundTable === "messages" ? "private" : foundTable === "group_messages" ? "group" : "global";
         
-        // Emit to all connected sockets
-        io.emit("message_deleted", { 
+        const payload = { 
           id: messageId,
           message_id: messageId, 
+          messageId: messageId,
           type: resolvedType, 
           table: foundTable,
           group_id: foundMsg.group_id || data?.group_id, 
           receiver: foundMsg.receiver || data?.receiver 
-        });
+        };
 
-        if (cb) cb({ success: true, id: messageId, message_id: messageId });
+        // Emit to all connected sockets
+        io.emit("message_deleted", payload);
+        io.emit("message:deleted", payload);
+
+        if (cb) cb({ success: true, id: messageId, message_id: messageId, messageId: messageId });
       } catch (err) {
         console.error("Delete message error:", err);
         if (cb) cb({ error: "Silme işlemi sırasında hata oluştu." });

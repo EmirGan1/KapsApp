@@ -26,6 +26,21 @@ export interface UserLiveLocation {
   lastSeen?: number;
 }
 
+export const isValidCoordinate = (lat: any, lng: any): boolean => {
+  return (
+    typeof lat === "number" &&
+    typeof lng === "number" &&
+    !isNaN(lat) &&
+    !isNaN(lng) &&
+    isFinite(lat) &&
+    isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+};
+
 function formatLastSeen(lastSeen?: number): string {
   if (!lastSeen) return "Bilinmiyor";
   const date = new Date(lastSeen);
@@ -264,7 +279,7 @@ export default function LiveMap({
           lastSeen: lastSeenTime
         };
         return updated;
-      } else if (myCoords) {
+      } else if (myCoords && isValidCoordinate(myCoords.lat, myCoords.lng)) {
         return [
           ...prev,
           {
@@ -282,6 +297,10 @@ export default function LiveMap({
       }
       return prev;
     });
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.invalidateSize();
+    }
   }, [socket, currentUserId, myCoords, username, avatar, color]);
 
   // High-accuracy Automated Geolocation fetch
@@ -298,6 +317,12 @@ export default function LiveMap({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
+        if (!isValidCoordinate(latitude, longitude)) {
+          setIsLocating(false);
+          setGeoError("Alınan GPS koordinatları geçersiz.");
+          return;
+        }
+
         const coords = { lat: latitude, lng: longitude };
         setMyCoords(coords);
         try {
@@ -313,6 +338,7 @@ export default function LiveMap({
             animate: true,
             duration: 1.2
           });
+          mapInstanceRef.current.invalidateSize();
         }
 
         if (socket) {
@@ -387,7 +413,10 @@ export default function LiveMap({
     if (mapInstanceRef.current) return;
 
     // Default center Istanbul / Turkey coordinate or user's last known location
-    const defaultCenter: [number, number] = myCoords ? [myCoords.lat, myCoords.lng] : [41.0082, 28.9784];
+    const initialLat = myCoords && isValidCoordinate(myCoords.lat, myCoords.lng) ? myCoords.lat : 41.0082;
+    const initialLng = myCoords && isValidCoordinate(myCoords.lat, myCoords.lng) ? myCoords.lng : 28.9784;
+    const defaultCenter: [number, number] = [initialLat, initialLng];
+    
     const map = L.map(mapContainerRef.current, {
       center: defaultCenter,
       zoom: myCoords ? 14 : 11,
@@ -399,16 +428,18 @@ export default function LiveMap({
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap'
+      subdomains: ["a", "b", "c"],
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
 
     mapInstanceRef.current = map;
 
-    // Trigger initial size calculation right after render
-    const t1 = setTimeout(() => map.invalidateSize(), 150);
-    const t2 = setTimeout(() => map.invalidateSize(), 400);
+    // Multi-frame size invalidation right after render
+    const t1 = setTimeout(() => map.invalidateSize(), 50);
+    const t2 = setTimeout(() => map.invalidateSize(), 200);
+    const t3 = setTimeout(() => map.invalidateSize(), 500);
 
-    // ResizeObserver to automatically handle mobile address bar toggle / desktop resize
+    // ResizeObserver to automatically handle mobile address bar toggle / desktop container resize
     const resizeObserver = new ResizeObserver(() => {
       map.invalidateSize();
     });
@@ -426,6 +457,7 @@ export default function LiveMap({
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      clearTimeout(t3);
       resizeObserver.disconnect();
       if (intervalIdRef.current !== null) {
         clearInterval(intervalIdRef.current);
@@ -435,6 +467,23 @@ export default function LiveMap({
       mapInstanceRef.current = null;
     };
   }, [startLocationSharing]);
+
+  // Multi-frame Invalidate Size on state/coords changes to guarantee no gray screen
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    map.invalidateSize();
+    const t1 = setTimeout(() => map.invalidateSize(), 100);
+    const t2 = setTimeout(() => map.invalidateSize(), 300);
+    const raf = requestAnimationFrame(() => map.invalidateSize());
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      cancelAnimationFrame(raf);
+    };
+  }, [myCoords, isSharing, showUsersPanel]);
 
   // Socket.io Real-time Location synchronization
   useEffect(() => {
@@ -558,11 +607,12 @@ export default function LiveMap({
 
   // Center on user's own location
   const handleCenterOnMe = () => {
-    if (myCoords && mapInstanceRef.current) {
+    if (myCoords && isValidCoordinate(myCoords.lat, myCoords.lng) && mapInstanceRef.current) {
       mapInstanceRef.current.flyTo([myCoords.lat, myCoords.lng], 15, {
         animate: true,
         duration: 1.2
       });
+      mapInstanceRef.current.invalidateSize();
     } else {
       fetchAndSendPosition(true);
     }
@@ -570,11 +620,12 @@ export default function LiveMap({
 
   // Focus on specific user
   const handleFocusUser = (u: UserLiveLocation) => {
-    if (mapInstanceRef.current) {
+    if (mapInstanceRef.current && isValidCoordinate(u.lat, u.lng)) {
       mapInstanceRef.current.flyTo([u.lat, u.lng], 15, {
         animate: true,
         duration: 1.2
       });
+      mapInstanceRef.current.invalidateSize();
       const marker = markersRef.current.get(u.userId);
       if (marker) {
         marker.openPopup();
@@ -783,7 +834,9 @@ export default function LiveMap({
       {/* Leaflet Map DOM Canvas */}
       <div 
         ref={mapContainerRef} 
-        className="w-full h-full z-0 relative touch-pan-x touch-pan-y" 
+        id="live-leaflet-map"
+        style={{ width: "100%", height: "100%", minHeight: "400px", position: "relative" }}
+        className="w-full h-full min-h-[400px] z-0 relative touch-pan-x touch-pan-y" 
       />
     </div>
   );

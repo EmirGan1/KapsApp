@@ -120,7 +120,7 @@ export default function GlobalChat({
     };
     
     const onMessageDeleted = (data: any) => {
-      const deletedId = String(data?.message_id || data?.id || data);
+      const deletedId = String(data?.message_id || data?.id || data?.messageId || data);
       removeFromGlobalCache(deletedId);
       setMessages((prev) => prev.filter(m => String(m.id) !== deletedId));
     };
@@ -178,6 +178,7 @@ export default function GlobalChat({
     socket.on("new_global_message", onNewMsg);
     socket.on("message_reacted", onReacted);
     socket.on("message_deleted", onMessageDeleted);
+    socket.on("message:deleted", onMessageDeleted);
     socket.on("global_chat_cleared", onCleared);
     socket.on("user_typing", onTyping);
     socket.on("user_stop_typing", onStopTyping);
@@ -187,6 +188,7 @@ export default function GlobalChat({
       socket.off("new_global_message", onNewMsg);
       socket.off("message_reacted", onReacted);
       socket.off("message_deleted", onMessageDeleted);
+      socket.off("message:deleted", onMessageDeleted);
       socket.off("global_chat_cleared", onCleared);
       socket.off("user_typing", onTyping);
       socket.off("user_stop_typing", onStopTyping);

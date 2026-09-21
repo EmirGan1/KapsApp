@@ -12,7 +12,21 @@ html, body, #root {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Ensure Leaflet Container & Tiles always have robust geometry and prevent gray tile flash */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  background-color: #020617 !important;
+  outline: none;
+}
+
+.leaflet-tile {
+  visibility: inherit !important;
+}
+
 /* Ensure padding-bottom safe area for modern mobile browsers (iPhone home bar, Android gesture nav) */
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+

@@ -205,7 +205,7 @@ export default function Chats({
     };
 
     const onMessageDeleted = (data: any) => {
-      const deletedId = String(data?.message_id || data?.id || data);
+      const deletedId = String(data?.message_id || data?.id || data?.messageId || data);
       setMessages(prev => prev.filter(m => String(m.id) !== deletedId));
     };
 
@@ -259,6 +259,7 @@ export default function Chats({
     socket.on(activeTab === "friends" ? "new_message" : "new_group_message", handleNewMsg);
     socket.on("message_reacted", onReacted);
     socket.on("message_deleted", onMessageDeleted);
+    socket.on("message:deleted", onMessageDeleted);
     socket.on("user_typing", onTyping);
     socket.on("user_stop_typing", onStopTyping);
     socket.on("chat_read_update", handleReadUpdate);
@@ -266,6 +267,7 @@ export default function Chats({
       socket.off(activeTab === "friends" ? "new_message" : "new_group_message", handleNewMsg); 
       socket.off("message_reacted", onReacted);
       socket.off("message_deleted", onMessageDeleted);
+      socket.off("message:deleted", onMessageDeleted);
       socket.off("user_typing", onTyping);
       socket.off("user_stop_typing", onStopTyping);
       socket.off("chat_read_update", handleReadUpdate);
