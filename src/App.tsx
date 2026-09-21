@@ -198,6 +198,7 @@ export default function App() {
     if (token) {
       const socketUrl = getSocketUrl();
       const socketOptions = { 
+        path: "/socket.io",
         auth: { token },
         reconnection: true,
         reconnectionAttempts: Infinity,

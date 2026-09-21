@@ -1,25 +1,32 @@
-// Frontend API & Socket URL Yapılandırması
-// Tüm istekler göreceli (relative path) olarak gönderilir: /api/* ve /socket.io/*
-// Bu sayede kullanıcı kapsapp.online veya www.kapsapp.online üzerinden bağlandığında
-// tarayıcı aynı origin'e istek atar ve CORS engeli oluşmaz.
+// Frontend API & WebSocket Yapılandırması (VDS / KapsApp Mimari Standardı)
+// Varsayılan olarak tüm istekler ve soket bağlantıları aynı origin üzerinden göreceli (relative path)
+// çalışır: /api/* ve /socket.io/*.
+// Geliştirme veya harici ortamda VITE_BACKEND_URL tanımlıysa ilgili adresi kullanır.
+
+export const BACKEND_URL = (
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  ""
+).replace(/\/$/, "");
 
 /**
- * Göreceli API yolunu döndürür. (örn: /api/login)
+ * Göreceli API yolunu döndürür. (Eğer harici backend tanımlıysa başına ekler, aksi halde göreceli /api/... döner)
  */
 export function getApiUrl(path: string): string {
-  return path.startsWith("/") ? path : `/${path}`;
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return BACKEND_URL ? `${BACKEND_URL}${cleanPath}` : cleanPath;
 }
 
 /**
  * Socket.IO sunucu URL'ini döndürür.
- * Göreceli bağlantı için undefined döner (mevcut origin üzerinden bağlanır).
+ * Harici backend tanımlıysa onu döner, yoksa undefined dönerek doğrudan mevcut origin'i (window.location.origin) baz alır.
  */
 export function getSocketUrl(): string | undefined {
-  return undefined;
+  return BACKEND_URL || undefined;
 }
 
 /**
- * HTML/404 veya sunucu uyku modundayken oluşabilecek "Unexpected token" JSON çökmesini engelleyen
+ * HTML/404 veya sunucu uyku/başlangıç modundayken oluşabilecek "Unexpected token" JSON çökmesini engelleyen
  * güvenli fetch yardımcısı.
  */
 export async function safeFetchJson<T = any>(input: string, init?: RequestInit): Promise<T> {

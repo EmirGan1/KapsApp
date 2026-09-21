@@ -243,9 +243,9 @@ async function startServer() {
   }
   
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = Number(process.env.PORT) || 5000;
   
-  // Render / proxy setup for accurate client IP detection
+  // Reverse proxy setup for accurate client IP detection (Nginx / PM2 / Cloud)
   app.set("trust proxy", true);
 
   const getClientIp = (req: express.Request): string => {
@@ -267,11 +267,12 @@ async function startServer() {
     }).catch(err => console.error("Access log error:", err));
   };
   
-  // CORS Configuration
+  // CORS Configuration (VDS & Domain Origin List)
   const allowedOrigins = [
     "https://kapsapp.online",
     "https://www.kapsapp.online",
-    "https://kapsapp.onrender.com",
+    "http://5.182.34.242:5000",
+    "http://5.182.34.242:3000",
     "http://localhost:5173",
     "http://localhost:3000"
   ];
@@ -283,7 +284,7 @@ async function startServer() {
         allowedOrigins.includes(origin) ||
         /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
         origin.endsWith(".kapsapp.online") ||
-        origin.endsWith(".onrender.com") ||
+        origin.includes("5.182.34.242") ||
         origin.endsWith(".run.app")
       ) {
         return callback(null, true);
@@ -298,7 +299,7 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-  // Explicit /uploads/:filename serving with Turso cloud fallback (Render restarts won't break media!)
+  // Explicit /uploads/:filename serving with Turso cloud fallback
   app.get("/uploads/:filename", async (req, res) => {
     const filename = path.basename(req.params.filename);
     const filePath = path.join(uploadsDir, filename);
@@ -342,7 +343,17 @@ async function startServer() {
   const io = new Server(httpServer, {
     cors: { 
       origin: (origin, callback) => {
-        callback(null, true);
+        if (!origin) return callback(null, true);
+        if (
+          allowedOrigins.includes(origin) ||
+          /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+          origin.endsWith(".kapsapp.online") ||
+          origin.includes("5.182.34.242") ||
+          origin.endsWith(".run.app")
+        ) {
+          return callback(null, true);
+        }
+        return callback(null, true);
       },
       methods: ["GET", "POST"],
       credentials: true 
