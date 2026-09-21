@@ -4,6 +4,7 @@ import { Post, Story, MediaModalData } from "../types";
 import { Heart, MessageCircle, ImagePlus, Plus, Send, Film, Maximize2, Trash2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
+import { getApiUrl } from "../utils/api";
 
 export default function Feed({
   socket,
@@ -110,7 +111,7 @@ export default function Feed({
       const formData = new FormData();
       formData.append("file", newPostMedia);
       try {
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
         const data = await res.json();
         mediaUrl = data.url;
         if (data.media_type === "video") finalMediaType = "video";
@@ -138,7 +139,7 @@ export default function Feed({
     const formData = new FormData();
     formData.append("file", e.target.files[0]);
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
       const data = await res.json();
       socket.emit("create_story", data.url);
     } catch (err) {
@@ -169,7 +170,7 @@ export default function Feed({
       const token = localStorage.getItem("token");
       if (token) {
         try {
-          await fetch(`/api/posts/${postId}`, {
+          await fetch(getApiUrl(`/api/posts/${postId}`), {
             method: "DELETE",
             headers: { Authorization: `Bearer ${token}` },
           });

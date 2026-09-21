@@ -14,6 +14,7 @@ import LiveMap from "./components/LiveMap";
 import Announcements, { AnnouncementItem } from "./components/Announcements";
 import AnnouncementModal from "./components/AnnouncementModal";
 import ToastContainer, { ToastItem } from "./components/ToastContainer";
+import { getSocketUrl } from "./utils/api";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -195,14 +196,16 @@ export default function App() {
 
   useEffect(() => {
     if (token) {
-      const newSocket = io({ 
+      const socketUrl = getSocketUrl();
+      const socketOptions = { 
         auth: { token },
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         timeout: 20000
-      });
+      };
+      const newSocket = socketUrl ? io(socketUrl, socketOptions) : io(socketOptions);
       
       const onConnect = () => {
         setSocket(newSocket);

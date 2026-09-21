@@ -317,7 +317,7 @@ async function startServer() {
   });
 
   // REST API Routes
-  app.post("/api/register", async (req, res) => {
+  app.post(["/api/register", "/api/auth/register"], async (req, res) => {
     try {
       const { username, password, locationConsent, kvkkAccepted, termsAccepted } = req.body;
       if (!username || !password) {
@@ -389,7 +389,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/login", async (req, res) => {
+  app.post(["/api/login", "/api/auth/login"], async (req, res) => {
     try {
       const { username, password } = req.body;
       const userRes = await client.execute({

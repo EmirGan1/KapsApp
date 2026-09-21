@@ -5,6 +5,7 @@ import OkeyGame from './OkeyGame';
 import UnoGame from './UnoGame';
 import DrawGuessGame from './DrawGuessGame';
 import Avatar from './Avatar';
+import { getApiUrl } from '../utils/api';
 
 interface GamesProps {
   socket: Socket | null;
@@ -51,7 +52,7 @@ export default function Games({
         setLoadingLeaderboard(false);
       });
     } else {
-      fetch(`/api/leaderboard?type=${tab}`)
+      fetch(getApiUrl(`/api/leaderboard?type=${tab}`))
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) setLeaderboardData(data);

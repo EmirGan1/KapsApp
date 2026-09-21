@@ -4,6 +4,7 @@ import { Friend, Message, MediaModalData } from "../types";
 import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile, FileText, Download, Paperclip, Maximize2, Trash2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
+import { getApiUrl } from "../utils/api";
 
 type Group = {
   id: number;
@@ -352,7 +353,7 @@ export default function Chats({
     const formData = new FormData();
     formData.append("file", file);
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
       const data = await res.json();
       if (res.ok) {
         const payload = {
@@ -413,7 +414,7 @@ export default function Chats({
         const formData = new FormData();
         formData.append("file", audioBlob, "voice.webm");
         try {
-          const res = await fetch("/api/upload", { method: "POST", body: formData });
+          const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
           const data = await res.json();
           if (res.ok && socket && activeChat) {
             if (activeTab === "friends") {

@@ -11,6 +11,7 @@ import {
   removeFromGlobalCache, 
   clearGlobalCache 
 } from "../utils/globalChatCache";
+import { getApiUrl } from "../utils/api";
 
 export default function GlobalChat({
   socket,
@@ -292,7 +293,7 @@ export default function GlobalChat({
       const formData = new FormData();
       formData.append("file", file);
       try {
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
         const data = await res.json();
         if (data.url) {
           socket.emit("send_global_message", {
@@ -328,7 +329,7 @@ export default function GlobalChat({
         const formData = new FormData();
         formData.append("file", audioBlob, "audio.webm");
 
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
         const data = await res.json();
         if (data.url && socket) {
           socket.emit("send_global_message", {

@@ -8,6 +8,7 @@ import {
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { MediaModalData } from "../types";
+import { getApiUrl } from "../utils/api";
 
 export default function Profile({
   socket,
@@ -181,7 +182,7 @@ export default function Profile({
     formData.append("file", e.target.files[0]);
 
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
       const data = await res.json();
       if (res.ok && socket) {
         socket.emit("update_avatar", data.url);
@@ -235,7 +236,7 @@ export default function Profile({
       const token = localStorage.getItem("token");
       if (token) {
         try {
-          await fetch(`/api/posts/${postId}`, {
+          await fetch(getApiUrl(`/api/posts/${postId}`), {
             method: "DELETE",
             headers: { Authorization: `Bearer ${token}` },
           });
