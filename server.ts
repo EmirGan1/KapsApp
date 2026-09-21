@@ -8,8 +8,14 @@ import multer from "multer";
 import crypto from "crypto";
 import fs from "fs";
 import os from "os";
+import v8 from "v8";
 import { createClient } from "@libsql/client";
 import dotenv from "dotenv";
+
+// Micro-container V8 memory optimization: disable heavy background sweepers
+try {
+  v8.setFlagsFromString("--noconcurrent_sweeping");
+} catch (e) {}
 import { 
   generateDeck, 
   checkClassicOkeyWin,
@@ -306,7 +312,8 @@ async function startServer() {
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: { origin: "*", methods: ["GET", "POST"] },
-    maxHttpBufferSize: 1e8 // 100 MB for large payloads
+    perMessageDeflate: false,
+    maxHttpBufferSize: 1e6 // 1 MB limit to prevent large buffers from bloating RAM
   });
 
   // REST API Routes
@@ -386,7 +393,7 @@ async function startServer() {
     try {
       const { username, password } = req.body;
       const userRes = await client.execute({
-        sql: "SELECT * FROM users WHERE username = ?",
+        sql: "SELECT id, username, password, color, avatar, isBanned, locationConsent, is_admin FROM users WHERE username = ?",
         args: [username]
       });
       
@@ -477,7 +484,7 @@ async function startServer() {
     try {
       const token = req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const userRes = await client.execute({ sql: "SELECT * FROM users WHERE token = ?", args: [token] });
+      const userRes = await client.execute({ sql: "SELECT id, username FROM users WHERE token = ?", args: [token] });
       if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
       const authUser = userRes.rows[0];
       const postId = req.params.id;
@@ -504,7 +511,7 @@ async function startServer() {
     try {
       const token = req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const userRes = await client.execute({ sql: "SELECT * FROM users WHERE token = ?", args: [token] });
+      const userRes = await client.execute({ sql: "SELECT id, username FROM users WHERE token = ?", args: [token] });
       if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
       const authUser = userRes.rows[0];
       const messageId = Number(req.params.id);
@@ -549,7 +556,7 @@ async function startServer() {
     try {
       const token = req.headers.authorization?.replace("Bearer ", "");
       if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const userRes = await client.execute({ sql: "SELECT * FROM users WHERE token = ?", args: [token] });
+      const userRes = await client.execute({ sql: "SELECT id, username FROM users WHERE token = ?", args: [token] });
       if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
       const authUser = userRes.rows[0];
 
@@ -559,7 +566,7 @@ async function startServer() {
       }
 
       const targetId = Number(req.params.id);
-      const targetRes = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [targetId] });
+      const targetRes = await client.execute({ sql: "SELECT id, username FROM users WHERE id = ?", args: [targetId] });
       if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
       const targetUser = targetRes.rows[0];
       if (targetUser.username && (targetUser.username as string).trim().toLowerCase() === 'emirgan') {
@@ -676,24 +683,43 @@ async function startServer() {
   // Load cold-start last known locations from DB
   loadLastKnownLocationsFromDb();
 
-  // Aggressive Memory Watcher & Garbage Collection (Render 512MB RAM Optimization)
+  // Aggressive Memory Watcher & Garbage Collection (Render 512MB RAM Micro-container)
+  if (typeof (global as any).gc === "function") {
+    setInterval(() => {
+      try {
+        const memoryUsage = process.memoryUsage();
+        const heapUsedMb = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+        const rssMb = Math.round(memoryUsage.rss / 1024 / 1024);
+        
+        // Immediate GC trigger if heap exceeds 180MB or RSS exceeds 320MB
+        if (heapUsedMb > 180 || rssMb > 320) {
+          (global as any).gc();
+        }
+      } catch (gcErr) {
+        // Ignore
+      }
+    }, 15000); // Check every 15 seconds
+  }
+
+  // Periodic Cleanup of Stale In-Memory Records (>24h inactive)
   setInterval(() => {
     try {
-      const memoryUsage = process.memoryUsage();
-      const heapUsedMb = Math.round(memoryUsage.heapUsed / 1024 / 1024);
-      const rssMb = Math.round(memoryUsage.rss / 1024 / 1024);
+      const now = Date.now();
+      const oneDayAgo = now - 24 * 60 * 60 * 1000;
       
-      // If heap exceeds 180MB or RSS exceeds 300MB, trigger GC
-      if ((heapUsedMb > 180 || rssMb > 300) && typeof (global as any).gc === "function") {
-        console.log(`[MemoryWatcher] RAM threshold reached (Heap: ${heapUsedMb}MB, RSS: ${rssMb}MB). Triggering manual GC...`);
-        (global as any).gc();
-        const afterGc = process.memoryUsage();
-        console.log(`[MemoryWatcher] Manual GC complete. New Heap: ${Math.round(afterGc.heapUsed / 1024 / 1024)}MB`);
+      for (const [uid, loc] of userLiveLocations.entries()) {
+        if (!loc.isLocationActive && loc.lastSeen && loc.lastSeen < oneDayAgo) {
+          userLiveLocations.delete(uid);
+        }
       }
-    } catch (gcErr) {
-      // Ignore
-    }
-  }, 3 * 60 * 1000); // Every 3 minutes
+
+      for (const [uid, cached] of userCache.entries()) {
+        if (cached.expiresAt <= now) {
+          userCache.delete(uid);
+        }
+      }
+    } catch (e) {}
+  }, 10 * 60 * 1000);
 
   const emitUserLocations = () => {
     const locList = Array.from(userLiveLocations.values());
@@ -1485,7 +1511,7 @@ async function startServer() {
     
     try {
       const userRes = await client.execute({
-        sql: "SELECT * FROM users WHERE token = ?",
+        sql: "SELECT id, username, avatar, color, isBanned, is_admin FROM users WHERE token = ?",
         args: [token]
       });
       if (userRes.rows.length === 0) return next(new Error("Invalid token"));
@@ -1677,7 +1703,7 @@ async function startServer() {
            isFollowing = checkRes.rows.length > 0;
 
            const frRes = await client.execute({
-             sql: "SELECT * FROM friends WHERE (user1 = ? AND user2 = ?) OR (user1 = ? AND user2 = ?)",
+             sql: "SELECT id, user1, user2, status FROM friends WHERE (user1 = ? AND user2 = ?) OR (user1 = ? AND user2 = ?)",
              args: [user.id, targetId, targetId, user.id]
            });
            if (frRes.rows.length > 0) {
@@ -1694,7 +1720,7 @@ async function startServer() {
           id: u.id, 
           username: u.username, 
           avatar: u.avatar, 
-          color: u.color,
+          color: u.color, 
           followersCount: Number(followersRes.rows[0]?.count || 0),
           followingCount: Number(followingRes.rows[0]?.count || 0),
           isFollowing,
@@ -1765,15 +1791,15 @@ async function startServer() {
 
     socket.on("get_user_posts", async (targetId, cb) => {
       try {
-        const postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 30", args: [targetId] });
+        const postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 30", args: [targetId] });
         const postIds = postsRes.rows.map((p: any) => p.id);
         
         let likesRes: any = { rows: [] };
         let commentsRes: any = { rows: [] };
         if (postIds.length > 0) {
           const placeholders = postIds.map(() => "?").join(",");
-          likesRes = await client.execute({ sql: `SELECT * FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
-          commentsRes = await client.execute({ sql: `SELECT * FROM comments WHERE post_id IN (${placeholders})`, args: postIds });
+          likesRes = await client.execute({ sql: `SELECT id, post_id, user_id FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
+          commentsRes = await client.execute({ sql: `SELECT id, post_id, user_id, content, created_at FROM comments WHERE post_id IN (${placeholders})`, args: postIds });
         }
         
         const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
@@ -1816,15 +1842,15 @@ async function startServer() {
       try {
         let postsRes;
         if (subjectFilter) {
-          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 30", args: [subjectFilter] });
+          postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 30", args: [subjectFilter] });
         } else {
-          postsRes = await client.execute({ sql: "SELECT * FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 30", args: [] });
+          postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 30", args: [] });
         }
         const postIds = postsRes.rows.map((p: any) => p.id);
         let likesRes: any = { rows: [] };
         if (postIds.length > 0) {
           const placeholders = postIds.map(() => "?").join(",");
-          likesRes = await client.execute({ sql: `SELECT * FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
+          likesRes = await client.execute({ sql: `SELECT id, post_id, user_id FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
         }
         
         const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
@@ -1927,7 +1953,7 @@ async function startServer() {
 
     socket.on("get_comments", async (postId, cb) => {
       const commentsRes = await client.execute({
-        sql: "SELECT * FROM comments WHERE post_id = ? ORDER BY created_at ASC",
+        sql: "SELECT id, post_id, user_id, content, created_at FROM comments WHERE post_id = ? ORDER BY created_at ASC",
         args: [postId]
       });
       const populated = await Promise.all(commentsRes.rows.map(async (c: any) => {
@@ -1960,7 +1986,7 @@ async function startServer() {
     socket.on("get_stories", async (cb) => {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const storiesRes = await client.execute({
-        sql: "SELECT * FROM stories WHERE created_at >= ? ORDER BY created_at DESC",
+        sql: "SELECT id, user_id, image, created_at FROM stories WHERE created_at >= ? ORDER BY created_at DESC",
         args: [oneDayAgo]
       });
       const populated = await Promise.all(storiesRes.rows.map(async (s: any) => {
@@ -1985,7 +2011,7 @@ async function startServer() {
         sql: "INSERT INTO notifications (user_id, type, content, read, sender_id, target_id, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)",
         args: [userId, type, content, senderId || null, targetId || null, new Date().toISOString()]
       });
-      const newNotifRes = await client.execute({ sql: "SELECT * FROM notifications WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+      const newNotifRes = await client.execute({ sql: "SELECT id, user_id, type, content, read, sender_id, target_id, created_at FROM notifications WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const s = onlineUsers.get(userId);
       if (s) {
         io.to(s).emit("new_notification", newNotifRes.rows[0]);
@@ -1995,7 +2021,7 @@ async function startServer() {
 
     socket.on("get_notifications", async (cb) => {
       const notifsRes = await client.execute({
-        sql: "SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
+        sql: "SELECT id, user_id, type, content, read, sender_id, target_id, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
         args: [user.id]
       });
       cb(notifsRes.rows);
@@ -2020,7 +2046,7 @@ async function startServer() {
     socket.on("get_friends", async (cb) => {
       const isEmirgan = user.username && user.username.trim().toLowerCase() === "emirgan";
       const friendsRes = await client.execute({
-        sql: "SELECT * FROM friends WHERE user1 = ? OR user2 = ?",
+        sql: "SELECT id, user1, user2, status FROM friends WHERE user1 = ? OR user2 = ?",
         args: [user.id, user.id]
       });
       const result = await Promise.all(friendsRes.rows.map(async (f: any) => {
@@ -2182,7 +2208,7 @@ async function startServer() {
       }
       try {
         const targetId = Number(userId);
-        const targetRes = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [targetId] });
+        const targetRes = await client.execute({ sql: "SELECT id, username FROM users WHERE id = ?", args: [targetId] });
         if (targetRes.rows.length === 0) {
           if (cb) cb({ error: "Kullanıcı bulunamadı." });
           return;
@@ -2234,7 +2260,7 @@ async function startServer() {
       }
       try {
         const targetId = Number(userId);
-        const targetRes = await client.execute({ sql: "SELECT * FROM users WHERE id = ?", args: [targetId] });
+        const targetRes = await client.execute({ sql: "SELECT id, username FROM users WHERE id = ?", args: [targetId] });
         if (targetRes.rows.length === 0) {
           if (cb) cb({ error: "Kullanıcı bulunamadı." });
           return;
@@ -2279,7 +2305,7 @@ async function startServer() {
     socket.on("get_announcements", async (cb?: (res: any) => void) => {
       try {
         const res = await client.execute({
-          sql: "SELECT * FROM announcements ORDER BY id DESC LIMIT 50"
+          sql: "SELECT id, title, content, author_id, author_username, created_at FROM announcements ORDER BY id DESC LIMIT 50"
         });
         if (cb) cb({ announcements: res.rows });
       } catch (err: any) {
@@ -2350,13 +2376,13 @@ async function startServer() {
     // Chat
     socket.on("get_messages", async (friendId, cb) => {
       const msgRes = await client.execute({
-        sql: "SELECT * FROM (SELECT * FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 30) ORDER BY created_at ASC",
+        sql: "SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 30) ORDER BY created_at ASC",
         args: [user.id, friendId, friendId, user.id]
       });
       const populated = await Promise.all(msgRes.rows.map(async (r: any) => {
         let replyMsg = null;
         if (r.reply_to) {
-          const refRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [r.reply_to] });
+          const refRes = await client.execute({ sql: "SELECT id, sender, type, content, file_name, file_size FROM messages WHERE id = ?", args: [r.reply_to] });
           if (refRes.rows.length > 0) {
             const refUser = await getUser(refRes.rows[0].sender as number);
             replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
@@ -2386,10 +2412,10 @@ async function startServer() {
         sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
         args: [user.id, receiver, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
       });
-      const newMsgRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+      const newMsgRes = await client.execute({ sql: "SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       let replyMsg = null;
       if (reply_to) {
-        const refRes = await client.execute({ sql: "SELECT * FROM messages WHERE id = ?", args: [reply_to] });
+        const refRes = await client.execute({ sql: "SELECT id, sender, type, content, file_name, file_size FROM messages WHERE id = ?", args: [reply_to] });
         if (refRes.rows.length > 0) {
           const refUser = await getUser(refRes.rows[0].sender as number);
           replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
@@ -2423,7 +2449,7 @@ async function startServer() {
       let replyMsg = null;
       if (m.reply_to) {
          const table = type === "global" ? "global_messages" : "group_messages";
-         const refMsgRes = await client.execute({ sql: `SELECT * FROM ${table} WHERE id = ?`, args: [m.reply_to] });
+         const refMsgRes = await client.execute({ sql: `SELECT id, sender, type, content, file_name, file_size FROM ${table} WHERE id = ?`, args: [m.reply_to] });
          if (refMsgRes.rows.length > 0) {
            const refMsg = refMsgRes.rows[0];
            const refUser = await getUser(refMsg.sender as number);
@@ -2458,12 +2484,12 @@ async function startServer() {
         let msgs;
         if (beforeId) {
           msgs = await client.execute({
-            sql: "SELECT * FROM (SELECT * FROM global_messages WHERE id < ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC",
+            sql: "SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM global_messages WHERE id < ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC",
             args: [beforeId, limit]
           });
         } else {
           msgs = await client.execute({
-            sql: "SELECT * FROM (SELECT * FROM global_messages ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC",
+            sql: "SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM global_messages ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC",
             args: [limit]
           });
         }
@@ -2478,7 +2504,7 @@ async function startServer() {
       try {
         if (!data?.since) return cb ? cb([]) : undefined;
         const deltaRes = await client.execute({
-          sql: "SELECT * FROM global_messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 30",
+          sql: "SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM global_messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 30",
           args: [data.since]
         });
         const populated = await Promise.all(deltaRes.rows.map(m => populateMessage(m, "global")));
@@ -2501,7 +2527,7 @@ async function startServer() {
         sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, '[]', ?, ?, ?)",
         args: [user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
       });
-      const newMsgRes = await client.execute({ sql: "SELECT * FROM global_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+      const newMsgRes = await client.execute({ sql: "SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM global_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const popMsg = await populateMessage(newMsgRes.rows[0], "global");
       io.emit("new_global_message", popMsg);
     });
@@ -2520,7 +2546,7 @@ async function startServer() {
 
     // Groups
     socket.on("get_groups", async (cb) => {
-      const groupsRes = await client.execute("SELECT * FROM groups");
+      const groupsRes = await client.execute("SELECT id, name, creator, members, created_at FROM groups");
       const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
       const myGroups = groupsRes.rows.filter(g => {
          if (isEmirgan) return true;
@@ -2537,7 +2563,7 @@ async function startServer() {
         sql: "INSERT INTO groups (name, creator, members, created_at) VALUES (?, ?, ?, ?)",
         args: [name, user.id, JSON.stringify(allMembers), new Date().toISOString()]
       });
-      const newGroupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+      const newGroupRes = await client.execute({ sql: "SELECT id, name, creator, members, created_at FROM groups WHERE id = ?", args: [Number(res.lastInsertRowid)] });
       const newGroup = { ...newGroupRes.rows[0], members: JSON.parse(newGroupRes.rows[0].members as string || "[]") };
       
       allMembers.forEach(async (memberId: number) => {
@@ -2550,7 +2576,7 @@ async function startServer() {
 
     socket.on("get_group_messages", async (groupId, cb) => {
       const msgsRes = await client.execute({
-        sql: "SELECT * FROM (SELECT * FROM group_messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC",
+        sql: "SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM group_messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC",
         args: [groupId]
       });
       const populated = await Promise.all(msgsRes.rows.map((m: any) => populateMessage(m, "group")));
@@ -2571,11 +2597,11 @@ async function startServer() {
         args: [group_id, user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
       });
       
-      const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [group_id] });
+      const groupRes = await client.execute({ sql: "SELECT id, name, members FROM groups WHERE id = ?", args: [group_id] });
       if (groupRes.rows.length > 0) {
         const group = groupRes.rows[0];
         const members = JSON.parse(group.members as string || "[]");
-        const newMsgRes = await client.execute({ sql: "SELECT * FROM group_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+        const newMsgRes = await client.execute({ sql: "SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM group_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
         const popMsg = await populateMessage(newMsgRes.rows[0], "group");
         members.forEach(async (memberId: number) => {
           const targetSocket = onlineUsers.get(memberId);
@@ -2591,7 +2617,7 @@ async function startServer() {
         const targetSocket = onlineUsers.get(data.receiver);
         if (targetSocket) io.to(targetSocket).emit("user_typing", { type: 'private', sender: user.id });
       } else if (data.type === 'group') {
-        const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [data.group_id] });
+        const groupRes = await client.execute({ sql: "SELECT id, members FROM groups WHERE id = ?", args: [data.group_id] });
         if (groupRes.rows.length > 0) {
           const members = JSON.parse(groupRes.rows[0].members as string || "[]");
           members.forEach((memberId: number) => {
@@ -2612,7 +2638,7 @@ async function startServer() {
         const targetSocket = onlineUsers.get(data.receiver);
         if (targetSocket) io.to(targetSocket).emit("user_stop_typing", { type: 'private', sender: user.id });
       } else if (data.type === 'group') {
-        const groupRes = await client.execute({ sql: "SELECT * FROM groups WHERE id = ?", args: [data.group_id] });
+        const groupRes = await client.execute({ sql: "SELECT id, members FROM groups WHERE id = ?", args: [data.group_id] });
         if (groupRes.rows.length > 0) {
           const members = JSON.parse(groupRes.rows[0].members as string || "[]");
           members.forEach((memberId: number) => {
@@ -2674,7 +2700,7 @@ async function startServer() {
 
       for (const tbl of tablesToTry) {
         try {
-          const res = await client.execute({ sql: `SELECT * FROM ${tbl} WHERE id = ?`, args: [messageId] });
+          const res = await client.execute({ sql: `SELECT id, sender, group_id, receiver FROM ${tbl} WHERE id = ?`, args: [messageId] });
           if (res.rows.length > 0) {
             foundTable = tbl;
             foundMsg = res.rows[0];
@@ -2736,7 +2762,7 @@ async function startServer() {
        else if (data.type === 'global') table = "global_messages";
        
        if (table) {
-         const msgRes = await client.execute({ sql: `SELECT * FROM ${table} WHERE id = ?`, args: [data.message_id] });
+         const msgRes = await client.execute({ sql: `SELECT id, reactions FROM ${table} WHERE id = ?`, args: [data.message_id] });
          if (msgRes.rows.length > 0) {
            const msg = msgRes.rows[0];
            const reactions = JSON.parse(msg.reactions as string || "[]");
@@ -3704,35 +3730,38 @@ async function startServer() {
       }
     });
 
-    // --- WebRTC Mesh Signaling Handlers ---
+    // --- WebRTC Mesh Signaling Handlers (Direct Tunnel / Zero Memory Footprint) ---
     socket.on("voice_offer", (data: { targetSocketId: string; offer: any }) => {
       if (data?.targetSocketId) {
-        io.to(data.targetSocketId).emit("voice_offer", {
+        socket.to(data.targetSocketId).emit("voice_offer", {
           senderSocketId: socket.id,
           senderUserId: user.id,
           offer: data.offer
         });
       }
+      if (data) data.offer = null;
     });
 
     socket.on("voice_answer", (data: { targetSocketId: string; answer: any }) => {
       if (data?.targetSocketId) {
-        io.to(data.targetSocketId).emit("voice_answer", {
+        socket.to(data.targetSocketId).emit("voice_answer", {
           senderSocketId: socket.id,
           senderUserId: user.id,
           answer: data.answer
         });
       }
+      if (data) data.answer = null;
     });
 
     socket.on("voice_ice_candidate", (data: { targetSocketId: string; candidate: any }) => {
       if (data?.targetSocketId) {
-        io.to(data.targetSocketId).emit("voice_ice_candidate", {
+        socket.to(data.targetSocketId).emit("voice_ice_candidate", {
           senderSocketId: socket.id,
           senderUserId: user.id,
           candidate: data.candidate
         });
       }
+      if (data) data.candidate = null;
     });
 
     // --- Draw & Guess (Çiz & Tahmin Et) Socket Handlers ---
