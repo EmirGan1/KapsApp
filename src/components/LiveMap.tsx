@@ -66,7 +66,12 @@ export default function LiveMap({
   const markersRef = useRef<Map<number, L.Marker>>(new Map());
   const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
 
-  const [isSharing, setIsSharing] = useState<boolean>(() => localStorage.getItem("isLocationActive") !== "false");
+  const [isSharing, setIsSharing] = useState<boolean>(() => {
+    const stored = localStorage.getItem("location_service_enabled");
+    if (stored === "true") return true;
+    if (stored === "false") return false;
+    return localStorage.getItem("isLocationActive") === "true";
+  });
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [myCoords, setMyCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -255,10 +260,11 @@ export default function LiveMap({
     );
   }, [socket]);
 
-  // Start periodic tracking
+  // Start periodic tracking (1-minute periodic GPS update)
   const startLocationSharing = useCallback(() => {
     setIsLocating(true);
     setGeoError(null);
+    localStorage.setItem("location_service_enabled", "true");
     localStorage.setItem("isLocationActive", "true");
     setIsSharing(true);
 
@@ -268,10 +274,10 @@ export default function LiveMap({
       clearInterval(intervalIdRef.current);
     }
 
-    // Refresh position periodically every 3 minutes
+    // Refresh position periodically every 1 minute (60,000 ms)
     intervalIdRef.current = setInterval(() => {
       fetchAndSendPosition(false);
-    }, 180000);
+    }, 60000);
   }, [fetchAndSendPosition]);
 
   // Stop location sharing
@@ -282,12 +288,21 @@ export default function LiveMap({
     }
     setIsSharing(false);
     setIsLocating(false);
+    setMyCoords(null);
+    localStorage.setItem("location_service_enabled", "false");
     localStorage.setItem("isLocationActive", "false");
+
+    // Remove user's pin layer immediately
+    const myMarker = markersRef.current.get(currentUserId);
+    if (myMarker && mapInstanceRef.current) {
+      mapInstanceRef.current.removeLayer(myMarker);
+      markersRef.current.delete(currentUserId);
+    }
 
     if (socket) {
       socket.emit("stop_sharing_location");
     }
-  }, [socket]);
+  }, [socket, currentUserId]);
 
   // Initialize Leaflet Map with touch and resize optimizations
   useEffect(() => {
@@ -322,9 +337,12 @@ export default function LiveMap({
     });
     resizeObserver.observe(mapContainerRef.current);
 
-    // Check saved state
-    const savedActive = localStorage.getItem("isLocationActive");
-    if (savedActive !== "false") {
+    // Check saved state: Only auto-start if explicitly set to true
+    const savedEnabled = localStorage.getItem("location_service_enabled");
+    const legacySaved = localStorage.getItem("isLocationActive");
+    const isLocationOn = savedEnabled === "true" || (savedEnabled === null && legacySaved === "true");
+
+    if (isLocationOn) {
       startLocationSharing();
     }
 
@@ -370,7 +388,7 @@ export default function LiveMap({
     const activeUserIds = new Set<number>();
     const combinedList: UserLiveLocation[] = [...usersLocations];
 
-    if (myCoords) {
+    if (myCoords && isSharing) {
       const existingMyIndex = combinedList.findIndex(u => u.userId === currentUserId);
       const existingServerState = existingMyIndex >= 0 ? combinedList[existingMyIndex] : null;
       const myObj: UserLiveLocation = {
@@ -380,15 +398,21 @@ export default function LiveMap({
         color: color || "#3b82f6",
         lat: myCoords.lat,
         lng: myCoords.lng,
-        status: isSharing ? "Haritada Aktif (Siz)" : "Konum Kapalı (Siz)",
-        isLocationActive: isSharing,
-        lastSeen: isSharing ? Date.now() : (existingServerState?.lastSeen || Date.now())
+        status: "Haritada Aktif (Siz)",
+        isLocationActive: true,
+        lastSeen: Date.now()
       };
 
       if (existingMyIndex >= 0) {
         combinedList[existingMyIndex] = myObj;
       } else {
         combinedList.push(myObj);
+      }
+    } else {
+      // If current user is not sharing, ensure removed from combined list
+      const selfIndex = combinedList.findIndex(u => u.userId === currentUserId);
+      if (selfIndex >= 0) {
+        combinedList.splice(selfIndex, 1);
       }
     }
 

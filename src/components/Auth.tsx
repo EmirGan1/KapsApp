@@ -244,7 +244,7 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
               <section className="space-y-1.5">
                 <h4 className="font-bold text-slate-900 dark:text-white text-sm">4. İletişim, Hukuki Bildirimler ve "Uyar-Kaldır" Mekanizması</h4>
                 <p>
-                  Platformumuz 5651 sayılı Kanun’un 5. maddesi gereğince yer sağlayıcı olarak hizmet vermektedir. Platformda yer alan içeriklerin hukuka, kişilik haklarına veya telif haklarına aykırı olduğunu düşünen hak sahipleri, <strong className="text-blue-600 dark:text-blue-400">destekkapsapp@gmail.com</strong> e-posta adresi üzerinden "Uyar-Kaldır" bildirimi yapabilir. Bildirimler incelenerek hukuka aykırı içerikler derhal yayından kaldırılır ve gerekirse ilgili hesap askıya alınır.
+                  Platformumuz 5651 sayılı Kanun’un 5. maddesi gereğince yer sağlayıcı olarak hizmet vermektedir. Platformda yer alan içeriklerin hukuka, kişilik haklarına veya telif haklarına aykırı olduğunu düşünen hak sahipleri, <a href="mailto:destekkapsapp@gmail.com" className="text-blue-600 dark:text-blue-400 font-semibold hover:underline">destekkapsapp@gmail.com</a> e-posta adresi üzerinden "Uyar-Kaldır" bildirimi yapabilir. Bildirimler incelenerek hukuka aykırı içerikler derhal yayından kaldırılır ve gerekirse ilgili hesap askıya alınır.
                 </p>
               </section>
 
@@ -259,7 +259,7 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
             {/* Modal Footer */}
             <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between">
               <div className="text-[11px] text-slate-500">
-                Resmi İletişim: <span className="font-semibold text-slate-700 dark:text-slate-300">destekkapsapp@gmail.com</span>
+                Resmi İletişim: <a href="mailto:destekkapsapp@gmail.com" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">destekkapsapp@gmail.com</a>
               </div>
               <button
                 type="button"

@@ -189,10 +189,12 @@ async function initDb() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
     content TEXT NOT NULL,
+    styles TEXT,
     author_id INTEGER,
     author_username TEXT,
     created_at TEXT
   )`);
+  try { await client.execute("ALTER TABLE announcements ADD COLUMN styles TEXT"); } catch(e){}
 
   // 5651 Sayılı Kanun Traffic & IP Access Logs Table
   await client.execute(`CREATE TABLE IF NOT EXISTS access_logs (
@@ -2351,7 +2353,7 @@ async function startServer() {
     socket.on("get_announcements", async (cb?: (res: any) => void) => {
       try {
         const res = await client.execute({
-          sql: "SELECT id, title, content, author_id, author_username, created_at FROM announcements ORDER BY id DESC LIMIT 50"
+          sql: "SELECT id, title, content, styles, author_id, author_username, created_at FROM announcements ORDER BY id DESC LIMIT 50"
         });
         if (cb) cb({ announcements: res.rows });
       } catch (err: any) {
@@ -2360,7 +2362,7 @@ async function startServer() {
       }
     });
 
-    socket.on("create_announcement", async (data: { title?: string; content: string }, cb?: (res: any) => void) => {
+    socket.on("create_announcement", async (data: { title?: string; content: string; styles?: any }, cb?: (res: any) => void) => {
       const isEmirgan = user.username && (user.username as string).trim().toLowerCase() === 'emirgan';
       if (!isEmirgan) {
         if (cb) cb({ error: "Yetkisiz işlem: Sadece 'emirgan' kullanıcısı duyuru yayınlayabilir." });
@@ -2369,6 +2371,8 @@ async function startServer() {
       try {
         const title = (data.title || "Sistem Duyurusu").trim();
         const content = (data.content || "").trim();
+        const styles = data.styles ? (typeof data.styles === "string" ? data.styles : JSON.stringify(data.styles)) : null;
+
         if (!content) {
           if (cb) cb({ error: "Duyuru içeriği boş olamaz." });
           return;
@@ -2376,14 +2380,15 @@ async function startServer() {
 
         const createdAt = new Date().toISOString();
         const insertRes = await client.execute({
-          sql: "INSERT INTO announcements (title, content, author_id, author_username, created_at) VALUES (?, ?, ?, ?, ?)",
-          args: [title, content, Number(user.id), user.username as string, createdAt]
+          sql: "INSERT INTO announcements (title, content, styles, author_id, author_username, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          args: [title, content, styles, Number(user.id), user.username as string, createdAt]
         });
 
         const newAnnouncement = {
           id: Number(insertRes.lastInsertRowid),
           title,
           content,
+          styles,
           author_id: Number(user.id),
           author_username: user.username as string,
           created_at: createdAt
@@ -2391,6 +2396,7 @@ async function startServer() {
 
         // Real-time broadcast to all connected users
         io.emit("new_announcement", newAnnouncement);
+        io.emit("new_global_announcement", newAnnouncement);
 
         if (cb) cb({ success: true, announcement: newAnnouncement });
       } catch (err: any) {

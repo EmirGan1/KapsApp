@@ -281,7 +281,7 @@ export default function App() {
       });
 
       // Announcements socket listeners & initial unread checking
-      newSocket.on("new_announcement", (announcement: AnnouncementItem) => {
+      const handleIncomingAnnouncement = (announcement: AnnouncementItem) => {
         if (announcement && announcement.id) {
           latestAnnouncementIdRef.current = Math.max(latestAnnouncementIdRef.current, Number(announcement.id));
           const lastRead = Number(localStorage.getItem("latest_read_announcement_id") || 0);
@@ -290,7 +290,10 @@ export default function App() {
             setActiveAnnouncementModal(announcement);
           }
         }
-      });
+      };
+
+      newSocket.on("new_announcement", handleIncomingAnnouncement);
+      newSocket.on("new_global_announcement", handleIncomingAnnouncement);
 
       // Initial check for unread announcements
       newSocket.emit("get_announcements", (res: any) => {

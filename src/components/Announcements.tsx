@@ -8,10 +8,17 @@ import {
   Palette, Sparkles, AlertCircle, Eye, RefreshCw, Send, ShieldAlert, X
 } from "lucide-react";
 
+export interface AnnouncementStyles {
+  color?: string;
+  fontWeight?: "normal" | "medium" | "bold";
+  fontSize?: "sm" | "base" | "lg" | "xl";
+}
+
 export interface AnnouncementItem {
   id: number;
   title: string;
   content: string;
+  styles?: AnnouncementStyles | string;
   author_id: number;
   author_username: string;
   created_at: string;
@@ -32,7 +39,7 @@ const COLOR_PRESETS = [
   { name: "Kehribar / Sarı", color: "#d97706" },
   { name: "Mor", color: "#7c3aed" },
   { name: "Pembe", color: "#db2777" },
-  { name: "Koyu Gri", color: "#334155" }
+  { name: "Koyu Gri", color: "#1e293b" }
 ];
 
 export default function Announcements({
@@ -50,7 +57,9 @@ export default function Announcements({
   // Form states for 'emirgan'
   const [title, setTitle] = useState("");
   const [editorHtml, setEditorHtml] = useState("");
-  const [activeColor, setActiveColor] = useState("#2563eb");
+  const [selectedColor, setSelectedColor] = useState("inherit");
+  const [selectedWeight, setSelectedWeight] = useState<"normal" | "medium" | "bold">("normal");
+  const [selectedSize, setSelectedSize] = useState<"sm" | "base" | "lg" | "xl">("base");
   const [showColorMenu, setShowColorMenu] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -161,10 +170,17 @@ export default function Announcements({
       return;
     }
 
+    const stylesPayload: AnnouncementStyles = {
+      color: selectedColor,
+      fontWeight: selectedWeight,
+      fontSize: selectedSize
+    };
+
     setIsPublishing(true);
     socket.emit("create_announcement", {
       title: title.trim(),
-      content: cleanContent
+      content: cleanContent,
+      styles: stylesPayload
     }, (res: any) => {
       setIsPublishing(false);
       if (res?.error) {
@@ -175,6 +191,9 @@ export default function Announcements({
         if (editorRef.current) {
           editorRef.current.innerHTML = "";
         }
+        setSelectedColor("inherit");
+        setSelectedWeight("normal");
+        setSelectedSize("base");
         setShowEditor(false);
         setPreviewMode(false);
         loadAnnouncements();
@@ -287,6 +306,145 @@ export default function Announcements({
                 />
               </div>
 
+              {/* Style Controls (Yazı Rengi, Kalınlık, Boyut) */}
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 space-y-3">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <Palette size={14} className="text-blue-500" />
+                  <span>Duyuru Görünüm ve Tipografi Seçenekleri</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Color Selector */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                      Yazı Rengi
+                    </label>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {COLOR_PRESETS.map((cp) => (
+                        <button
+                          key={cp.color}
+                          type="button"
+                          onClick={() => setSelectedColor(cp.color)}
+                          className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-transform cursor-pointer ${
+                            selectedColor === cp.color 
+                              ? "ring-2 ring-blue-500 scale-110 border-white shadow-sm" 
+                              : "border-slate-300 dark:border-slate-600 hover:scale-105"
+                          }`}
+                          style={{ backgroundColor: cp.color === "inherit" ? "#64748b" : cp.color }}
+                          title={cp.name}
+                        >
+                          {selectedColor === cp.color && (
+                            <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
+                          )}
+                        </button>
+                      ))}
+                      <input
+                        type="color"
+                        value={selectedColor.startsWith("#") ? selectedColor : "#2563eb"}
+                        onChange={(e) => setSelectedColor(e.target.value)}
+                        className="w-6 h-6 p-0 rounded-lg border-0 cursor-pointer"
+                        title="Özel Renk Seç"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Font Weight */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                      Yazı Kalınlığı (Font Weight)
+                    </label>
+                    <div className="grid grid-cols-3 gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedWeight("normal")}
+                        className={`py-1 rounded-lg font-normal transition-colors cursor-pointer ${
+                          selectedWeight === "normal"
+                            ? "bg-blue-600 text-white font-semibold"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Normal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedWeight("medium")}
+                        className={`py-1 rounded-lg font-medium transition-colors cursor-pointer ${
+                          selectedWeight === "medium"
+                            ? "bg-blue-600 text-white font-semibold"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Orta
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedWeight("bold")}
+                        className={`py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                          selectedWeight === "bold"
+                            ? "bg-blue-600 text-white"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Kalın
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Font Size */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                      Yazı Boyutu (Font Size)
+                    </label>
+                    <div className="grid grid-cols-4 gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSize("sm")}
+                        className={`py-1 rounded-lg text-xs transition-colors cursor-pointer ${
+                          selectedSize === "sm"
+                            ? "bg-blue-600 text-white font-semibold"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Küçük
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSize("base")}
+                        className={`py-1 rounded-lg transition-colors cursor-pointer ${
+                          selectedSize === "base"
+                            ? "bg-blue-600 text-white font-semibold"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Normal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSize("lg")}
+                        className={`py-1 rounded-lg transition-colors cursor-pointer ${
+                          selectedSize === "lg"
+                            ? "bg-blue-600 text-white font-semibold"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Büyük
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSize("xl")}
+                        className={`py-1 rounded-lg transition-colors cursor-pointer ${
+                          selectedSize === "xl"
+                            ? "bg-blue-600 text-white font-semibold"
+                            : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        Başlık
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Rich Text Editor Toolbar */}
               <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden bg-white dark:bg-slate-900">
                 <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/80 flex flex-wrap items-center gap-1 text-slate-700 dark:text-slate-300">
@@ -359,11 +517,11 @@ export default function Announcements({
                     <button
                       type="button"
                       onClick={() => setShowColorMenu(!showColorMenu)}
-                      className="flex items-center gap-1 p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-xs font-semibold"
+                      className="flex items-center gap-1 p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-xs font-semibold cursor-pointer"
                       title="Yazı Rengi"
                     >
-                      <Palette size={17} style={{ color: activeColor }} />
-                      <span className="w-3 h-3 rounded-full border border-slate-400" style={{ backgroundColor: activeColor }}></span>
+                      <Palette size={17} style={{ color: selectedColor === "inherit" ? undefined : selectedColor }} />
+                      <span className="w-3 h-3 rounded-full border border-slate-400" style={{ backgroundColor: selectedColor === "inherit" ? "#94a3b8" : selectedColor }}></span>
                     </button>
 
                     {showColorMenu && (
@@ -373,7 +531,7 @@ export default function Announcements({
                             key={cp.color}
                             type="button"
                             onClick={() => {
-                              setActiveColor(cp.color);
+                              setSelectedColor(cp.color);
                               formatDoc("foreColor", cp.color);
                               setShowColorMenu(false);
                             }}
@@ -525,6 +683,14 @@ export default function Announcements({
                 timeStyle: "short"
               });
 
+              const parsedStyles: AnnouncementStyles = typeof ann.styles === "string" 
+                ? (() => { try { return JSON.parse(ann.styles as string); } catch(e) { return {}; } })() 
+                : (ann.styles || {});
+
+              const customColor = parsedStyles.color && parsedStyles.color !== "inherit" ? parsedStyles.color : undefined;
+              const weightClass = parsedStyles.fontWeight === "bold" ? "font-bold" : parsedStyles.fontWeight === "medium" ? "font-medium" : "font-normal";
+              const sizeClass = parsedStyles.fontSize === "xl" ? "text-base sm:text-lg font-semibold" : parsedStyles.fontSize === "lg" ? "text-sm sm:text-base" : parsedStyles.fontSize === "sm" ? "text-xs" : "text-xs sm:text-sm";
+
               return (
                 <div
                   key={ann.id}
@@ -576,7 +742,8 @@ export default function Announcements({
 
                   {/* Rich HTML Content */}
                   <div
-                    className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed prose prose-sm dark:prose-invert max-w-none break-words"
+                    className={`${sizeClass} ${weightClass} text-slate-700 dark:text-slate-300 leading-relaxed prose prose-sm dark:prose-invert max-w-none break-words`}
+                    style={{ color: customColor }}
                     dangerouslySetInnerHTML={{
                       __html: DOMPurify.sanitize(ann.content)
                     }}
