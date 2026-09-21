@@ -410,6 +410,9 @@ export default function App() {
 
   return (
     <div className="flex flex-col md:flex-row h-[100dvh] w-full max-w-[100vw] bg-white dark:bg-slate-900 md:bg-slate-50 md:dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-200">
+      {/* Semantic Top Heading for Search Crawlers & Accessibility */}
+      <h1 className="sr-only">KapsApp - Canlı Harita ve Çevrimiçi Oyun Platformu</h1>
+
       {/* Floating Toast Notification Container */}
       <ToastContainer
         toasts={toasts}
