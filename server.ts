@@ -1558,7 +1558,7 @@ async function startServer() {
     });
 
     // Real-time Geolocation Sync (RAM ONLY)
-    const handleLocationUpdate = async (data: { lat: number; lng: number; isManual?: boolean }) => {
+    const handleLocationUpdate = async (data: { lat: number; lng: number }) => {
       if (typeof data?.lat !== "number" || typeof data?.lng !== "number") return;
       if (isNaN(data.lat) || isNaN(data.lng)) return;
 
@@ -1573,18 +1573,13 @@ async function startServer() {
         userStatus = "Sesli/Görüntülü Sohbette";
       }
 
-      // If manual correction is provided (e.g. PC user correcting pin), use exact coordinates
-      // Otherwise apply light privacy jitter (200-500 meters offset)
-      const safeLat = data.isManual ? data.lat : (data.lat + (Math.random() - 0.5) * 0.005);
-      const safeLng = data.isManual ? data.lng : (data.lng + (Math.random() - 0.5) * 0.005);
-
       const locData: UserLiveLocation = {
         userId: userIdNum,
         username: user.username,
         avatar: user.avatar,
         color: user.color || "#3b82f6",
-        lat: safeLat,
-        lng: safeLng,
+        lat: data.lat,
+        lng: data.lng,
         status: userStatus,
         updatedAt: Date.now(),
         isLocationActive: true,
