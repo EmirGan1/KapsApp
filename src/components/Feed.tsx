@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Socket } from "socket.io-client";
 import { Post, Story, MediaModalData } from "../types";
-import { Heart, MessageCircle, ImagePlus, Plus, Send, Film, Maximize2, Trash2 } from "lucide-react";
+import { Heart, MessageCircle, ImagePlus, Plus, Send, Film, Maximize2, Trash2, Loader2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { getApiUrl } from "../utils/api";
@@ -34,26 +34,57 @@ export default function Feed({
   const [activeModalData, setActiveModalData] = useState<MediaModalData | null>(null);
 
   useEffect(() => {
-    if (!socket) return;
     const loadData = () => {
-      socket.emit("get_feed", activeSubject || null, (data: Post[]) => setPosts(data));
-      socket.emit("get_stories", (data: Story[]) => setStories(data));
+      if (socket && socket.connected) {
+        socket.emit("get_feed", activeSubject || null, (data: Post[]) => {
+          if (Array.isArray(data)) setPosts(data);
+        });
+        socket.emit("get_stories", (data: Story[]) => {
+          if (Array.isArray(data)) setStories(data);
+        });
+      } else {
+        const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
+        fetch(getApiUrl(`/api/feed${activeSubject ? `?subject=${encodeURIComponent(activeSubject)}` : ""}`), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (Array.isArray(data)) setPosts(data);
+          })
+          .catch((err) => console.error("Feed fetch error:", err));
+      }
     };
-    loadData();
-    socket.on("feed_updated", loadData);
-    socket.on("stories_updated", loadData);
-    
-    const onPostDeleted = (data: any) => {
-      const deletedId = Number(data?.postId || data?.id || data);
-      setPosts((prev) => prev.filter((p) => p.id !== deletedId));
-    };
-    socket.on("post_deleted", onPostDeleted);
 
-    return () => {
-      socket.off("feed_updated", loadData);
-      socket.off("stories_updated", loadData);
-      socket.off("post_deleted", onPostDeleted);
-    };
+    loadData();
+
+    if (socket) {
+      socket.on("feed_updated", loadData);
+      socket.on("stories_updated", loadData);
+
+      const onNewPost = (newPost: any) => {
+        if (!newPost || !newPost.id) return;
+        // If subject filter is active, only add if matching
+        if (activeSubject && newPost.subject !== activeSubject) return;
+        setPosts((prev) => {
+          if (prev.some((p) => p.id === newPost.id)) return prev;
+          return [newPost, ...prev];
+        });
+      };
+      socket.on("new_post", onNewPost);
+      
+      const onPostDeleted = (data: any) => {
+        const deletedId = Number(data?.postId || data?.id || data);
+        setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+      };
+      socket.on("post_deleted", onPostDeleted);
+
+      return () => {
+        socket.off("feed_updated", loadData);
+        socket.off("stories_updated", loadData);
+        socket.off("new_post", onNewPost);
+        socket.off("post_deleted", onPostDeleted);
+      };
+    }
   }, [socket, activeSubject]);
 
   useEffect(() => {
@@ -102,9 +133,12 @@ export default function Feed({
 
   const handlePostSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPostCaption && !newPostMedia) return;
+    const captionTrimmed = newPostCaption.trim();
+    if (!captionTrimmed && !newPostMedia) return;
+    if (isSubmitting) return;
+
     setIsSubmitting(true);
-    let mediaUrl = null;
+    let mediaUrl: string | null = null;
     let finalMediaType = newPostMediaType;
 
     if (newPostMedia) {
@@ -112,26 +146,115 @@ export default function Feed({
       formData.append("file", newPostMedia);
       try {
         const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `Dosya yüklenemedi (${res.status})`);
+        }
         const data = await res.json();
+        if (!data.url) {
+          throw new Error("Yüklenen dosya URL'si alınamadı.");
+        }
         mediaUrl = data.url;
         if (data.media_type === "video") finalMediaType = "video";
-      } catch (err) {
-        console.error(err);
+      } catch (err: any) {
+        console.error("Media upload error:", err);
+        alert(err.message || "Dosya yüklenirken bir hata oluştu.");
         setIsSubmitting(false);
         return;
       }
     }
 
-    socket?.emit("create_post", {
-      image: mediaUrl,
+    const payload = {
+      image: mediaUrl || null,
       media_type: finalMediaType,
-      caption: newPostCaption,
+      caption: captionTrimmed,
       subject: activeSubject || null
-    });
+    };
 
-    setNewPostCaption("");
-    setNewPostMedia(null);
-    setIsSubmitting(false);
+    const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
+
+    const refreshFeed = () => {
+      if (socket && socket.connected) {
+        socket.emit("get_feed", activeSubject || null, (data: Post[]) => {
+          if (Array.isArray(data)) setPosts(data);
+        });
+      } else {
+        fetch(getApiUrl(`/api/feed${activeSubject ? `?subject=${encodeURIComponent(activeSubject)}` : ""}`), {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (Array.isArray(data)) setPosts(data);
+          })
+          .catch(() => {});
+      }
+    };
+
+    const onSuccess = (createdPost?: any) => {
+      setNewPostCaption("");
+      setNewPostMedia(null);
+      setIsSubmitting(false);
+      if (createdPost && createdPost.id) {
+        setPosts((prev) => {
+          if (prev.some((p) => p.id === createdPost.id)) return prev;
+          return [createdPost, ...prev];
+        });
+      }
+      refreshFeed();
+    };
+
+    // If socket is available and connected, send via socket with callback and REST fallback
+    if (socket && socket.connected) {
+      socket.emit("create_post", payload, async (res: any) => {
+        if (res?.error) {
+          console.warn("Socket create_post error, trying REST API:", res.error);
+          try {
+            const restRes = await fetch(getApiUrl("/api/posts"), {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+              },
+              body: JSON.stringify(payload)
+            });
+            const restData = await restRes.json();
+            if (!restRes.ok || restData.error) {
+              alert(restData.error || res.error || "Gönderi paylaşılamadı.");
+              setIsSubmitting(false);
+              return;
+            }
+            onSuccess(restData.post);
+          } catch (e: any) {
+            alert(res.error || e.message || "Gönderi paylaşılamadı.");
+            setIsSubmitting(false);
+          }
+        } else {
+          onSuccess(res?.post);
+        }
+      });
+    } else {
+      // Socket not connected, send directly via REST API
+      try {
+        const restRes = await fetch(getApiUrl("/api/posts"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify(payload)
+        });
+        const restData = await restRes.json();
+        if (!restRes.ok || restData.error) {
+          alert(restData.error || "Gönderi paylaşılamadı.");
+          setIsSubmitting(false);
+          return;
+        }
+        onSuccess(restData.post);
+      } catch (err: any) {
+        alert(err.message || "Gönderi paylaşılamadı. Lütfen bağlantınızı kontrol edin.");
+        setIsSubmitting(false);
+      }
+    }
   };
 
   const handleStoryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,7 +290,7 @@ export default function Feed({
         });
       }
 
-      const token = localStorage.getItem("token");
+      const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
       if (token) {
         try {
           await fetch(getApiUrl(`/api/posts/${postId}`), {
@@ -298,11 +421,17 @@ export default function Feed({
         <div className="bg-white dark:bg-slate-900 p-4 my-4 shadow-sm border border-slate-100 dark:border-slate-800 md:rounded-2xl mx-0 md:mx-4 lg:mx-0 transition-colors duration-200">
           <form onSubmit={handlePostSubmit}>
             <textarea
-              placeholder="Ne düşünüyorsun? Fotoğraf veya video paylaş..."
+              placeholder="Ne düşünüyorsun? Fotoğraf veya video paylaş... (Ctrl+Enter ile paylaş)"
               className="w-full bg-transparent border-none focus:ring-0 resize-none mb-3 text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 outline-none p-2 text-base md:text-lg"
               rows={2}
               value={newPostCaption}
               onChange={(e) => setNewPostCaption(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  handlePostSubmit(e);
+                }
+              }}
             />
 
             {/* Media Preview */}
@@ -347,10 +476,17 @@ export default function Feed({
 
               <button
                 type="submit"
-                disabled={(!newPostCaption && !newPostMedia) || isSubmitting}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-full shadow-md transition-colors cursor-pointer"
+                disabled={(!newPostCaption.trim() && !newPostMedia) || isSubmitting}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-full shadow-md transition-colors cursor-pointer flex items-center gap-2"
               >
-                {isSubmitting ? "Yükleniyor..." : "Paylaş"}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Paylaşılıyor...</span>
+                  </>
+                ) : (
+                  <span>Paylaş</span>
+                )}
               </button>
             </div>
           </form>

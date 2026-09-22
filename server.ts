@@ -340,6 +340,33 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+  // High-performance User Cache with TTL to reduce database round-trips
+  const userCache = new Map<number, { data: any; expiresAt: number }>();
+  const invalidateUserCache = (id: number) => {
+    userCache.delete(Number(id));
+  };
+
+  const getUser = async (id: number) => {
+    const numId = Number(id);
+    if (!numId) return null;
+    const now = Date.now();
+    const cached = userCache.get(numId);
+    if (cached && cached.expiresAt > now) {
+      return cached.data;
+    }
+    try {
+      const res = await client.execute({ 
+        sql: "SELECT id, username, avatar, color, okey_wins, uno_wins, signup_ip, last_ip, isBanned, locationConsent, is_admin FROM users WHERE id = ?", 
+        args: [numId] 
+      });
+      const u = res.rows.length > 0 ? res.rows[0] : null;
+      userCache.set(numId, { data: u, expiresAt: now + 45000 });
+      return u;
+    } catch (e) {
+      return null;
+    }
+  };
+
   // Explicit /uploads/:filename serving with Turso cloud fallback
   app.get("/uploads/:filename", async (req, res) => {
     const filename = path.basename(req.params.filename);
@@ -565,6 +592,118 @@ async function startServer() {
       size,
       media_type: isVideo ? "video" : isImage ? "image" : isAudio ? "voice" : "file"
     });
+  });
+
+  app.get("/api/feed", async (req, res) => {
+    try {
+      const subjectFilter = req.query.subject as string | undefined;
+      let postsRes;
+      if (subjectFilter) {
+        postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 30", args: [subjectFilter] });
+      } else {
+        postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE (subject IS NULL OR subject = '' OR subject = 'null') ORDER BY created_at DESC LIMIT 30", args: [] });
+      }
+
+      const postIds = postsRes.rows.map((p: any) => p.id);
+      let likesRes: any = { rows: [] };
+      if (postIds.length > 0) {
+        const placeholders = postIds.map(() => "?").join(",");
+        likesRes = await client.execute({ sql: `SELECT id, post_id, user_id FROM likes WHERE post_id IN (${placeholders})`, args: postIds });
+      }
+
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : (req.query.token as string || "");
+      let currentUserId = 0;
+      if (token) {
+        const u = await client.execute({ sql: "SELECT id FROM users WHERE token = ?", args: [token] });
+        if (u.rows.length > 0) currentUserId = Number(u.rows[0].id);
+      }
+
+      const populated = await Promise.all(postsRes.rows.map(async (p: any) => {
+        const pUser = await getUser(p.user_id as number);
+        const postLikes = likesRes.rows.filter((l: any) => l.post_id === p.id);
+        const is_liked = currentUserId ? postLikes.some((l: any) => l.user_id === currentUserId) : false;
+        const ext = (p.image as string || "").split(".").pop()?.toLowerCase();
+        const media_type = p.media_type || (["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image");
+        return { 
+          ...p, 
+          media_type,
+          username: pUser?.username, 
+          avatar: pUser?.avatar, 
+          color: pUser?.color, 
+          likes_count: postLikes.length, 
+          is_liked 
+        };
+      }));
+
+      return res.json(populated);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/posts", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : (req.body.token as string || req.query.token as string || "");
+      if (!token) return res.status(401).json({ error: "Giriş yapmalısınız." });
+
+      const userRes = await client.execute({ 
+        sql: "SELECT id, username, avatar, color, isBanned FROM users WHERE token = ?", 
+        args: [token] 
+      });
+      if (userRes.rows.length === 0) return res.status(401).json({ error: "Geçersiz oturum." });
+
+      const authUser = userRes.rows[0];
+      if (Number(authUser.isBanned) === 1 || authUser.isBanned === "1") {
+        return res.status(403).json({ error: "Hesabınız askıya alınmıştır." });
+      }
+
+      const userId = Number(authUser.id);
+      const rawCaption = typeof req.body.caption === "string" ? req.body.caption.trim() : "";
+      const rawImage = typeof req.body.image === "string" && req.body.image.trim() ? req.body.image.trim() : null;
+      const rawSubject = typeof req.body.subject === "string" && req.body.subject.trim() ? req.body.subject.trim() : null;
+
+      if (!rawCaption && !rawImage) {
+        return res.status(400).json({ error: "Gönderi metni veya görseli boş olamaz." });
+      }
+
+      let mediaType = req.body.media_type;
+      if (!mediaType && rawImage) {
+        const ext = rawImage.split(".").pop()?.toLowerCase();
+        mediaType = ["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image";
+      }
+      if (!mediaType) mediaType = "image";
+
+      const createdAt = new Date().toISOString();
+      const insertRes = await client.execute({
+        sql: "INSERT INTO posts (user_id, image, caption, media_type, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        args: [userId, rawImage, rawCaption, mediaType, rawSubject, createdAt]
+      });
+
+      const newPostId = Number(insertRes.lastInsertRowid);
+      const newPost = {
+        id: newPostId,
+        user_id: userId,
+        image: rawImage,
+        caption: rawCaption,
+        media_type: mediaType,
+        subject: rawSubject,
+        created_at: createdAt,
+        username: authUser.username,
+        avatar: authUser.avatar,
+        color: authUser.color,
+        likes_count: 0,
+        is_liked: false
+      };
+
+      io.emit("feed_updated");
+      io.emit("new_post", newPost);
+      return res.json({ success: true, post: newPost });
+    } catch (err: any) {
+      console.error("POST /api/posts error:", err);
+      return res.status(500).json({ error: err.message || "Gönderi paylaşılamadı." });
+    }
   });
 
   app.delete("/api/posts/:id", async (req, res) => {
@@ -844,12 +983,6 @@ async function startServer() {
     console.log("Gönderilen toplam konum sayısı (aktif+pasif):", locList.length);
     io.emit("update_user_locations", locList);
     io.emit("all_user_locations", locList);
-  };
-  
-  // High-performance User Cache with TTL to reduce database round-trips
-  const userCache = new Map<number, { data: any; expiresAt: number }>();
-  const invalidateUserCache = (id: number) => {
-    userCache.delete(Number(id));
   };
 
   const okeyRooms = new Map<string, any>();
@@ -1800,27 +1933,6 @@ async function startServer() {
     socket.on("location:disabled", handleStopLocationSharing);
     socket.on("user:passive", handleStopLocationSharing);
 
-    const getUser = async (id: number) => {
-      const numId = Number(id);
-      if (!numId) return null;
-      const now = Date.now();
-      const cached = userCache.get(numId);
-      if (cached && cached.expiresAt > now) {
-        return cached.data;
-      }
-      try {
-        const res = await client.execute({ 
-          sql: "SELECT id, username, avatar, color, okey_wins, uno_wins, signup_ip, last_ip, isBanned, locationConsent, is_admin FROM users WHERE id = ?", 
-          args: [numId] 
-        });
-        const u = res.rows.length > 0 ? res.rows[0] : null;
-        userCache.set(numId, { data: u, expiresAt: now + 45000 });
-        return u;
-      } catch (e) {
-        return null;
-      }
-    };
-
     socket.on("mark_global_read", (messageId) => {
       globalRead.set(Number(user.id), messageId);
       io.emit("global_read_update", Array.from(globalRead.entries()));
@@ -1997,7 +2109,7 @@ async function startServer() {
         if (subjectFilter) {
           postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE subject = ? ORDER BY created_at DESC LIMIT 30", args: [subjectFilter] });
         } else {
-          postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE subject IS NULL ORDER BY created_at DESC LIMIT 30", args: [] });
+          postsRes = await client.execute({ sql: "SELECT id, user_id, image, caption, media_type, subject, created_at FROM posts WHERE (subject IS NULL OR subject = '' OR subject = 'null') ORDER BY created_at DESC LIMIT 30", args: [] });
         }
         const postIds = postsRes.rows.map((p: any) => p.id);
         let likesRes: any = { rows: [] };
@@ -2015,31 +2127,78 @@ async function startServer() {
           return { 
             ...p, 
             media_type,
-            username: pUser?.username, 
-            avatar: pUser?.avatar, 
-            color: pUser?.color, 
+            username: pUser?.username || "Kullanıcı", 
+            avatar: pUser?.avatar || null, 
+            color: pUser?.color || null, 
             likes_count: postLikes.length, 
             is_liked 
           };
         }));
-        cb(populated);
+        if (typeof cb === "function") cb(populated);
       } catch(e) {
-        cb([]);
+        if (typeof cb === "function") cb([]);
       }
     });
 
     socket.on("create_post", async (data, cb) => {
-      let mediaType = data.media_type;
-      if (!mediaType && data.image) {
-        const ext = data.image.split(".").pop()?.toLowerCase();
-        mediaType = ["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image";
+      try {
+        if (!data || typeof data !== "object") {
+          if (typeof cb === "function") cb({ error: "Geçersiz veri." });
+          return;
+        }
+
+        const userId = Number(user?.id);
+        if (!userId) {
+          if (typeof cb === "function") cb({ error: "Oturum bulunamadı." });
+          return;
+        }
+
+        const rawCaption = typeof data.caption === "string" ? data.caption.trim() : "";
+        const rawImage = typeof data.image === "string" && data.image.trim() ? data.image.trim() : null;
+        const rawSubject = typeof data.subject === "string" && data.subject.trim() ? data.subject.trim() : null;
+
+        if (!rawCaption && !rawImage) {
+          if (typeof cb === "function") cb({ error: "Gönderi metni veya görseli boş olamaz." });
+          return;
+        }
+
+        let mediaType = data.media_type;
+        if (!mediaType && rawImage) {
+          const ext = rawImage.split(".").pop()?.toLowerCase();
+          mediaType = ["mp4", "webm", "mov", "mkv", "avi"].includes(ext || "") ? "video" : "image";
+        }
+        if (!mediaType) mediaType = "image";
+
+        const createdAt = new Date().toISOString();
+        const insertRes = await client.execute({
+          sql: "INSERT INTO posts (user_id, image, caption, media_type, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          args: [userId, rawImage, rawCaption, mediaType, rawSubject, createdAt]
+        });
+
+        const newPostId = Number(insertRes.lastInsertRowid);
+        const pUser = await getUser(userId);
+        const newPost = {
+          id: newPostId,
+          user_id: userId,
+          image: rawImage,
+          caption: rawCaption,
+          media_type: mediaType,
+          subject: rawSubject,
+          created_at: createdAt,
+          username: pUser?.username || user?.username || "Kullanıcı",
+          avatar: pUser?.avatar || user?.avatar || null,
+          color: pUser?.color || user?.color || null,
+          likes_count: 0,
+          is_liked: false
+        };
+
+        io.emit("feed_updated");
+        io.emit("new_post", newPost);
+        if (typeof cb === "function") cb({ success: true, post: newPost });
+      } catch (err: any) {
+        console.error("create_post socket error:", err);
+        if (typeof cb === "function") cb({ error: err.message || "Gönderi paylaşılamadı." });
       }
-      await client.execute({
-        sql: "INSERT INTO posts (user_id, image, caption, media_type, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        args: [user.id, data.image, data.caption, mediaType || "image", data.subject || null, new Date().toISOString()]
-      });
-      io.emit("feed_updated");
-      if(cb) cb();
     });
 
     socket.on("like_post", async (postId) => {
