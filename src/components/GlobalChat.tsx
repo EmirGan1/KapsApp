@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
-import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2, Trash2, Globe } from "lucide-react";
+import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2, Trash2, Globe, Loader2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { MediaModalData } from "../types";
@@ -12,6 +12,7 @@ import {
   clearGlobalCache 
 } from "../utils/globalChatCache";
 import { getApiUrl } from "../utils/api";
+import { compressImage } from "../utils/imageCompressor";
 
 export default function GlobalChat({
   socket,
@@ -39,6 +40,7 @@ export default function GlobalChat({
   const audioChunksRef = useRef<Blob[]>([]);
 
   const [replyTo, setReplyTo] = useState<any>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const [typingUsers, setTypingUsers] = useState<number[]>([]);
   const typingTimersRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
   const lastTypingSentRef = useRef<number>(0);
@@ -290,11 +292,18 @@ export default function GlobalChat({
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && socket) {
-      const formData = new FormData();
-      formData.append("file", file);
+    const rawFile = e.target.files?.[0];
+    if (rawFile && socket) {
+      setIsUploading(true);
       try {
+        let fileToUpload = rawFile;
+        if (rawFile.type.startsWith("image/")) {
+          const compressed = await compressImage(rawFile, { maxWidth: 1920, maxHeight: 1080, quality: 0.85 });
+          fileToUpload = compressed.file;
+        }
+
+        const formData = new FormData();
+        formData.append("file", fileToUpload);
         const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
         const data = await res.json();
         if (data.url) {
@@ -310,6 +319,7 @@ export default function GlobalChat({
       } catch (err) {
         console.error("Upload error", err);
       } finally {
+        setIsUploading(false);
         e.target.value = "";
       }
     }
@@ -809,15 +819,22 @@ export default function GlobalChat({
             </label>
 
             <div className="flex-1 flex items-center bg-slate-100 dark:bg-slate-800 rounded-full px-3 sm:px-4 py-1 sm:py-1.5 focus-within:ring-2 focus-within:ring-blue-500 min-w-0">
-              <input
-                type="text"
-                placeholder="Mesaj yaz... (maks 1000)"
-                value={newMessage}
-                maxLength={1000}
-                onChange={handleTyping}
-                onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                className="flex-1 bg-transparent border-none focus:outline-none text-sm sm:text-[15px] py-1 text-slate-800 dark:text-slate-100 min-w-0"
-              />
+              {isUploading ? (
+                <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 py-1 font-medium animate-pulse">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Fotoğraf sıkıştırılıyor ve yükleniyor...</span>
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="Mesaj yaz... (maks 1000)"
+                  value={newMessage}
+                  maxLength={1000}
+                  onChange={handleTyping}
+                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                  className="flex-1 bg-transparent border-none focus:outline-none text-sm sm:text-[15px] py-1 text-slate-800 dark:text-slate-100 min-w-0"
+                />
+              )}
               {newMessage.length > 700 && (
                 <span className="text-[10px] sm:text-[11px] text-slate-400 font-mono shrink-0 pl-1">
                   {1000 - newMessage.length}

@@ -18,6 +18,26 @@ import {
   checkClassicOkeyWin,
   Tile 
 } from "./src/utils/okeyEngine.ts";
+import {
+  generate101Deck,
+  deal101Hands,
+  isValidRun,
+  isValidGroup,
+  validateMeld,
+  isValidPair,
+  validatePairOpening,
+  validateSerialHandOpening,
+  canAppendTileToMeld,
+  checkIslerTas,
+  calculateRoundPenalties,
+  findBestMeldsInHand,
+  isTileOkey as isTileOkey101,
+  Tile101,
+  Okey101Meld,
+  Okey101Player,
+  Okey101RoomState,
+  Okey101Engine
+} from "./src/utils/okey101Engine.ts";
 import { 
   createUnoDeck, 
   isCardPlayable, 
@@ -51,6 +71,42 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 } // 100 MB limit for videos and files
 });
 
+// Helper to safely delete uploaded media from disk and Turso cloud database
+const deleteUploadedFile = async (filenameOrUrl: string) => {
+  if (!filenameOrUrl || typeof filenameOrUrl !== 'string') return;
+  try {
+    const cleanUrl = filenameOrUrl.split('?')[0];
+    const filename = path.basename(cleanUrl);
+    if (!filename || filename === '.' || filename === '/') return;
+
+    // Try multiple possible paths to locate the file on disk
+    const candidatePaths = [
+      path.join(uploadsDir, filename),
+      path.resolve(process.cwd(), cleanUrl.replace(/^\//, '')),
+      path.resolve(process.cwd(), "uploads", filename),
+      path.resolve(__dirname, '..', cleanUrl.replace(/^\//, '')),
+      path.resolve(__dirname, cleanUrl.replace(/^\//, ''))
+    ];
+
+    for (const candPath of candidatePaths) {
+      if (fs.existsSync(candPath)) {
+        try {
+          fs.unlinkSync(candPath);
+        } catch (e) {
+          await fs.promises.unlink(candPath).catch(() => {});
+        }
+      }
+    }
+
+    await client.execute({
+      sql: "DELETE FROM uploaded_files WHERE filename = ? OR filename = ? OR url LIKE ?",
+      args: [filename, cleanUrl, `%${filename}%`]
+    }).catch(() => {});
+  } catch (err) {
+    console.error("Error deleting file:", err);
+  }
+};
+
 const client = createClient({
   url: process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "file:local.db",
   authToken: process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN,
@@ -68,6 +124,9 @@ async function initDb() {
   )`);
   try {
     await client.execute(`ALTER TABLE users ADD COLUMN okey_wins INTEGER DEFAULT 0`);
+  } catch (e) {}
+  try {
+    await client.execute(`ALTER TABLE users ADD COLUMN okey101_wins INTEGER DEFAULT 0`);
   } catch (e) {}
   await client.execute(`CREATE TABLE IF NOT EXISTS friends (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -709,27 +768,49 @@ async function startServer() {
   app.delete("/api/posts/:id", async (req, res) => {
     try {
       const token = req.headers.authorization?.replace("Bearer ", "");
-      if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const userRes = await client.execute({ sql: "SELECT id, username FROM users WHERE token = ?", args: [token] });
-      if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
+      if (!token) return res.status(401).json({ error: "Giriş yapmalısınız." });
+      const userRes = await client.execute({ sql: "SELECT id, username, is_admin FROM users WHERE token = ?", args: [token] });
+      if (userRes.rows.length === 0) return res.status(401).json({ error: "Geçersiz oturum." });
       const authUser = userRes.rows[0];
-      const postId = req.params.id;
-      const postRes = await client.execute({ sql: "SELECT user_id FROM posts WHERE id = ?", args: [postId] });
-      if (postRes.rows.length === 0) return res.status(404).json({ error: "Post not found" });
-      
-      const isEmirgan = authUser.username && (authUser.username as string).trim().toLowerCase() === 'emirgan';
-      if (Number(postRes.rows[0].user_id) !== Number(authUser.id) && !isEmirgan) {
-        return res.status(403).json({ error: "Yetkisiz işlem" });
+
+      const rawPostId = req.params.id;
+      const numPostId = Number(rawPostId);
+      const postId = !isNaN(numPostId) ? numPostId : rawPostId;
+
+      const postRes = await client.execute({
+        sql: "SELECT id, user_id, image FROM posts WHERE id = ? OR id = ?",
+        args: [postId, String(rawPostId)]
+      });
+      if (postRes.rows.length === 0) {
+        return res.status(404).json({ error: "Gönderi bulunamadı." });
       }
 
-      await client.execute({ sql: "DELETE FROM posts WHERE id = ?", args: [postId] });
-      await client.execute({ sql: "DELETE FROM likes WHERE post_id = ?", args: [postId] });
-      await client.execute({ sql: "DELETE FROM comments WHERE post_id = ?", args: [postId] });
-      io.emit("post_deleted", { postId: Number(postId) });
+      const post = postRes.rows[0];
+      const isEmirgan = authUser.username && (authUser.username as string).trim().toLowerCase() === 'emirgan';
+      const isAdmin = isEmirgan || authUser.is_admin === 1 || (authUser as any).role === 'admin';
+
+      if (Number(post.user_id) !== Number(authUser.id) && !isAdmin) {
+        return res.status(403).json({ error: "Yetkisiz işlem: Sadece kendi gönderilerinizi veya yönetici silebilir." });
+      }
+
+      // 1. Delete physical photo from disk and database
+      const postImage = (post.image || (post as any).image_url) as string | null;
+      if (postImage) {
+        await deleteUploadedFile(postImage);
+      }
+
+      // 2. Delete from database (posts, likes, comments)
+      await client.execute({ sql: "DELETE FROM posts WHERE id = ? OR id = ?", args: [postId, String(rawPostId)] });
+      await client.execute({ sql: "DELETE FROM likes WHERE post_id = ? OR post_id = ?", args: [postId, String(rawPostId)] });
+      await client.execute({ sql: "DELETE FROM comments WHERE post_id = ? OR post_id = ?", args: [postId, String(rawPostId)] });
+
+      const resolvedId = Number(post.id || postId);
+      io.emit("post_deleted", { postId: resolvedId, id: resolvedId });
       io.emit("feed_updated");
-      return res.json({ success: true, postId: Number(postId) });
+      return res.json({ success: true, postId: resolvedId });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error("DELETE /api/posts/:id error:", err);
+      res.status(500).json({ error: err.message || "Gönderi silinirken hata oluştu." });
     }
   });
 
@@ -757,8 +838,9 @@ async function startServer() {
           if (msgRes.rows.length > 0) {
             const foundMsg = msgRes.rows[0];
             const senderId = Number(foundMsg.sender);
+            const receiverId = Number((foundMsg as any).receiver);
             
-            if (senderId !== Number(authUser.id) && !isEmirgan) {
+            if (senderId !== Number(authUser.id) && receiverId !== Number(authUser.id) && !isEmirgan) {
               return res.status(403).json({ error: "Bu mesajı silme yetkiniz yok." });
             }
             await client.execute({ 
@@ -784,6 +866,45 @@ async function startServer() {
       return res.status(404).json({ error: "Mesaj bulunamadı." });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/comments/:id", async (req, res) => {
+    try {
+      const token = req.headers.authorization?.replace("Bearer ", "");
+      if (!token) return res.status(401).json({ error: "Giriş yapmalısınız." });
+      const userRes = await client.execute({ sql: "SELECT id, username, is_admin FROM users WHERE token = ?", args: [token] });
+      if (userRes.rows.length === 0) return res.status(401).json({ error: "Geçersiz oturum." });
+      const authUser = userRes.rows[0];
+
+      const rawId = req.params.id;
+      const numId = Number(rawId);
+      const commentId = !isNaN(numId) ? numId : rawId;
+
+      const commentRes = await client.execute({
+        sql: "SELECT id, post_id, user_id FROM comments WHERE id = ? OR id = ?",
+        args: [commentId, String(rawId)]
+      });
+      if (commentRes.rows.length === 0) {
+        return res.status(404).json({ error: "Yorum bulunamadı." });
+      }
+
+      const comment = commentRes.rows[0];
+      const isEmirgan = authUser.username && (authUser.username as string).trim().toLowerCase() === "emirgan";
+      const isAdmin = isEmirgan || authUser.is_admin === 1 || (authUser as any).role === "admin";
+
+      if (Number(comment.user_id) !== Number(authUser.id) && !isAdmin) {
+        return res.status(403).json({ error: "Yetkisiz işlem: Sadece kendi yorumunuzu silebilirsiniz." });
+      }
+
+      await client.execute({ sql: "DELETE FROM comments WHERE id = ? OR id = ?", args: [commentId, String(rawId)] });
+
+      io.emit("comments_updated", comment.post_id);
+      io.emit("feed_updated");
+      return res.json({ success: true, commentId, postId: comment.post_id });
+    } catch (err: any) {
+      console.error("DELETE /api/comments/:id error:", err);
+      res.status(500).json({ error: "Yorum silinirken hata oluştu." });
     }
   });
 
@@ -1406,6 +1527,401 @@ async function startServer() {
     unoRooms.delete(roomId);
   };
 
+  // --- 101 Okey Game Engine & Room State Management ---
+  const okey101Rooms = new Map<string, any>();
+
+  const getSanitized101Room = (room: any) => {
+    return {
+      id: room.id,
+      name: room.name,
+      gameMode: 'okey101',
+      subMode: room.subMode || 'katlamali',
+      status: room.status,
+      hostId: room.hostId || room.creatorId,
+      creatorId: room.creatorId,
+      players: room.players.map((p: any) => ({
+        id: p.id,
+        username: p.username,
+        avatar: p.avatar,
+        color: p.color,
+        isBot: !!p.isBot,
+        tileCount: p.hand ? p.hand.length : 0,
+        discardPile: p.discardPile || [],
+        hasOpened: !!p.hasOpened,
+        openedMode: p.openedMode,
+        openedScore: p.openedScore || 0,
+        openedMeldsCount: p.openedMeldsCount || 0,
+        penalties: p.penalties || 0,
+        roundPenalty: p.roundPenalty || 0
+      })),
+      deckCount: room.deck ? room.deck.length : 0,
+      indicator: room.indicator,
+      okeyTile: room.okeyTile,
+      currentTurn: room.currentTurn || 0,
+      turnPhase: room.turnPhase || 'draw',
+      highestOpenScore: room.highestOpenScore || 101,
+      openedMelds: room.openedMelds || [],
+      turnTimeRemaining: room.turnTimeRemaining || 30,
+      roundNumber: room.roundNumber || 1,
+      winnerId: room.winnerId,
+      winningReason: room.winningReason,
+      lastActionMessage: room.lastActionMessage
+    };
+  };
+
+  const broadcast101Room = (roomId: string) => {
+    const room = okey101Rooms.get(roomId);
+    if (!room) return;
+    const publicState = getSanitized101Room(room);
+    
+    // Broadcast public state to table channels
+    io.to(`okey101_${roomId}`).emit("okey101_state", publicState);
+    io.to(roomId).emit("okey101_state", publicState);
+    io.to(`okey101_${roomId}`).emit("table:updated", publicState);
+    io.to(roomId).emit("table:updated", publicState);
+
+    // Private hand events to individual players
+    for (const p of room.players) {
+      if (!p.isBot) {
+        const targetSockets = new Set<string>();
+        if (p.socketId) targetSockets.add(p.socketId);
+        const globalSock = onlineUsers.get(Number(p.id));
+        if (globalSock) targetSockets.add(globalSock);
+        
+        targetSockets.forEach(sId => {
+          io.to(sId).emit("okey101_hand", p.hand || []);
+          io.to(sId).emit("game:started", {
+            hand: p.hand || [],
+            myTiles: p.hand || [],
+            tiles: p.hand || [],
+            okeyTile: room.okeyTile,
+            indicator: room.indicator,
+            currentTurn: room.currentTurn,
+            turnPhase: room.turnPhase,
+            highestOpenScore: room.highestOpenScore,
+            room: publicState
+          });
+        });
+      }
+    }
+  };
+
+  const emit101RoomsList = () => {
+    const list = Array.from(okey101Rooms.values()).map(r => ({
+      id: r.id,
+      name: r.name,
+      gameMode: 'okey101',
+      subMode: r.subMode,
+      status: r.status,
+      players: r.players.map((p: any) => ({
+        id: p.id,
+        username: p.username,
+        avatar: p.avatar,
+        color: p.color,
+        isBot: p.isBot
+      }))
+    }));
+    io.emit("okey101_rooms_list", list);
+  };
+
+  const start101TurnTimer = (roomId: string) => {
+    const room = okey101Rooms.get(roomId);
+    if (!room || room.status !== 'playing') return;
+
+    clearInterval(room.turnTimerInterval);
+    room.turnTimeRemaining = 30;
+
+    room.turnTimerInterval = setInterval(() => {
+      const r = okey101Rooms.get(roomId);
+      if (!r || r.status !== 'playing') {
+        clearInterval(room.turnTimerInterval);
+        return;
+      }
+
+      r.turnTimeRemaining -= 1;
+
+      if (r.turnTimeRemaining <= 0) {
+        clearInterval(r.turnTimerInterval);
+        handle101Timeout(roomId);
+      } else {
+        io.to(`okey101_${roomId}`).emit("okey101_timer", { timeRemaining: r.turnTimeRemaining });
+      }
+    }, 1000);
+  };
+
+  const handle101Timeout = (roomId: string) => {
+    const r = okey101Rooms.get(roomId);
+    if (!r || r.status !== 'playing') return;
+    const player = r.players[r.currentTurn];
+    if (!player) return;
+
+    if (r.turnPhase === 'draw') {
+      if (r.deck.length > 0) {
+        const drawn = r.deck.pop();
+        if (drawn) player.hand.push(drawn);
+      }
+      r.turnPhase = 'discard';
+      r.lastActionMessage = `${player.username} süresi dolduğu için desteden otomatik taş çekildi.`;
+      broadcast101Room(roomId);
+
+      setTimeout(() => {
+        handle101TimeoutDiscard(roomId);
+      }, 3000);
+      return;
+    }
+
+    if (r.turnPhase === 'discard') {
+      handle101TimeoutDiscard(roomId);
+    }
+  };
+
+  const handle101TimeoutDiscard = (roomId: string) => {
+    const r = okey101Rooms.get(roomId);
+    if (!r || r.status !== 'playing') return;
+    const player = r.players[r.currentTurn];
+    if (!player || player.hand.length === 0) return;
+
+    let discardIdx = player.hand.findIndex((t: any) => !isTileOkey101(t, r.okeyTile));
+    if (discardIdx === -1) discardIdx = player.hand.length - 1;
+    const discarded = player.hand.splice(discardIdx, 1)[0];
+    if (discarded) {
+      player.discardPile.push(discarded);
+      if (checkIslerTas(discarded, r.openedMelds, r.okeyTile)) {
+        player.penalties = (player.penalties || 0) + 101;
+        player.roundPenalty = (player.roundPenalty || 0) + 101;
+        r.lastActionMessage = `${player.username} işler taş attığı için +101 ceza aldı!`;
+      } else {
+        r.lastActionMessage = `${player.username} süresi dolduğu için otomatik taş attı.`;
+      }
+    }
+
+    r.currentTurn = (r.currentTurn + 1) % r.players.length;
+    r.turnPhase = 'draw';
+    start101TurnTimer(roomId);
+    broadcast101Room(roomId);
+
+    const nextPlayer = r.players[r.currentTurn];
+    if (nextPlayer && nextPlayer.isBot) {
+      runBotTurn101(roomId);
+    }
+  };
+
+  const runBotTurn101 = (roomId: string) => {
+    const room = okey101Rooms.get(roomId);
+    if (!room || room.status !== 'playing') return;
+    const bot = room.players[room.currentTurn];
+    if (!bot || !bot.isBot) return;
+
+    clearTimeout(room.botTimeout);
+    room.botTimeout = setTimeout(() => {
+      const r = okey101Rooms.get(roomId);
+      if (!r || r.status !== 'playing') return;
+      const b = r.players[r.currentTurn];
+      if (!b || !b.isBot) return;
+
+      if (r.turnPhase === 'draw') {
+        if (r.deck.length > 0) {
+          const drawn = r.deck.pop();
+          if (drawn) {
+            b.hand.push(drawn);
+            r.lastActionMessage = `${b.username} desteden taş çekti.`;
+          }
+        }
+        r.turnPhase = 'discard';
+        broadcast101Room(roomId);
+      }
+
+      room.botTimeout = setTimeout(() => {
+        const r2 = okey101Rooms.get(roomId);
+        if (!r2 || r2.status !== 'playing') return;
+        const b2 = r2.players[r2.currentTurn];
+        if (!b2 || !b2.isBot) return;
+
+        // Try opening hand if not opened
+        const minNeeded = r2.subMode === 'katlamali' ? Math.max(101, r2.highestOpenScore + 1) : 101;
+        if (!b2.hasOpened) {
+          const analysis = findBestMeldsInHand(b2.hand, r2.okeyTile);
+          if (analysis.totalScore >= minNeeded) {
+            for (let i = 0; i < analysis.melds.length; i++) {
+              const meld = analysis.melds[i];
+              const check = validateMeld(meld, r2.okeyTile);
+              r2.openedMelds.push({
+                id: `meld_${Date.now()}_${i}_bot`,
+                playerId: b2.id,
+                playerUsername: b2.username,
+                type: check.type || 'run',
+                tiles: [...meld],
+                score: check.score
+              });
+              for (const t of meld) {
+                const idx = b2.hand.findIndex((h: any) => h.id === t.id);
+                if (idx !== -1) b2.hand.splice(idx, 1);
+              }
+            }
+            b2.hasOpened = true;
+            b2.openedMode = 'serial';
+            b2.openedScore = analysis.totalScore;
+            if (analysis.totalScore > r2.highestOpenScore) {
+              r2.highestOpenScore = analysis.totalScore;
+            }
+            r2.lastActionMessage = `${b2.username} ${analysis.totalScore} puan ile el açtı! 🎉`;
+          }
+        } else {
+          // If already opened, try appending matching tiles to table
+          for (let mIdx = 0; mIdx < r2.openedMelds.length; mIdx++) {
+            const tableMeld = r2.openedMelds[mIdx];
+            for (let hIdx = b2.hand.length - 1; hIdx >= 0; hIdx--) {
+              const hTile = b2.hand[hIdx];
+              const canApp = canAppendTileToMeld(hTile, tableMeld, r2.okeyTile);
+              if (canApp.canAppend) {
+                if (canApp.insertAt === 'start') {
+                  tableMeld.tiles.unshift(hTile);
+                } else {
+                  tableMeld.tiles.push(hTile);
+                }
+                b2.hand.splice(hIdx, 1);
+                r2.lastActionMessage = `${b2.username} masadaki pere taş işledi.`;
+              }
+            }
+          }
+        }
+
+        // Check if bot finished hand
+        if (b2.hand.length <= 1) {
+          const finalTile = b2.hand.pop();
+          if (finalTile) b2.discardPile.push(finalTile);
+          const finishedWithOkey = finalTile ? isTileOkey101(finalTile, r2.okeyTile) : false;
+          end101Game(roomId, b2.id, finishedWithOkey, `${b2.username} elini bitirdi ve kazandı! 🏆`);
+          return;
+        }
+
+        // Discard non-okey tile that is not işler taş if possible
+        let chosenDiscardIdx = -1;
+        for (let i = 0; i < b2.hand.length; i++) {
+          const t = b2.hand[i];
+          if (!isTileOkey101(t, r2.okeyTile) && !checkIslerTas(t, r2.openedMelds, r2.okeyTile)) {
+            chosenDiscardIdx = i;
+            break;
+          }
+        }
+        if (chosenDiscardIdx === -1) {
+          chosenDiscardIdx = b2.hand.findIndex((t: any) => !isTileOkey101(t, r2.okeyTile));
+        }
+        if (chosenDiscardIdx === -1) chosenDiscardIdx = 0;
+
+        const discarded = b2.hand.splice(chosenDiscardIdx, 1)[0];
+        if (discarded) {
+          b2.discardPile.push(discarded);
+          if (checkIslerTas(discarded, r2.openedMelds, r2.okeyTile)) {
+            b2.penalties = (b2.penalties || 0) + 101;
+            b2.roundPenalty = (b2.roundPenalty || 0) + 101;
+            r2.lastActionMessage = `${b2.username} işler taş attığı için +101 ceza aldı!`;
+          } else {
+            r2.lastActionMessage = `${b2.username} taş attı.`;
+          }
+        }
+
+        // Pass turn
+        r2.currentTurn = (r2.currentTurn + 1) % r2.players.length;
+        r2.turnPhase = 'draw';
+        start101TurnTimer(roomId);
+        broadcast101Room(roomId);
+
+        const nextP = r2.players[r2.currentTurn];
+        if (nextP && nextP.isBot) {
+          runBotTurn101(roomId);
+        }
+      }, 1500);
+
+    }, 1200);
+  };
+
+  const end101Game = async (roomId: string, winnerId: number, finishedWithOkey: boolean, reason: string) => {
+    const room = okey101Rooms.get(roomId);
+    if (!room) return;
+    clearTimeout(room.botTimeout);
+    clearInterval(room.turnTimerInterval);
+
+    room.status = 'ended';
+    room.winnerId = winnerId;
+    room.winningReason = reason;
+
+    const penaltySummary = calculateRoundPenalties(room.players, winnerId, finishedWithOkey, room.okeyTile);
+    for (const p of room.players) {
+      const pen = penaltySummary[p.id];
+      if (pen) {
+        p.roundPenalty = pen.roundScore;
+        p.penalties = (p.penalties || 0) + pen.roundScore;
+      }
+    }
+
+    if (winnerId > 0) {
+      try {
+        await client.execute({
+          sql: "UPDATE users SET okey101_wins = COALESCE(okey101_wins, 0) + 1 WHERE id = ?",
+          args: [winnerId]
+        });
+      } catch (err) {}
+    }
+
+    broadcast101Room(roomId);
+    emit101RoomsList();
+  };
+
+  const cleanup101Room = (roomId: string) => {
+    const room = okey101Rooms.get(roomId);
+    if (!room) return;
+    clearTimeout(room.botTimeout);
+    clearInterval(room.turnTimerInterval);
+    if (room.deck) room.deck.length = 0;
+    if (room.players) room.players.length = 0;
+    okey101Rooms.delete(roomId);
+  };
+
+  const start101GameSession = (roomId: string) => {
+    const room = okey101Rooms.get(roomId);
+    if (!room) return false;
+    if (room.status === 'playing') return true;
+
+    // 101 Okey 4 oyuncuyla oynanır. Eksik koltukları otomatik akıllı botlarla 4'e tamamla
+    const botNamePool = ["Ahmet (Bot)", "Zeynep (Bot)", "Can (Bot)", "Elif (Bot)", "Mehmet (Bot)", "Deniz (Bot)"];
+    const botColors = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899'];
+    let botIdCounter = 1;
+
+    while (room.players.length < 4) {
+      const assignedName = botNamePool[(room.players.length - 1) % botNamePool.length] || `Bot ${botIdCounter}`;
+      room.players.push({
+        id: -200 - botIdCounter - room.players.length,
+        username: assignedName,
+        avatar: null,
+        color: botColors[room.players.length % botColors.length],
+        isBot: true,
+        socketId: undefined,
+        hand: [],
+        discardPile: [],
+        hasOpened: false,
+        openedMode: undefined,
+        openedScore: 0,
+        openedMeldsCount: 0,
+        penalties: 0,
+        roundPenalty: 0
+      });
+      botIdCounter++;
+    }
+
+    // Initialize 101 game using Okey101Engine (deals 106 tiles: 22 to dealer, 21 to others)
+    Okey101Engine.initializeGame(room);
+
+    start101TurnTimer(roomId);
+    broadcast101Room(roomId);
+    emit101RoomsList();
+
+    if (room.players[0] && room.players[0].isBot) {
+      runBotTurn101(roomId);
+    }
+    return true;
+  };
+
   const startDrawGuessChoosing = (room: any) => {
     if (!room) return;
     clearTimeout(room.roundEndTimeout);
@@ -1842,6 +2358,8 @@ async function startServer() {
       let userStatus = "Lobide";
       if (socket.data.currentOkeyRoom) {
         userStatus = "Okey Masasında";
+      } else if (socket.data.currentOkey101Room) {
+        userStatus = "101 Okey Oynuyor";
       } else if (socket.data.currentUnoRoom) {
         userStatus = "UNO Oynuyor";
       } else if (socket.data.currentDrawGuessRoom) {
@@ -2231,32 +2749,41 @@ async function startServer() {
 
     socket.on("delete_post", async (rawPostId, cb) => {
       try {
-        const postId = typeof rawPostId === "object" && rawPostId !== null ? (rawPostId.id || rawPostId.postId) : rawPostId;
+        const raw = typeof rawPostId === "object" && rawPostId !== null ? (rawPostId.id || rawPostId.postId) : rawPostId;
+        const numId = Number(raw);
+        const postId = !isNaN(numId) ? numId : raw;
         const postRes = await client.execute({
-          sql: "SELECT user_id FROM posts WHERE id = ?",
-          args: [postId]
+          sql: "SELECT id, user_id, image FROM posts WHERE id = ? OR id = ?",
+          args: [postId, String(raw)]
         });
         if (postRes.rows.length === 0) {
-          if (cb) cb({ error: "Post bulunamadı." });
+          if (cb) cb({ error: "Gönderi bulunamadı." });
           return;
         }
 
         const isEmirgan = user.username && user.username.trim().toLowerCase() === 'emirgan';
+        const isAdmin = isEmirgan || user.is_admin === 1 || (user as any).role === 'admin';
         const postOwnerId = Number(postRes.rows[0].user_id);
         const currentUserId = Number(user.id);
 
-        if (postOwnerId !== currentUserId && !isEmirgan) {
-          if (cb) cb({ error: "Yetkisiz işlem" });
+        if (postOwnerId !== currentUserId && !isAdmin) {
+          if (cb) cb({ error: "Yetkisiz işlem: Sadece kendi gönderinizi silebilirsiniz." });
           return;
         }
 
-        await client.execute({ sql: "DELETE FROM posts WHERE id = ?", args: [postId] });
-        await client.execute({ sql: "DELETE FROM likes WHERE post_id = ?", args: [postId] });
-        await client.execute({ sql: "DELETE FROM comments WHERE post_id = ?", args: [postId] });
+        const postImage = postRes.rows[0].image as string | null;
+        if (postImage) {
+          await deleteUploadedFile(postImage).catch(() => {});
+        }
+
+        await client.execute({ sql: "DELETE FROM posts WHERE id = ? OR id = ?", args: [postId, String(raw)] });
+        await client.execute({ sql: "DELETE FROM likes WHERE post_id = ? OR post_id = ?", args: [postId, String(raw)] });
+        await client.execute({ sql: "DELETE FROM comments WHERE post_id = ? OR post_id = ?", args: [postId, String(raw)] });
         
-        io.emit("post_deleted", { postId: Number(postId) });
+        const resolvedId = Number(postRes.rows[0].id || postId);
+        io.emit("post_deleted", { postId: resolvedId, id: resolvedId });
         io.emit("feed_updated");
-        if (cb) cb({ success: true, postId: Number(postId) });
+        if (cb) cb({ success: true, postId: resolvedId });
       } catch (err) {
         console.error("delete_post socket error:", err);
         if (cb) cb({ error: "Silme işlemi sırasında hata oluştu." });
@@ -2292,6 +2819,36 @@ async function startServer() {
       } catch (e) {}
       io.emit("feed_updated");
       io.emit("comments_updated", data.postId);
+    });
+
+    socket.on("delete_comment", async (rawCommentId: any, cb?: any) => {
+      try {
+        const raw = typeof rawCommentId === "object" && rawCommentId !== null ? (rawCommentId.commentId || rawCommentId.id) : rawCommentId;
+        const numId = Number(raw);
+        const commentId = !isNaN(numId) ? numId : raw;
+        const commentRes = await client.execute({
+          sql: "SELECT id, post_id, user_id FROM comments WHERE id = ? OR id = ?",
+          args: [commentId, String(raw)]
+        });
+        if (commentRes.rows.length === 0) {
+          if (cb) cb({ error: "Yorum bulunamadı." });
+          return;
+        }
+        const comment = commentRes.rows[0];
+        const isEmirgan = user.username && user.username.trim().toLowerCase() === "emirgan";
+        const isAdmin = isEmirgan || user.is_admin === 1 || (user as any).role === "admin";
+        if (Number(comment.user_id) !== Number(user.id) && !isAdmin) {
+          if (cb) cb({ error: "Yetkisiz işlem: Sadece kendi yorumunuzu silebilirsiniz." });
+          return;
+        }
+        await client.execute({ sql: "DELETE FROM comments WHERE id = ? OR id = ?", args: [commentId, String(raw)] });
+        io.emit("comments_updated", comment.post_id);
+        io.emit("feed_updated");
+        if (cb) cb({ success: true, commentId, postId: comment.post_id });
+      } catch (err) {
+        console.error("delete_comment socket error:", err);
+        if (cb) cb({ error: "Yorum silinirken hata oluştu." });
+      }
     });
 
     // Stories (last 24 hours)
@@ -3038,8 +3595,9 @@ async function startServer() {
       }
 
       const originalSender = Number(foundMsg.sender);
-      // Backend yetki kontrolü: Kullanıcı mesajın sahibi değilse ve emirgan/admin değilse işlemi reddet
-      if (originalSender !== currentUserId && !isEmirgan) {
+      const originalReceiver = Number((foundMsg as any).receiver);
+      // Backend yetki kontrolü: Mesajın göndereni, DM alıcısı veya admin silebilir
+      if (originalSender !== currentUserId && originalReceiver !== currentUserId && !isEmirgan) {
         if (cb) cb({ error: "Bu mesajı silme yetkiniz yok." });
         return;
       }
@@ -3050,6 +3608,14 @@ async function startServer() {
           sql: `DELETE FROM ${foundTable} WHERE id = ? OR id = ?`, 
           args: [!isNaN(numId) ? numId : rawId, String(rawId)] 
         });
+
+        // Clean up media if it was an uploaded file
+        if (foundMsg.content && typeof foundMsg.content === 'string' && foundMsg.content.startsWith('/uploads/')) {
+          deleteUploadedFile(foundMsg.content).catch(() => {});
+        }
+        if (foundMsg.image_url && typeof foundMsg.image_url === 'string' && foundMsg.image_url.startsWith('/uploads/')) {
+          deleteUploadedFile(foundMsg.image_url).catch(() => {});
+        }
         
         const resolvedType = foundTable === "messages" ? "private" : foundTable === "group_messages" ? "group" : "global";
         
@@ -4487,6 +5053,630 @@ async function startServer() {
       io.to(`drawguess_${roomId}`).emit("drawguess_chat_message", msg);
     });
 
+    // --- 101 Okey Socket Handlers ---
+    socket.on("get_okey101_rooms", () => {
+      emit101RoomsList();
+    });
+
+    socket.on("get_my_okey101_room", (cb?: any) => {
+      let targetRoomId = socket.data.currentOkey101Room;
+      if (!targetRoomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.players.some((p: any) => p.id === user.id)) {
+            targetRoomId = id;
+            break;
+          }
+        }
+      }
+
+      if (targetRoomId) {
+        const room = okey101Rooms.get(targetRoomId);
+        if (room) {
+          socket.data.currentOkey101Room = targetRoomId;
+          socket.join(`okey101_${targetRoomId}`);
+          const p = room.players.find((pl: any) => pl.id === user.id);
+          if (p) p.socketId = socket.id;
+          socket.emit("okey101_state", getSanitized101Room(room));
+          if (p && p.hand) {
+            socket.emit("okey101_hand", p.hand);
+          }
+          if (cb) cb({ success: true, room: getSanitized101Room(room) });
+          return;
+        }
+      }
+      if (cb) cb({ success: false });
+    });
+
+    socket.on("create_okey101_room", ({ name, subMode }: { name: string; subMode?: 'katlamali' | 'katlamasiz' }, cb?: any) => {
+      const roomId = 'okey101_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+      const newRoom = {
+        id: roomId,
+        name: name || `${user.username}'in 101 Masası`,
+        gameMode: 'okey101',
+        subMode: subMode === 'katlamasiz' ? 'katlamasiz' : 'katlamali',
+        status: 'waiting',
+        hostId: user.id,
+        creatorId: user.id,
+        players: [{
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          color: user.color,
+          isBot: false,
+          socketId: socket.id,
+          hand: [],
+          discardPile: [],
+          hasOpened: false,
+          openedMode: undefined,
+          openedScore: 0,
+          openedMeldsCount: 0,
+          penalties: 0,
+          roundPenalty: 0
+        }],
+        deck: [],
+        indicator: null,
+        okeyTile: null,
+        currentTurn: 0,
+        turnPhase: 'draw',
+        highestOpenScore: 101,
+        openedMelds: [],
+        turnTimeRemaining: 30,
+        roundNumber: 1,
+        lastActionMessage: `${user.username} 101 masası oluşturdu.`
+      };
+
+      okey101Rooms.set(roomId, newRoom);
+      socket.data.currentOkey101Room = roomId;
+      socket.join(`okey101_${roomId}`);
+
+      broadcast101Room(roomId);
+      emit101RoomsList();
+      if (cb) cb({ success: true, roomId });
+    });
+
+    const handleJoinOkey101 = (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      const roomId = rawRoomId || socket.data.currentOkey101Room;
+      if (!roomId) {
+        if (cb) cb({ error: "Masa kimliği belirtilmedi." });
+        return;
+      }
+
+      const room = okey101Rooms.get(roomId);
+      if (!room) {
+        if (cb) cb({ error: "Masa bulunamadı." });
+        return;
+      }
+
+      if (room.players.length >= 4 && !room.players.some((p: any) => p.id === user.id)) {
+        if (cb) cb({ error: "Masa dolu (Maksimum 4 oyuncu)." });
+        return;
+      }
+
+      const existingPlayer = room.players.find((p: any) => p.id === user.id);
+      if (existingPlayer) {
+        existingPlayer.socketId = socket.id;
+      } else {
+        room.players.push({
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          color: user.color,
+          isBot: false,
+          socketId: socket.id,
+          hand: [],
+          discardPile: [],
+          hasOpened: false,
+          openedMode: undefined,
+          openedScore: 0,
+          openedMeldsCount: 0,
+          penalties: 0,
+          roundPenalty: 0
+        });
+      }
+
+      socket.data.currentOkey101Room = roomId;
+      socket.join(`okey101_${roomId}`);
+      socket.join(roomId);
+
+      // Otomatik Başlama: 4. oyuncu katıldığında oyun motorunu doğrudan tetikle!
+      if (room.players.length === 4 && room.status === 'waiting') {
+        start101GameSession(roomId);
+      } else {
+        broadcast101Room(roomId);
+      }
+
+      emit101RoomsList();
+      if (cb) cb({ success: true, roomId });
+    };
+
+    socket.on("join_okey101", handleJoinOkey101);
+    socket.on("join_room", (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      if (rawRoomId && okey101Rooms.has(rawRoomId)) {
+        handleJoinOkey101(data, cb);
+      }
+    });
+
+    socket.on("leave_okey101", (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      const roomId = rawRoomId || socket.data.currentOkey101Room;
+      const room = okey101Rooms.get(roomId);
+      if (room) {
+        room.players = room.players.filter((p: any) => p.id !== user.id);
+        socket.leave(`okey101_${roomId}`);
+        socket.leave(roomId);
+        socket.data.currentOkey101Room = null;
+
+        if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
+          cleanup101Room(roomId);
+        } else {
+          if (room.hostId === user.id) {
+            const nextReal = room.players.find((p: any) => !p.isBot);
+            if (nextReal) {
+              room.hostId = nextReal.id;
+              room.creatorId = nextReal.id;
+              room.lastActionMessage = `Masa yöneticisi ayrıldı. Yeni yönetici: ${nextReal.username}`;
+            }
+          }
+          broadcast101Room(roomId);
+        }
+        emit101RoomsList();
+      }
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("add_okey101_bot", (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      const roomId = rawRoomId || socket.data.currentOkey101Room;
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'waiting') {
+        if (cb) cb({ error: "Yalnızca lobi aşamasında bot eklenebilir." });
+        return;
+      }
+      if (room.players.length >= 4) {
+        if (cb) cb({ error: "Masa dolu." });
+        return;
+      }
+
+      const botNames = ["Ahmet (Bot)", "Zeynep (Bot)", "Can (Bot)", "Elif (Bot)", "Murat (Bot)"];
+      const existingNames = new Set(room.players.map((p: any) => p.username));
+      const chosenName = botNames.find(n => !existingNames.has(n)) || `Bot_${room.players.length + 1}`;
+      const botId = -Math.floor(Math.random() * 1000000) - 1;
+
+      room.players.push({
+        id: botId,
+        username: chosenName,
+        avatar: undefined,
+        color: '#10b981',
+        isBot: true,
+        socketId: undefined,
+        hand: [],
+        discardPile: [],
+        hasOpened: false,
+        openedMode: undefined,
+        openedScore: 0,
+        openedMeldsCount: 0,
+        penalties: 0,
+        roundPenalty: 0
+      });
+
+      // 4 oyuncuya (veya bota) ulaşıldığında oyunu otomatik başlat
+      if (room.players.length === 4 && room.status === 'waiting') {
+        start101GameSession(roomId);
+      } else {
+        broadcast101Room(roomId);
+      }
+
+      emit101RoomsList();
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("kick_okey101_bot", (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      const roomId = rawRoomId || socket.data.currentOkey101Room;
+      const botId = data?.botId;
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'waiting') return;
+      if (room.hostId !== user.id) {
+        if (cb) cb({ error: "Yalnızca masa kurucusu bot çıkartabilir." });
+        return;
+      }
+
+      room.players = room.players.filter((p: any) => p.id !== botId);
+      broadcast101Room(roomId);
+      emit101RoomsList();
+      if (cb) cb({ success: true });
+    });
+
+    const handleStartOkey101 = (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      let roomId = rawRoomId || socket.data.currentOkey101Room;
+      if (!roomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            break;
+          }
+        }
+      }
+      const room = okey101Rooms.get(roomId);
+      if (!room) {
+        if (cb) cb({ error: "Masa bulunamadı." });
+        return;
+      }
+      if (room.hostId !== user.id) {
+        if (cb) cb({ error: "Oyunu yalnızca masa yöneticisi başlatabilir." });
+        return;
+      }
+
+      // 4 oyuncuya eksik koltuklar akıllı botlarla tamamlanarak derhal başlatılır
+      const started = start101GameSession(roomId);
+      if (cb) cb({ success: started });
+    };
+
+    socket.on("get_my_okey101_hand", (cb?: any) => {
+      let targetRoomId = socket.data.currentOkey101Room;
+      if (!targetRoomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.players.some((p: any) => p.id === user.id)) {
+            targetRoomId = id;
+            break;
+          }
+        }
+      }
+      if (targetRoomId) {
+        const room = okey101Rooms.get(targetRoomId);
+        if (room) {
+          const p = room.players.find((pl: any) => pl.id === user.id);
+          if (p && p.hand) {
+            socket.emit("okey101_hand", p.hand);
+            if (cb) cb({ success: true, hand: p.hand });
+            return;
+          }
+        }
+      }
+      if (cb) cb({ success: false, hand: [] });
+    });
+
+    socket.on("start_okey101_game", handleStartOkey101);
+    socket.on("startGame", (data: any, cb?: any) => {
+      const rawRoomId = typeof data === 'object' && data !== null ? (data.roomId || data.id) : data;
+      const roomId = rawRoomId || socket.data.currentOkey101Room;
+      if (roomId && okey101Rooms.has(roomId)) {
+        handleStartOkey101(data, cb);
+      }
+    });
+
+    socket.on("okey101_draw", (data: any, cb?: any) => {
+      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      const source = data?.source || 'deck';
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'playing') {
+        if (cb) cb({ error: "Oyun aktif değil." });
+        return;
+      }
+      const playerIndex = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIndex !== room.currentTurn) {
+        if (cb) cb({ error: "Sıra sizde değil." });
+        return;
+      }
+      if (room.turnPhase !== 'draw') {
+        if (cb) cb({ error: "Zaten taş çektiniz, lütfen taş atın." });
+        return;
+      }
+
+      const player = room.players[playerIndex];
+
+      if (source === 'deck') {
+        if (room.deck.length === 0) {
+          end101Game(roomId, -1, false, "Destedeki tüm taşlar bitti! El berabere tamamlandı.");
+          if (cb) cb({ success: true });
+          return;
+        }
+        const drawn = room.deck.pop();
+        if (drawn) {
+          player.hand.push(drawn);
+          room.lastActionMessage = `${player.username} desteden taş çekti.`;
+        }
+      } else {
+        // Draw from previous player's discard pile
+        const prevPlayerIndex = (room.currentTurn - 1 + room.players.length) % room.players.length;
+        const prevPlayer = room.players[prevPlayerIndex];
+        if (!prevPlayer || !prevPlayer.discardPile || prevPlayer.discardPile.length === 0) {
+          if (cb) cb({ error: "Çekilecek yan taş bulunmuyor." });
+          return;
+        }
+
+        const discardedTile = prevPlayer.discardPile.pop();
+        if (discardedTile) {
+          player.hand.push(discardedTile);
+          room.lastActionMessage = `${player.username} yandan atılan taşı aldı.`;
+        }
+      }
+
+      room.turnPhase = 'discard';
+      broadcast101Room(roomId);
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("okey101_discard", (data: any, cb?: any) => {
+      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      const tileId = data?.tileId;
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'playing') {
+        if (cb) cb({ error: "Oyun aktif değil." });
+        return;
+      }
+      const playerIndex = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIndex !== room.currentTurn) {
+        if (cb) cb({ error: "Sıra sizde değil." });
+        return;
+      }
+      if (room.turnPhase !== 'discard') {
+        if (cb) cb({ error: "Önce desteden veya yandan taş çekmelisiniz." });
+        return;
+      }
+
+      const player = room.players[playerIndex];
+      const tileIdx = player.hand.findIndex((t: any) => t.id === tileId);
+      if (tileIdx === -1) {
+        if (cb) cb({ error: "Seçilen taş elinizde bulunamadı." });
+        return;
+      }
+
+      const discardedTile = player.hand.splice(tileIdx, 1)[0];
+      player.discardPile.push(discardedTile);
+
+      // 101 Okey Rule: Discarding an "İşler Taş" penalty
+      if (checkIslerTas(discardedTile, room.openedMelds, room.okeyTile)) {
+        player.penalties = (player.penalties || 0) + 101;
+        player.roundPenalty = (player.roundPenalty || 0) + 101;
+        room.lastActionMessage = `⚠️ ${player.username} işler taş attığı için kural gereği +101 ceza aldı!`;
+      } else {
+        const colorName = discardedTile.color === 'red' ? 'Kırmızı' : discardedTile.color === 'blue' ? 'Mavi' : discardedTile.color === 'black' ? 'Siyah' : 'Sarı';
+        room.lastActionMessage = `${player.username} ${discardedTile.number} ${colorName} attı.`;
+      }
+
+      // Check if player won by discarding final tile
+      if (player.hand.length === 0) {
+        const finishedWithOkey = isTileOkey101(discardedTile, room.okeyTile);
+        end101Game(roomId, player.id, finishedWithOkey, `${player.username} elini bitirdi ve kazandı! 🏆`);
+        if (cb) cb({ success: true });
+        return;
+      }
+
+      // Next player's turn
+      room.currentTurn = (room.currentTurn + 1) % room.players.length;
+      room.turnPhase = 'draw';
+      start101TurnTimer(roomId);
+      broadcast101Room(roomId);
+
+      const nextPlayer = room.players[room.currentTurn];
+      if (nextPlayer && nextPlayer.isBot) {
+        runBotTurn101(roomId);
+      }
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("okey101_open_hand", (data: any, cb?: any) => {
+      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      const rawMelds = data?.melds;
+      const mode = data?.mode;
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'playing') {
+        if (cb) cb({ error: "Oyun aktif değil." });
+        return;
+      }
+      const playerIndex = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIndex !== room.currentTurn) {
+        if (cb) cb({ error: "Sıra sizde değil." });
+        return;
+      }
+      const player = room.players[playerIndex];
+      if (player.hasOpened) {
+        if (cb) cb({ error: "Zaten el açtınız. Kalan taşlarınızı masadaki perlere işleyebilirsiniz." });
+        return;
+      }
+
+      // Normalize melds to Tile101[][]
+      let melds: Tile101[][] = [];
+      if (Array.isArray(rawMelds)) {
+        melds = rawMelds.map((m: any) => {
+          if (Array.isArray(m)) return m;
+          if (Array.isArray(m?.tileIds)) {
+            return m.tileIds.map((tid: string) => player.hand.find((h: any) => h.id === tid)).filter(Boolean);
+          }
+          if (Array.isArray(m?.tiles)) {
+            return m.tiles;
+          }
+          return [];
+        }).filter(m => m.length > 0);
+      }
+
+      if (melds.length === 0) {
+        if (cb) cb({ error: "Geçerli perler seçilmedi." });
+        return;
+      }
+
+      if (mode === 'double') {
+        const validation = validatePairOpening(melds, room.okeyTile);
+        if (!validation.valid) {
+          if (cb) cb({ error: validation.error || "Çift açmak için en az 5 çift gereklidir." });
+          return;
+        }
+
+        // Register opened melds
+        for (let i = 0; i < melds.length; i++) {
+          const m = melds[i];
+          room.openedMelds.push({
+            id: `meld_${Date.now()}_${i}_${user.id}`,
+            playerId: player.id,
+            playerUsername: player.username,
+            type: 'pair',
+            tiles: [...m],
+            score: 0
+          });
+          // Remove from hand
+          for (const t of m) {
+            const idx = player.hand.findIndex((h: any) => h.id === t.id);
+            if (idx !== -1) player.hand.splice(idx, 1);
+          }
+        }
+
+        player.hasOpened = true;
+        player.openedMode = 'double';
+        player.openedMeldsCount = melds.length;
+        room.lastActionMessage = `✨ ${player.username} ${melds.length} Çift açarak masayı açtı!`;
+        broadcast101Room(roomId);
+        if (cb) cb({ success: true });
+        return;
+      }
+
+      // Serial / Group melds opening
+      const minPoints = room.subMode === 'katlamali' ? Math.max(101, room.highestOpenScore + 1) : 101;
+      const validation = validateSerialHandOpening(melds, minPoints, room.okeyTile);
+
+      if (!validation.valid) {
+        if (cb) cb({ error: validation.error || `En az ${minPoints} puan değerinde geçerli perler gereklidir.` });
+        return;
+      }
+
+      // Register melds onto table
+      for (let i = 0; i < melds.length; i++) {
+        const m = melds[i];
+        const meldCheck = validateMeld(m, room.okeyTile);
+        room.openedMelds.push({
+          id: `meld_${Date.now()}_${i}_${user.id}`,
+          playerId: player.id,
+          playerUsername: player.username,
+          type: meldCheck.type || 'run',
+          tiles: [...m],
+          score: meldCheck.score
+        });
+        // Remove from hand
+        for (const t of m) {
+          const idx = player.hand.findIndex((h: any) => h.id === t.id);
+          if (idx !== -1) player.hand.splice(idx, 1);
+        }
+      }
+
+      player.hasOpened = true;
+      player.openedMode = 'serial';
+      player.openedScore = validation.totalScore;
+      player.openedMeldsCount = melds.length;
+
+      if (validation.totalScore > room.highestOpenScore) {
+        room.highestOpenScore = validation.totalScore;
+      }
+
+      room.lastActionMessage = `🎉 ${player.username} ${validation.totalScore} puan ile el açtı!`;
+      broadcast101Room(roomId);
+      if (cb) cb({ success: true, totalScore: validation.totalScore });
+    });
+
+    socket.on("okey101_append_tile", (data: any, cb?: any) => {
+      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      const meldId = data?.meldId || data?.targetMeldId;
+      const tileId = data?.tileId;
+      const position = data?.position;
+
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'playing') {
+        if (cb) cb({ error: "Oyun aktif değil." });
+        return;
+      }
+      const playerIndex = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIndex !== room.currentTurn) {
+        if (cb) cb({ error: "Sıra sizde değil." });
+        return;
+      }
+      const player = room.players[playerIndex];
+      if (!player.hasOpened) {
+        if (cb) cb({ error: "Masaya taş işlemek için önce el açmalısınız." });
+        return;
+      }
+      if (room.turnPhase !== 'discard') {
+        if (cb) cb({ error: "Önce taş çekmelisiniz." });
+        return;
+      }
+
+      const tableMeld = room.openedMelds.find((m: any) => m.id === meldId);
+      if (!tableMeld) {
+        if (cb) cb({ error: "Per bulunamadı." });
+        return;
+      }
+
+      const tileIdx = player.hand.findIndex((t: any) => t.id === tileId);
+      if (tileIdx === -1) {
+        if (cb) cb({ error: "Taş elinizde bulunamadı." });
+        return;
+      }
+      const tile = player.hand[tileIdx];
+
+      const check = canAppendTileToMeld(tile, tableMeld, room.okeyTile);
+      if (!check.canAppend) {
+        if (cb) cb({ error: check.error || "Bu taş seçilen pere işlenemez." });
+        return;
+      }
+
+      const insertAt = position || check.insertAt || 'end';
+      if (insertAt === 'start') {
+        tableMeld.tiles.unshift(tile);
+      } else {
+        tableMeld.tiles.push(tile);
+      }
+
+      player.hand.splice(tileIdx, 1);
+      room.lastActionMessage = `${player.username} masadaki pere taş işledi.`;
+      broadcast101Room(roomId);
+      if (cb) cb({ success: true });
+    });
+
+    socket.on("okey101_declare_finish", (data: any, cb?: any) => {
+      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      const room = okey101Rooms.get(roomId);
+      if (!room || room.status !== 'playing') return;
+      const playerIndex = room.players.findIndex((p: any) => p.id === user.id);
+      if (playerIndex !== room.currentTurn) {
+        if (cb) cb({ error: "Sıra sizde değil." });
+        return;
+      }
+      const player = room.players[playerIndex];
+      if (player.hand.length > 1) {
+        if (cb) cb({ error: `Bitirmek için elinizde sadece 1 bitiş taşı kalmalıdır (Elinizdeki taş: ${player.hand.length}).` });
+        return;
+      }
+
+      const finalTile = player.hand.pop();
+      if (finalTile) player.discardPile.push(finalTile);
+      const finishedWithOkey = finalTile ? isTileOkey101(finalTile, room.okeyTile) : false;
+      end101Game(roomId, player.id, finishedWithOkey, `${player.username} elini bitirdi ve oyunu kazandı! 🏆`);
+      if (cb) cb({ success: true });
+    });
+
+    const handleOkey101Chat = (data: any) => {
+      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      const text = data?.text || data?.message;
+      if (!roomId || !text || !text.trim()) return;
+      const newMsg = {
+        id: `chat_${Date.now()}_${Math.random()}`,
+        userId: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        color: user.color,
+        text: text.trim().substring(0, 150),
+        createdAt: new Date().toISOString()
+      };
+      io.to(`okey101_${roomId}`).emit("okey101_new_table_message", newMsg);
+      io.to(`okey101_${roomId}`).emit("okey101_chat_message", newMsg);
+      io.to(roomId).emit("okey101_new_table_message", newMsg);
+      io.to(roomId).emit("okey101_chat_message", newMsg);
+    };
+
+    socket.on("okey101_send_chat", handleOkey101Chat);
+    socket.on("send_okey101_table_message", handleOkey101Chat);
+
     socket.on("disconnect", async () => {
       try {
         (socket as any).leaveAll?.();
@@ -4587,6 +5777,29 @@ async function startServer() {
             broadcastOkeyRoom(roomId);
           }
           emitRooms();
+        }
+      }
+
+      const okey101RoomId = socket.data.currentOkey101Room;
+      if (okey101RoomId) {
+        const room = okey101Rooms.get(okey101RoomId);
+        if (room && room.status === 'waiting') {
+          const wasHost = room.hostId === user.id;
+          room.players = room.players.filter((p: any) => p.id !== user.id);
+          if (room.players.length === 0 || room.players.every((p: any) => p.isBot)) {
+            cleanup101Room(okey101RoomId);
+          } else {
+            if (wasHost) {
+              const nextRealPlayer = room.players.find((p: any) => !p.isBot);
+              if (nextRealPlayer) {
+                room.hostId = nextRealPlayer.id;
+                room.creatorId = nextRealPlayer.id;
+                room.lastActionMessage = `Masa yöneticisi ayrıldı. Yeni yönetici: ${nextRealPlayer.username}`;
+              }
+            }
+            broadcast101Room(okey101RoomId);
+          }
+          emit101RoomsList();
         }
       }
       

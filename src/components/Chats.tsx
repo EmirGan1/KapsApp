@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
 import { Friend, Message, MediaModalData } from "../types";
-import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile, FileText, Download, Paperclip, Maximize2, Trash2 } from "lucide-react";
+import { Send, Image as ImageIcon, Mic, Users, Plus, X, Reply, Smile, FileText, Download, Paperclip, Maximize2, Trash2, Loader2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { getApiUrl } from "../utils/api";
+import { compressImage } from "../utils/imageCompressor";
 
 type Group = {
   id: number;
@@ -39,6 +40,7 @@ export default function Chats({
   const [groups, setGroups] = useState<Group[]>([]);
   const [activeTab, setActiveTab] = useState<"friends" | "groups">("friends");
   const [activeChat, setActiveChat] = useState<Friend | Group | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   const activeChatRef = useRef<Friend | Group | null>(null);
   const activeTabRef = useRef<"friends" | "groups">("friends");
@@ -350,14 +352,20 @@ export default function Chats({
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !activeChat || !socket) return;
-    const formData = new FormData();
-    formData.append("file", file);
+    const rawFile = e.target.files?.[0];
+    if (!rawFile || !activeChat || !socket) return;
+    setIsUploading(true);
     try {
+      let fileToUpload = rawFile;
+      if (rawFile.type.startsWith("image/")) {
+        const compressed = await compressImage(rawFile, { maxWidth: 1920, maxHeight: 1080, quality: 0.85 });
+        fileToUpload = compressed.file;
+      }
+      const formData = new FormData();
+      formData.append("file", fileToUpload);
       const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
       const data = await res.json();
-      if (res.ok) {
+      if (res.ok && data.url) {
         const payload = {
           type: data.media_type,
           content: data.url,
@@ -375,6 +383,7 @@ export default function Chats({
     } catch (err) { 
       console.error("File upload error:", err); 
     } finally {
+      setIsUploading(false);
       e.target.value = '';
     }
   };
@@ -449,29 +458,37 @@ export default function Chats({
   };
 
   const handleDeleteMessage = (messageId: number) => {
-    if (window.confirm("Bu mesajı silmek istediğinize emin misiniz?")) {
-      const idStr = String(messageId);
-      setMessages(prev => prev.filter(m => String(m.id) !== idStr));
-      if (socket) {
-        socket.emit("delete_message", { 
-          message_id: messageId, 
-          id: messageId,
-          type: activeTab === "friends" ? "private" : "group",
-          receiver: activeTab === "friends" ? (activeChat as Friend)?.id : undefined,
-          group_id: activeTab === "groups" ? (activeChat as Group)?.id : undefined
-        }, (res: any) => {
-          if (res?.error) {
-            alert(res.error);
-            if (activeChat) {
-              if (activeTab === "friends") {
-                socket.emit("get_messages", activeChat.id, setMessages);
-              } else {
-                socket.emit("get_group_messages", activeChat.id, setMessages);
-              }
+    const idStr = String(messageId);
+    setMessages(prev => prev.filter(m => String(m.id) !== idStr));
+    
+    if (socket) {
+      socket.emit("delete_message", { 
+        message_id: messageId, 
+        id: messageId,
+        messageId: messageId,
+        type: activeTab === "friends" ? "private" : "group",
+        receiver: activeTab === "friends" ? (activeChat as Friend)?.id : undefined,
+        group_id: activeTab === "groups" ? (activeChat as Group)?.id : undefined
+      }, (res: any) => {
+        if (res?.error) {
+          console.error("delete_message error:", res.error);
+          if (activeChat) {
+            if (activeTab === "friends") {
+              socket.emit("get_messages", activeChat.id, setMessages);
+            } else {
+              socket.emit("get_group_messages", activeChat.id, setMessages);
             }
           }
-        });
-      }
+        }
+      });
+    }
+
+    const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
+    if (token) {
+      fetch(getApiUrl(`/api/messages/${messageId}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      }).catch(() => {});
     }
   };
 
@@ -881,16 +898,25 @@ export default function Chats({
                   <Paperclip size={20} className="sm:w-[22px] sm:h-[22px]" />
                   <input type="file" accept="*/*" className="hidden" onChange={handleFileUpload} />
                 </label>
-                <form onSubmit={handleSendText} className="flex-1 relative min-w-0">
-                  <input 
-                    type="text" 
-                    placeholder="Mesaj yazın... (maks 1000)" 
-                    maxLength={1000}
-                    className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl shadow-sm text-sm sm:text-[15px]"
-                    value={text}
-                    onChange={handleTyping}
-                  />
-                </form>
+                <div className="flex-1 relative min-w-0">
+                  {isUploading ? (
+                    <div className="w-full bg-white dark:bg-slate-800 border border-blue-400 dark:border-blue-500 py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl shadow-sm text-sm text-blue-600 dark:text-blue-400 font-medium flex items-center gap-2 animate-pulse">
+                      <Loader2 size={16} className="animate-spin" />
+                      <span>Fotoğraf sıkıştırılıyor ve yükleniyor...</span>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleSendText}>
+                      <input 
+                        type="text" 
+                        placeholder="Mesaj yazın... (maks 1000)" 
+                        maxLength={1000}
+                        className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl shadow-sm text-sm sm:text-[15px]"
+                        value={text}
+                        onChange={handleTyping}
+                      />
+                    </form>
+                  )}
+                </div>
                 {text.trim() ? (
                   <button onClick={handleSendText} className="p-2.5 sm:p-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors shadow-md shrink-0">
                     <Send size={18} className="sm:w-5 sm:h-5" />

@@ -5,6 +5,7 @@ import { Heart, MessageCircle, ImagePlus, Plus, Send, Film, Maximize2, Trash2, L
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
 import { getApiUrl } from "../utils/api";
+import { compressImage } from "../utils/imageCompressor";
 
 export default function Feed({
   socket,
@@ -19,6 +20,7 @@ export default function Feed({
   onUserClick?: (id: number) => void;
   activeSubject?: string | null;
 }) {
+  const isAdmin = currentUsername?.toLowerCase() === 'emirhan' || currentUsername?.toLowerCase() === 'admin' || currentUserId === 1;
   const [posts, setPosts] = useState<Post[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
 
@@ -74,7 +76,9 @@ export default function Feed({
       
       const onPostDeleted = (data: any) => {
         const deletedId = Number(data?.postId || data?.id || data);
-        setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+        if (!isNaN(deletedId)) {
+          setPosts((prev) => prev.filter((p) => Number(p.id) !== deletedId));
+        }
       };
       socket.on("post_deleted", onPostDeleted);
 
@@ -120,14 +124,21 @@ export default function Feed({
     }
   }, [posts, comments, activeCommentsPostId]);
 
-  const handleMediaSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMediaSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setNewPostMedia(file);
     if (file.type.startsWith("video/")) {
+      setNewPostMedia(file);
       setNewPostMediaType("video");
     } else {
-      setNewPostMediaType("image");
+      try {
+        const compressed = await compressImage(file, { maxWidth: 1920, maxHeight: 1080, quality: 0.85 });
+        setNewPostMedia(compressed.file);
+        setNewPostMediaType("image");
+      } catch {
+        setNewPostMedia(file);
+        setNewPostMediaType("image");
+      }
     }
   };
 
@@ -258,15 +269,23 @@ export default function Feed({
   };
 
   const handleStoryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0] || !socket) return;
-    const formData = new FormData();
-    formData.append("file", e.target.files[0]);
+    const rawFile = e.target.files?.[0];
+    if (!rawFile || !socket) return;
     try {
+      let fileToUpload = rawFile;
+      if (rawFile.type.startsWith("image/")) {
+        const compressed = await compressImage(rawFile, { maxWidth: 1920, maxHeight: 1080, quality: 0.85 });
+        fileToUpload = compressed.file;
+      }
+      const formData = new FormData();
+      formData.append("file", fileToUpload);
       const res = await fetch(getApiUrl("/api/upload"), { method: "POST", body: formData });
       const data = await res.json();
-      socket.emit("create_story", data.url);
+      if (data.url) {
+        socket.emit("create_story", data.url);
+      }
     } catch (err) {
-      console.error(err);
+      console.error("Story upload error:", err);
     } finally {
       e.target.value = "";
     }
@@ -277,30 +296,55 @@ export default function Feed({
   };
 
   const handleDeletePost = async (postId: number) => {
-    if (window.confirm("Bu gönderiyi silmek istediğinize emin misiniz?")) {
-      // Optimistically remove from state immediately
-      setPosts((prev) => prev.filter((p) => p.id !== postId));
+    // Optimistically and immediately remove from local state
+    const targetId = Number(postId);
+    setPosts((prev) => prev.filter((p) => Number(p.id) !== targetId));
+    if (activeModalData && Number(activeModalData.postId) === targetId) {
+      setActiveModalData(null);
+    }
 
-      if (socket) {
-        socket.emit("delete_post", postId, (res: any) => {
-          if (res?.error) {
-            alert(res.error);
-            socket.emit("get_feed", activeSubject || null, (data: Post[]) => setPosts(data));
-          }
-        });
-      }
-
-      const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
-      if (token) {
-        try {
-          await fetch(getApiUrl(`/api/posts/${postId}`), {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-          });
-        } catch (e) {
-          // Socket handles the deletion
+    if (socket) {
+      socket.emit("delete_post", targetId, (res: any) => {
+        if (res?.error) {
+          console.error("delete_post socket error:", res.error);
+          socket.emit("get_feed", activeSubject || null, (data: Post[]) => setPosts(data));
         }
+      });
+    }
+
+    const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
+    if (token) {
+      try {
+        const res = await fetch(getApiUrl(`/api/posts/${targetId}`), {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          setPosts((prev) => prev.filter((p) => Number(p.id) !== targetId));
+        }
+      } catch (e) {
+        // Socket handles the deletion
       }
+    }
+  };
+
+  const handleDeleteComment = async (commentId: number, postId: number) => {
+    setComments((prev) => prev.filter((c) => Number(c.id) !== Number(commentId)));
+    if (socket) {
+      socket.emit("delete_comment", { commentId, postId }, (res: any) => {
+        if (res?.error) {
+          console.error("delete_comment error:", res.error);
+          socket.emit("get_comments", postId, (data: Comment[]) => setComments(data));
+        }
+      });
+    }
+
+    const token = localStorage.getItem("lan_token") || localStorage.getItem("token");
+    if (token) {
+      fetch(getApiUrl(`/api/comments/${commentId}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
     }
   };
 
@@ -632,14 +676,26 @@ export default function Feed({
                           >
                             <Avatar url={c.avatar} name={c.username} color={c.color} size={6} />
                           </div>
-                          <div className="bg-white dark:bg-slate-800 p-2.5 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex-1 transition-colors duration-200">
-                            <div
-                              className="font-semibold text-xs text-slate-800 dark:text-slate-200 cursor-pointer hover:underline inline-block"
-                              onClick={() => onUserClick && onUserClick(c.user_id)}
-                            >
-                              {c.username}
+                          <div className="bg-white dark:bg-slate-800 p-2.5 rounded-xl shadow-sm border border-slate-100 dark:border-slate-700 flex-1 transition-colors duration-200 group relative">
+                            <div className="flex items-center justify-between">
+                              <div
+                                className="font-semibold text-xs text-slate-800 dark:text-slate-200 cursor-pointer hover:underline inline-block"
+                                onClick={() => onUserClick && onUserClick(c.user_id)}
+                              >
+                                {c.username}
+                              </div>
+                              {(c.user_id === currentUserId || isAdmin) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteComment(c.id, post.id)}
+                                  className="text-slate-400 hover:text-red-500 opacity-80 hover:opacity-100 p-0.5 rounded transition-colors"
+                                  title="Yorumu Sil"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
                             </div>
-                            <div className="text-sm text-slate-600 dark:text-slate-300 break-words leading-relaxed">
+                            <div className="text-sm text-slate-600 dark:text-slate-300 break-words leading-relaxed mt-0.5">
                               {c.content}
                             </div>
                           </div>

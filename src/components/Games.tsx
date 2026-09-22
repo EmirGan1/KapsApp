@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Gamepad2, Users, ChevronRight, Trophy, Sparkles, Bot, ShieldCheck, Crown, Medal, RefreshCw, Palette, Pencil } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import OkeyGame from './OkeyGame';
+import Okey101Board from './Okey101Board';
 import UnoGame from './UnoGame';
 import DrawGuessGame from './DrawGuessGame';
 import Avatar from './Avatar';
@@ -22,6 +23,7 @@ interface LeaderboardUser {
   avatar: string | null;
   color?: string | null;
   okey_wins: number;
+  okey101_wins?: number;
   uno_wins: number;
 }
 
@@ -33,8 +35,9 @@ export default function Games({
   color,
   onUserClick
 }: GamesProps) {
-  const [selectedGame, setSelectedGame] = useState<'hub' | 'okey' | 'uno' | 'drawguess'>('hub');
+  const [selectedGame, setSelectedGame] = useState<'hub' | 'okey' | 'okey101' | 'uno' | 'drawguess'>('hub');
   const [okeyRoomCount, setOkeyRoomCount] = useState<number>(0);
+  const [okey101RoomCount, setOkey101RoomCount] = useState<number>(0);
   const [unoRoomCount, setUnoRoomCount] = useState<number>(0);
   const [drawguessRoomCount, setDrawguessRoomCount] = useState<number>(0);
 
@@ -80,6 +83,16 @@ export default function Games({
       }
     };
 
+    // Check 101 Okey presence
+    const onOkey101Rooms = (rooms: any[]) => {
+      setOkey101RoomCount(rooms.length);
+    };
+    const onOkey101State = (state: any) => {
+      if (state && state.id) {
+        setSelectedGame('okey101');
+      }
+    };
+
     // Check UNO presence
     const onUnoRooms = (rooms: any[]) => {
       setUnoRoomCount(rooms.length);
@@ -97,12 +110,16 @@ export default function Games({
 
     socket.on("okey_rooms_list", onOkeyRooms);
     socket.on("okey_state", onOkeyState);
+    socket.on("okey101_rooms_list", onOkey101Rooms);
+    socket.on("okey101_state", onOkey101State);
     socket.on("uno_rooms_list", onUnoRooms);
     socket.on("uno_state", onUnoState);
     socket.on("drawguess_rooms_list", onDrawGuessRooms);
 
     socket.emit("get_okey_rooms");
     socket.emit("get_my_okey_room");
+    socket.emit("get_okey101_rooms");
+    socket.emit("get_my_okey101_room");
     socket.emit("get_uno_rooms");
     socket.emit("get_my_uno_room");
     socket.emit("get_drawguess_rooms");
@@ -115,6 +132,8 @@ export default function Games({
     return () => {
       socket.off("okey_rooms_list", onOkeyRooms);
       socket.off("okey_state", onOkeyState);
+      socket.off("okey101_rooms_list", onOkey101Rooms);
+      socket.off("okey101_state", onOkey101State);
       socket.off("uno_rooms_list", onUnoRooms);
       socket.off("uno_state", onUnoState);
       socket.off("drawguess_rooms_list", onDrawGuessRooms);
@@ -125,6 +144,20 @@ export default function Games({
   if (selectedGame === 'okey') {
     return (
       <OkeyGame 
+        socket={socket}
+        currentUserId={currentUserId}
+        username={username}
+        avatar={avatar}
+        color={color}
+        onBackToHub={() => setSelectedGame('hub')}
+      />
+    );
+  }
+
+  // Route to 101 Okey
+  if (selectedGame === 'okey101') {
+    return (
+      <Okey101Board 
         socket={socket}
         currentUserId={currentUserId}
         username={username}
@@ -182,7 +215,7 @@ export default function Games({
         </div>
 
         {/* Game Selection Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
           
           {/* Card 1: Klasik Okey */}
           <div 
@@ -263,7 +296,86 @@ export default function Games({
             </div>
           </div>
 
-          {/* Card 2: UNO */}
+          {/* Card 2: 101 Okey (Yüzbir) */}
+          <div 
+            onClick={() => setSelectedGame('okey101')}
+            className="group relative cursor-pointer overflow-hidden rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-amber-500 dark:hover:border-amber-500 shadow-lg hover:shadow-2xl transition-all duration-300 flex flex-col justify-between transform hover:-translate-y-1"
+          >
+            {/* Top decorative gradient */}
+            <div className="h-2.5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500" />
+            
+            <div className="p-6 sm:p-7 space-y-5">
+              
+              {/* Header inside card */}
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shadow-sm group-hover:scale-110 transition-transform">
+                    <span className="font-black text-2xl">💯</span>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900 dark:text-slate-100 group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
+                      101 Okey
+                    </h2>
+                    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                      Katlamalı & Katlamasız Masalar
+                    </span>
+                  </div>
+                </div>
+
+                <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                  {okey101RoomCount > 0 ? `${okey101RoomCount} Masa Aktif` : 'Canlı Lobi'}
+                </span>
+              </div>
+
+              {/* Visual preview: 101 Okey tile rack mockup */}
+              <div className="bg-amber-950/20 border border-amber-800/30 rounded-2xl p-3 flex items-center justify-center gap-1.5 shadow-inner">
+                {[
+                  { n: '10', c: 'text-blue-500' },
+                  { n: '11', c: 'text-blue-500' },
+                  { n: '12', c: 'text-blue-500' },
+                  { n: '|', c: 'text-slate-400 font-normal' },
+                  { n: '8', c: 'text-red-500' },
+                  { n: '8', c: 'text-yellow-500' },
+                  { n: '8', c: 'text-emerald-500' },
+                ].map((tile, i) => (
+                  <div 
+                    key={i}
+                    className={`w-7 h-10 rounded-md ${tile.n === '|' ? 'bg-transparent border-0 w-2' : 'bg-amber-50 dark:bg-[#fff9e6] border border-amber-300 shadow flex flex-col items-center justify-center font-bold text-xs transform group-hover:-translate-y-0.5 transition-transform'}`}
+                  >
+                    <span className={tile.c}>{tile.n}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Feature bullets */}
+              <ul className="text-xs text-slate-600 dark:text-slate-300 space-y-2">
+                <li className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span><strong>101 Puan / 5 Çift Barajı:</strong> Seri ve çift kombinasyonlarıyla masaya el açma</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span><strong>Per İşleme & Yan Taş:</strong> Masadaki perlere taş işleme ve yan taştan el açma</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span><strong>Katlamalı Mod & Ceza:</strong> 101 ceza puanı ve işler taş kontrolü</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Action footer */}
+            <div className="p-5 bg-slate-50 dark:bg-slate-900/70 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <Users size={14} /> 4 Kişi
+              </span>
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-600 group-hover:bg-amber-500 text-white font-bold text-xs transition-colors shadow-md shadow-amber-900/20">
+                101 Lobisine Gir <ChevronRight size={16} />
+              </div>
+            </div>
+          </div>
+
+          {/* Card 3: UNO */}
           <div 
             onClick={() => setSelectedGame('uno')}
             className="group relative cursor-pointer overflow-hidden rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-rose-500 dark:hover:border-rose-500 shadow-lg hover:shadow-2xl transition-all duration-300 flex flex-col justify-between transform hover:-translate-y-1"
@@ -614,7 +726,9 @@ export default function Games({
           </div>
           <div className="flex items-center gap-4 shrink-0 font-semibold text-slate-700 dark:text-slate-300">
             <span>🀄 Klasik Okey</span>
+            <span>💯 101 Okey</span>
             <span>🎴 Resmi UNO</span>
+            <span>🎨 Çiz Bakalım</span>
           </div>
         </div>
 

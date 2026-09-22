@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { X, Heart, Send, Download, MessageCircle, Calendar, Film, Image as ImageIcon } from "lucide-react";
+import { X, Heart, Send, Download, MessageCircle, Calendar, Film, Image as ImageIcon, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import Avatar from "./Avatar";
 import { MediaModalData } from "../types";
 
@@ -11,6 +11,15 @@ interface MediaModalProps {
 
 export default function MediaModal({ data, onClose, onUserClick }: MediaModalProps) {
   const [commentText, setCommentText] = useState("");
+  const [zoomScale, setZoomScale] = useState(1);
+
+  useEffect(() => {
+    setZoomScale(1);
+  }, [data?.url]);
+
+  const handleZoomIn = () => setZoomScale((s) => Math.min(s + 0.35, 3.5));
+  const handleZoomOut = () => setZoomScale((s) => Math.max(s - 0.35, 0.6));
+  const handleResetZoom = () => setZoomScale(1);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -69,12 +78,19 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
               className="max-h-full max-w-full object-contain"
             />
           ) : (
-            <img
-              src={data.url}
-              alt={data.caption || "Medya"}
-              referrerPolicy="no-referrer"
-              className="max-h-full max-w-full object-contain select-auto"
-            />
+            <div className="w-full h-full flex items-center justify-center overflow-auto p-2">
+              <img
+                src={data.url}
+                alt={data.caption || "Medya"}
+                referrerPolicy="no-referrer"
+                style={{
+                  transform: `scale(${zoomScale})`,
+                  transition: "transform 0.15s ease-out",
+                  transformOrigin: "center center",
+                }}
+                className="max-h-full max-w-full object-contain select-auto"
+              />
+            </div>
           )}
 
           {/* Media type badge */}
@@ -82,6 +98,38 @@ export default function MediaModal({ data, onClose, onUserClick }: MediaModalPro
             {data.type === "video" ? <Film size={13} /> : <ImageIcon size={13} />}
             <span className="capitalize">{data.type === "video" ? "Video" : "Fotoğraf"}</span>
           </div>
+
+          {/* Zoom controls for photos */}
+          {data.type !== "video" && (
+            <div className="absolute bottom-3 left-3 bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white text-xs px-2 py-1 rounded-full flex items-center gap-1 transition-colors">
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                disabled={zoomScale <= 0.6}
+                className="p-1 hover:text-blue-400 disabled:opacity-40 cursor-pointer"
+                title="Küçült"
+              >
+                <ZoomOut size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={handleResetZoom}
+                className="px-1 text-[11px] font-mono hover:text-blue-400 cursor-pointer"
+                title="Sıfırla"
+              >
+                %{Math.round(zoomScale * 100)}
+              </button>
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                disabled={zoomScale >= 3.5}
+                className="p-1 hover:text-blue-400 disabled:opacity-40 cursor-pointer"
+                title="Büyüt"
+              >
+                <ZoomIn size={16} />
+              </button>
+            </div>
+          )}
 
           {/* Quick download button on media */}
           <a
