@@ -64,6 +64,7 @@ export interface Okey101RoomState {
   currentTurn: number;
   turnPhase: 'draw' | 'discard';
   highestOpenScore: number; // In katlamalı, next opener must exceed this
+  highestPairsCount?: number; // In katlamalı, next pair opener must exceed this
   openedMelds: Okey101Meld[];
   turnTimeRemaining: number;
   roundNumber: number;
@@ -326,14 +327,16 @@ export const isValidPair = (tile1: Tile101, tile2: Tile101, okeyRef?: Tile101 | 
 
 /**
  * Validate Pair Opening (Çift Açma):
- * Must have at least 5 valid pairs (10 tiles).
+ * Must have at least 5 valid pairs (10 tiles). In katlamalı, must exceed highestPairsCount.
  */
 export const validatePairOpening = (
   pairs: Tile101[][],
-  okeyRef?: Tile101 | null
+  okeyRef?: Tile101 | null,
+  minPairsNeeded: number = 5
 ): { valid: boolean; error?: string } => {
-  if (!pairs || pairs.length < 5) {
-    return { valid: false, error: 'Çift açmak için en az 5 çift (10 taş) gereklidir.' };
+  const minRequired = Math.max(5, minPairsNeeded || 5);
+  if (!pairs || pairs.length < minRequired) {
+    return { valid: false, error: `Çift açmak için en az ${minRequired} çift (${minRequired * 2} taş) gereklidir.` };
   }
 
   for (let i = 0; i < pairs.length; i++) {
@@ -479,59 +482,93 @@ export const checkIslerTas = (
 };
 
 /**
- * Calculate round end penalties:
- * - Unopened players: +202 (or +404 if opened double)
- * - Opened players: sum of values of remaining tiles in hand
- * - Winner: -101
- * - Okey finish: multiplies all opponents' penalties by 2
+ * Calculate round end penalties according to official 101 Okey rules:
+ * - Winner: -101 (or -202 if finished with Okey or by Double)
+ * - Unopened players: +202 (plus +101 for each Okey left in hand)
+ * - Opened players: sum of values of remaining tiles in hand (plus +101 for each Okey left in hand)
+ * - Double openers (Çift açanlar): penalty is multiplied by 2 (hand sum x2, Okey left x2)
+ * - Okey finish or Double finish by winner: multiplies all opponents' penalties by 2 (x2)
  */
 export const calculateRoundPenalties = (
   players: Okey101Player[],
   winnerId: number,
   finishedWithOkey: boolean,
-  okeyRef?: Tile101 | null
+  okeyRef?: Tile101 | null,
+  finishedWithDouble: boolean = false
 ): { [playerId: number]: { roundScore: number; reason: string } } => {
   const result: { [playerId: number]: { roundScore: number; reason: string } } = {};
 
+  const winner = players.find((p) => p.id === winnerId);
+  const isDoubleWin = finishedWithDouble || (winner && winner.openedMode === 'double');
+
   for (const p of players) {
     if (p.id === winnerId) {
-      // Winner gets -101 bonus (or 0)
-      result[p.id] = {
-        roundScore: -101,
-        reason: finishedWithOkey ? 'Okey ile bitirdi! (-101 puan)' : 'Eli bitirdi! (-101 puan)',
-      };
+      if (finishedWithOkey && isDoubleWin) {
+        result[p.id] = {
+          roundScore: -202,
+          reason: 'Çifte giderek Okey ile bitirdi! (-202 puan)',
+        };
+      } else if (finishedWithOkey) {
+        result[p.id] = {
+          roundScore: -202,
+          reason: 'Okey atarak bitirdi! (-202 puan)',
+        };
+      } else if (isDoubleWin) {
+        result[p.id] = {
+          roundScore: -202,
+          reason: 'Çifte giderek bitirdi! (-202 puan)',
+        };
+      } else {
+        result[p.id] = {
+          roundScore: -101,
+          reason: 'Eli normal bitirdi (-101 puan)',
+        };
+      }
       continue;
     }
 
     let penalty = 0;
     let reason = '';
 
+    // Check count of unplayed real Okeys left in hand (+101 penalty per Okey)
+    const okeysInHand = p.hand ? p.hand.filter((t) => isTileOkey(t, okeyRef)).length : 0;
+    const okeyPenalty = okeysInHand * 101;
+
     if (!p.hasOpened) {
-      // Did not open at all: +202
-      penalty = 202;
-      reason = 'El açamadı (+202 ceza)';
+      // Unopened: +202 base penalty
+      penalty = 202 + okeyPenalty;
+      reason = okeysInHand > 0
+        ? `El açamadı (+202) + Elde ${okeysInHand} Okey kaldı (+${okeyPenalty})`
+        : 'El açamadı (+202 ceza)';
     } else if (p.openedMode === 'double') {
-      // Opened pairs/double: hand sum x 2 (or 404 if unopened)
-      const handSum = p.hand.reduce((sum, t) => {
-        if (isTileOkey(t, okeyRef)) return sum + 10;
-        return sum + t.number;
+      // Opened double (Çift açanlar): Hand sum x 2 + Okey left x 2
+      const handSum = (p.hand || []).reduce((sum, t) => {
+        if (isTileOkey(t, okeyRef)) return sum;
+        return sum + (t.number || 0);
       }, 0);
-      penalty = handSum * 2;
-      reason = `Çift açan oyuncunun kalan taşları x 2 (${penalty} ceza)`;
+      penalty = (handSum * 2) + (okeyPenalty * 2);
+      reason = okeysInHand > 0
+        ? `Çift açan eldeki taşlar x2 (${handSum * 2}) + Elde Okey x2 (+${okeyPenalty * 2})`
+        : `Çift açan oyuncunun kalan taşları x2 (${handSum * 2} ceza)`;
     } else {
-      // Opened serial: sum of remaining tiles in hand
-      const handSum = p.hand.reduce((sum, t) => {
-        if (isTileOkey(t, okeyRef)) return sum + 10;
-        return sum + t.number;
+      // Opened serial: Sum of remaining tiles in hand + Okey penalty
+      const handSum = (p.hand || []).reduce((sum, t) => {
+        if (isTileOkey(t, okeyRef)) return sum;
+        return sum + (t.number || 0);
       }, 0);
-      penalty = handSum;
-      reason = `Eldeki kalan taşlar toplamı (${penalty} ceza)`;
+      penalty = handSum + okeyPenalty;
+      reason = okeysInHand > 0
+        ? `Kalan taşlar (${handSum}) + Elde ${okeysInHand} Okey kaldı (+${okeyPenalty})`
+        : `Eldeki kalan taşlar toplamı (${handSum} ceza)`;
     }
 
     // Multiply by 2 if winner finished with Okey
     if (finishedWithOkey) {
       penalty *= 2;
       reason += ' (Okey ile bitiş x2)';
+    } else if (isDoubleWin) {
+      penalty *= 2;
+      reason += ' (Çifte giderek bitiş x2)';
     }
 
     result[p.id] = { roundScore: penalty, reason };
@@ -541,7 +578,8 @@ export const calculateRoundPenalties = (
 };
 
 /**
- * Auto-find best runs and groups in player's hand and calculate potential meld score
+ * Auto-find best runs and groups in player's hand and calculate potential meld score.
+ * Tests multiple extraction orders (runs-first vs groups-first) and selects the partition with the maximum score.
  */
 export const findBestMeldsInHand = (
   hand: Tile101[],
@@ -549,86 +587,123 @@ export const findBestMeldsInHand = (
 ): { melds: Tile101[][]; totalScore: number; unmelded: Tile101[] } => {
   if (!hand || hand.length === 0) return { melds: [], totalScore: 0, unmelded: [] };
 
-  const available = [...hand];
-  const melds: Tile101[][] = [];
-  let totalScore = 0;
+  const solveMelds = (prioritizeRuns: boolean) => {
+    const available = [...hand];
+    const melds: Tile101[][] = [];
+    let totalScore = 0;
 
-  // 1. Group by color to find runs
-  const colors: TileColor[] = ['red', 'blue', 'black', 'yellow'];
-  for (const c of colors) {
-    const colorTiles = available.filter((t) => t.color === c && !isTileOkey(t, okeyRef));
-    // Sort ascending
-    colorTiles.sort((a, b) => a.number - b.number);
+    const findRuns = () => {
+      const colors: TileColor[] = ['red', 'blue', 'black', 'yellow'];
+      for (const c of colors) {
+        const colorTiles = available.filter((t) => t.color === c && !isTileOkey(t, okeyRef));
+        colorTiles.sort((a, b) => a.number - b.number);
 
-    // Find consecutive runs
-    let currentRun: Tile101[] = [];
-    for (let i = 0; i < colorTiles.length; i++) {
-      if (currentRun.length === 0) {
-        currentRun.push(colorTiles[i]);
-      } else {
-        const last = currentRun[currentRun.length - 1];
-        if (colorTiles[i].number === last.number + 1) {
-          currentRun.push(colorTiles[i]);
-        } else if (colorTiles[i].number === last.number) {
-          // Duplicate, skip for now
-          continue;
-        } else {
-          if (currentRun.length >= 3) {
-            const check = isValidRun(currentRun, okeyRef);
-            if (check.valid) {
-              melds.push([...currentRun]);
-              totalScore += check.score;
-              // Remove from available
-              for (const t of currentRun) {
-                const idx = available.findIndex((at) => at.id === t.id);
-                if (idx !== -1) available.splice(idx, 1);
-              }
+        // Check for wrapping runs (11-12-13-1 or 12-13-1)
+        const hasOne = colorTiles.find((t) => t.number === 1);
+        const hasThirteen = colorTiles.find((t) => t.number === 13);
+        const hasTwelve = colorTiles.find((t) => t.number === 12);
+        const hasEleven = colorTiles.find((t) => t.number === 11);
+
+        if (hasOne && hasThirteen && hasTwelve) {
+          const wrapRun = hasEleven
+            ? [hasEleven, hasTwelve, hasThirteen, hasOne]
+            : [hasTwelve, hasThirteen, hasOne];
+          const check = isValidRun(wrapRun, okeyRef);
+          if (check.valid) {
+            melds.push([...wrapRun]);
+            totalScore += check.score;
+            for (const t of wrapRun) {
+              const idx = available.findIndex((at) => at.id === t.id);
+              if (idx !== -1) available.splice(idx, 1);
             }
           }
-          currentRun = [colorTiles[i]];
+        }
+
+        // Standard consecutive runs
+        const remainingColorTiles = available.filter((t) => t.color === c && !isTileOkey(t, okeyRef));
+        remainingColorTiles.sort((a, b) => a.number - b.number);
+
+        let currentRun: Tile101[] = [];
+        for (let i = 0; i < remainingColorTiles.length; i++) {
+          if (currentRun.length === 0) {
+            currentRun.push(remainingColorTiles[i]);
+          } else {
+            const last = currentRun[currentRun.length - 1];
+            if (remainingColorTiles[i].number === last.number + 1) {
+              currentRun.push(remainingColorTiles[i]);
+            } else if (remainingColorTiles[i].number === last.number) {
+              continue;
+            } else {
+              if (currentRun.length >= 3) {
+                const check = isValidRun(currentRun, okeyRef);
+                if (check.valid) {
+                  melds.push([...currentRun]);
+                  totalScore += check.score;
+                  for (const t of currentRun) {
+                    const idx = available.findIndex((at) => at.id === t.id);
+                    if (idx !== -1) available.splice(idx, 1);
+                  }
+                }
+              }
+              currentRun = [remainingColorTiles[i]];
+            }
+          }
+        }
+        if (currentRun.length >= 3) {
+          const check = isValidRun(currentRun, okeyRef);
+          if (check.valid) {
+            melds.push([...currentRun]);
+            totalScore += check.score;
+            for (const t of currentRun) {
+              const idx = available.findIndex((at) => at.id === t.id);
+              if (idx !== -1) available.splice(idx, 1);
+            }
+          }
         }
       }
-    }
-    if (currentRun.length >= 3) {
-      const check = isValidRun(currentRun, okeyRef);
-      if (check.valid) {
-        melds.push([...currentRun]);
-        totalScore += check.score;
-        for (const t of currentRun) {
-          const idx = available.findIndex((at) => at.id === t.id);
-          if (idx !== -1) available.splice(idx, 1);
+    };
+
+    const findGroups = () => {
+      for (let num = 13; num >= 1; num--) {
+        const numTiles = available.filter((t) => t.number === num && !isTileOkey(t, okeyRef));
+        const uniqueColorTiles: Tile101[] = [];
+        const usedColors = new Set<TileColor>();
+        for (const t of numTiles) {
+          if (!usedColors.has(t.color)) {
+            usedColors.add(t.color);
+            uniqueColorTiles.push(t);
+          }
+        }
+
+        if (uniqueColorTiles.length >= 3) {
+          const check = isValidGroup(uniqueColorTiles, okeyRef);
+          if (check.valid) {
+            melds.push(uniqueColorTiles);
+            totalScore += check.score;
+            for (const t of uniqueColorTiles) {
+              const idx = available.findIndex((at) => at.id === t.id);
+              if (idx !== -1) available.splice(idx, 1);
+            }
+          }
         }
       }
-    }
-  }
+    };
 
-  // 2. Group by number to find groups (different colors)
-  for (let num = 1; num <= 13; num++) {
-    const numTiles = available.filter((t) => t.number === num && !isTileOkey(t, okeyRef));
-    // Filter distinct colors
-    const uniqueColorTiles: Tile101[] = [];
-    const usedColors = new Set<TileColor>();
-    for (const t of numTiles) {
-      if (!usedColors.has(t.color)) {
-        usedColors.add(t.color);
-        uniqueColorTiles.push(t);
-      }
+    if (prioritizeRuns) {
+      findRuns();
+      findGroups();
+    } else {
+      findGroups();
+      findRuns();
     }
 
-    if (uniqueColorTiles.length >= 3) {
-      const check = isValidGroup(uniqueColorTiles, okeyRef);
-      if (check.valid) {
-        melds.push(uniqueColorTiles);
-        totalScore += check.score;
-        for (const t of uniqueColorTiles) {
-          const idx = available.findIndex((at) => at.id === t.id);
-          if (idx !== -1) available.splice(idx, 1);
-        }
-      }
-    }
-  }
+    return { melds, totalScore, unmelded: available };
+  };
 
-  return { melds, totalScore, unmelded: available };
+  const solutionA = solveMelds(true);
+  const solutionB = solveMelds(false);
+
+  return solutionA.totalScore >= solutionB.totalScore ? solutionA : solutionB;
 };
 
 /**

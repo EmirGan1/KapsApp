@@ -1560,6 +1560,7 @@ async function startServer() {
       currentTurn: room.currentTurn || 0,
       turnPhase: room.turnPhase || 'draw',
       highestOpenScore: room.highestOpenScore || 101,
+      highestPairsCount: room.highestPairsCount || 5,
       openedMelds: room.openedMelds || [],
       turnTimeRemaining: room.turnTimeRemaining || 30,
       roundNumber: room.roundNumber || 1,
@@ -1791,7 +1792,8 @@ async function startServer() {
           const finalTile = b2.hand.pop();
           if (finalTile) b2.discardPile.push(finalTile);
           const finishedWithOkey = finalTile ? isTileOkey101(finalTile, r2.okeyTile) : false;
-          end101Game(roomId, b2.id, finishedWithOkey, `${b2.username} elini bitirdi ve kazandı! 🏆`);
+          const finishedWithDouble = b2.openedMode === 'double';
+          end101Game(roomId, b2.id, finishedWithOkey, `${b2.username} elini bitirdi ve kazandı! 🏆`, finishedWithDouble);
           return;
         }
 
@@ -1836,7 +1838,7 @@ async function startServer() {
     }, 1200);
   };
 
-  const end101Game = async (roomId: string, winnerId: number, finishedWithOkey: boolean, reason: string) => {
+  const end101Game = async (roomId: string, winnerId: number, finishedWithOkey: boolean, reason: string, finishedWithDouble: boolean = false) => {
     const room = okey101Rooms.get(roomId);
     if (!room) return;
     clearTimeout(room.botTimeout);
@@ -1846,7 +1848,7 @@ async function startServer() {
     room.winnerId = winnerId;
     room.winningReason = reason;
 
-    const penaltySummary = calculateRoundPenalties(room.players, winnerId, finishedWithOkey, room.okeyTile);
+    const penaltySummary = calculateRoundPenalties(room.players, winnerId, finishedWithOkey, room.okeyTile, finishedWithDouble);
     for (const p of room.players) {
       const pen = penaltySummary[p.id];
       if (pen) {
@@ -5441,7 +5443,8 @@ async function startServer() {
       // Check if player won by discarding final tile
       if (player.hand.length === 0) {
         const finishedWithOkey = isTileOkey101(discardedTile, room.okeyTile);
-        end101Game(roomId, player.id, finishedWithOkey, `${player.username} elini bitirdi ve kazandı! 🏆`);
+        const finishedWithDouble = player.openedMode === 'double';
+        end101Game(roomId, player.id, finishedWithOkey, `${player.username} elini bitirdi ve kazandı! 🏆`, finishedWithDouble);
         if (cb) cb({ success: true });
         return;
       }
@@ -5500,9 +5503,10 @@ async function startServer() {
       }
 
       if (mode === 'double') {
-        const validation = validatePairOpening(melds, room.okeyTile);
+        const minPairsNeeded = room.subMode === 'katlamali' && room.highestPairsCount ? room.highestPairsCount + 1 : 5;
+        const validation = validatePairOpening(melds, room.okeyTile, minPairsNeeded);
         if (!validation.valid) {
-          if (cb) cb({ error: validation.error || "Çift açmak için en az 5 çift gereklidir." });
+          if (cb) cb({ error: validation.error || `Çift açmak için en az ${minPairsNeeded} çift gereklidir.` });
           return;
         }
 
@@ -5527,6 +5531,9 @@ async function startServer() {
         player.hasOpened = true;
         player.openedMode = 'double';
         player.openedMeldsCount = melds.length;
+        if (melds.length > (room.highestPairsCount || 0)) {
+          room.highestPairsCount = melds.length;
+        }
         room.lastActionMessage = `✨ ${player.username} ${melds.length} Çift açarak masayı açtı!`;
         broadcast101Room(roomId);
         if (cb) cb({ success: true });
@@ -5607,6 +5614,12 @@ async function startServer() {
         return;
       }
 
+      // 101 Rule: Double openers cannot append to serial melds
+      if (player.openedMode === 'double' && tableMeld.type !== 'pair') {
+        if (cb) cb({ error: "Çift açan oyuncular sadece çift perlere taş işleyebilir." });
+        return;
+      }
+
       const tileIdx = player.hand.findIndex((t: any) => t.id === tileId);
       if (tileIdx === -1) {
         if (cb) cb({ error: "Taş elinizde bulunamadı." });
@@ -5651,7 +5664,8 @@ async function startServer() {
       const finalTile = player.hand.pop();
       if (finalTile) player.discardPile.push(finalTile);
       const finishedWithOkey = finalTile ? isTileOkey101(finalTile, room.okeyTile) : false;
-      end101Game(roomId, player.id, finishedWithOkey, `${player.username} elini bitirdi ve oyunu kazandı! 🏆`);
+      const finishedWithDouble = player.openedMode === 'double';
+      end101Game(roomId, player.id, finishedWithOkey, `${player.username} elini bitirdi ve oyunu kazandı! 🏆`, finishedWithDouble);
       if (cb) cb({ success: true });
     });
 

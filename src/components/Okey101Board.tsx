@@ -215,8 +215,14 @@ export default function Okey101Board({
       : 101
     : 101;
 
+  const minPairsNeeded = currentRoom
+    ? currentRoom.subMode === 'katlamali' && currentRoom.highestPairsCount
+      ? currentRoom.highestPairsCount + 1
+      : 5
+    : 5;
+
   const canOpenSerial = meldAnalysis.totalScore >= minScoreNeeded;
-  const canOpenPairs = pairAnalysis.pairs.length >= 5;
+  const canOpenPairs = pairAnalysis.pairs.length >= minPairsNeeded;
 
   const isMyTurn = currentRoom && currentRoom.status === 'playing'
     ? currentRoom.players[currentRoom.currentTurn]?.id === currentUserId
@@ -309,7 +315,7 @@ export default function Okey101Board({
   const handleOpenPairs = () => {
     if (!socket || !isMyTurn || currentRoom?.turnPhase !== 'discard') return;
     if (!canOpenPairs) {
-      setErrorMessage(`Çift açmak için en az 5 çift gereklidir (Şu an: ${pairAnalysis.pairs.length} çift).`);
+      setErrorMessage(`Çift açmak için en az ${minPairsNeeded} çift gereklidir (Şu an: ${pairAnalysis.pairs.length} çift).`);
       playSound('penalty');
       return;
     }
@@ -323,6 +329,12 @@ export default function Okey101Board({
 
   const handleAppendTileToMeld = (meld: Okey101Meld) => {
     if (!socket || !isMyTurn || !myPlayer?.hasOpened || !selectedTileForAppend) return;
+
+    if (myPlayer.openedMode === 'double' && meld.type !== 'pair') {
+      setErrorMessage("Çift açtığınız için sadece çift perlere taş işleyebilirsiniz.");
+      playSound('penalty');
+      return;
+    }
 
     const check = canAppendTileToMeld(selectedTileForAppend, meld, currentRoom?.okeyTile);
     if (!check.canAppend) {
