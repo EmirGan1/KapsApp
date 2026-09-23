@@ -15,6 +15,7 @@ import {
   checkClassicOkeyWin,
   isTileOkey
 } from '../utils/okeyEngine';
+import { okeyAudio } from '../utils/okeyAudio';
 import { TableChatMessage } from '../types';
 
 const INITIAL_RACK_SIZE = 30; // 2 rows x 15 slots
@@ -90,6 +91,25 @@ export default function OkeyGame({
   // Track double click timing
   const lastClickRef = useRef<{ slot: number; time: number }>({ slot: -1, time: 0 });
 
+  // Key for persisting rack tile order across page reloads (F5)
+  const RACK_STORAGE_KEY = `okey_rack_slots_${currentUserId}`;
+
+  // Persist rack layout to localStorage whenever rack changes during active play
+  useEffect(() => {
+    if (currentRoom?.status === 'playing') {
+      const slotIds = rack.map(t => (t ? t.id : null));
+      if (slotIds.some(id => id !== null)) {
+        try {
+          localStorage.setItem(RACK_STORAGE_KEY, JSON.stringify(slotIds));
+        } catch (e) {}
+      }
+    } else if (currentRoom?.status === 'ended') {
+      try {
+        localStorage.removeItem(RACK_STORAGE_KEY);
+      } catch (e) {}
+    }
+  }, [rack, currentRoom?.status, RACK_STORAGE_KEY]);
+
   // Socket communication
   useEffect(() => {
     if (!socket) return;
@@ -116,18 +136,35 @@ export default function OkeyGame({
       }
     };
     const onHand = (handTiles: Tile[]) => {
-      // Synchronize rack with new private hand, preserving user arrangement
+      // Synchronize rack with new private hand, preserving user arrangement & F5 restored order
       setRack(prev => {
         const remainingTiles = [...handTiles];
         const newRack: (Tile | null)[] = Array(INITIAL_RACK_SIZE).fill(null);
 
+        // Check if prev has tiles, or attempt to restore from localStorage (e.g. after F5 refresh)
+        const hasPrev = prev.some(t => t !== null);
+        let savedOrder: (string | null)[] = [];
+
+        if (hasPrev) {
+          savedOrder = prev.map(t => (t ? t.id : null));
+        } else {
+          try {
+            const saved = localStorage.getItem(RACK_STORAGE_KEY);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                savedOrder = parsed;
+              }
+            }
+          } catch (e) {}
+        }
+
         // Keep tiles that are still in hand in their existing slot positions
-        prev.forEach((tile, idx) => {
-          if (tile) {
-            const foundIdx = remainingTiles.findIndex(t => t.id === tile.id);
+        savedOrder.forEach((savedId, idx) => {
+          if (savedId && idx < INITIAL_RACK_SIZE) {
+            const foundIdx = remainingTiles.findIndex(t => t.id === savedId);
             if (foundIdx !== -1) {
-              newRack[idx] = remainingTiles[foundIdx];
-              remainingTiles.splice(foundIdx, 1);
+              newRack[idx] = remainingTiles.splice(foundIdx, 1)[0];
             }
           }
         });
@@ -158,6 +195,25 @@ export default function OkeyGame({
       }
     };
 
+    // Keep connection and room membership fresh when user switches tabs or reconnects
+    const handleReconnectOrFocus = () => {
+      socket.emit("heartbeat");
+      socket.emit("get_my_okey_room");
+      if (currentRoom?.id) {
+        socket.emit("join_okey", currentRoom.id);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleReconnectOrFocus();
+      }
+    };
+
+    socket.on("connect", handleReconnectOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleReconnectOrFocus);
+
     socket.on("okey_rooms_list", onRoomsList);
     socket.on("okey_room_created", onRoomCreated);
     socket.on("okey_state", onRoomState);
@@ -167,6 +223,9 @@ export default function OkeyGame({
     socket.on("okey_chat_message", onTableChatMessage);
 
     return () => {
+      socket.off("connect", handleReconnectOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleReconnectOrFocus);
       socket.off("okey_rooms_list", onRoomsList);
       socket.off("okey_room_created", onRoomCreated);
       socket.off("okey_state", onRoomState);
@@ -175,7 +234,7 @@ export default function OkeyGame({
       socket.off("okey_chat_history", onTableChatHistory);
       socket.off("okey_chat_message", onTableChatMessage);
     };
-  }, [socket]);
+  }, [socket, currentRoom?.id, RACK_STORAGE_KEY]);
 
   // Actions
   const handleCreateRoom = (e: React.FormEvent) => {
@@ -224,12 +283,12 @@ export default function OkeyGame({
   // Draw tile
   const handleDrawFromDeck = () => {
     if (!socket || !canDraw) return;
-    socket.emit("okey_draw", { source: 'deck' });
+    socket.emit("okey_draw", { roomId: currentRoom?.id, source: 'deck' });
   };
 
   const handleDrawFromDiscard = () => {
     if (!socket || !canDraw) return;
-    socket.emit("okey_draw", { source: 'discard' });
+    socket.emit("okey_draw", { roomId: currentRoom?.id, source: 'discard' });
   };
 
   // Discard tile
@@ -237,7 +296,7 @@ export default function OkeyGame({
     if (!socket || !canDiscard) return;
     const tile = rack[slotIndex];
     if (!tile) return;
-    socket.emit("okey_discard", tile);
+    socket.emit("okey_discard", { roomId: currentRoom?.id, tile });
     setSelectedSlot(null);
   };
 
@@ -418,11 +477,13 @@ export default function OkeyGame({
   const handleSortRuns = () => {
     setRack(prev => autoSortRuns(prev, currentRoom?.okeyTile));
     setSelectedSlot(null);
+    okeyAudio.playDrawTile();
   };
 
   const handleSortPairs = () => {
     setRack(prev => autoSortPairs(prev, currentRoom?.okeyTile));
     setSelectedSlot(null);
+    okeyAudio.playDrawTile();
   };
 
   // Check if current rack tiles form a winning hand

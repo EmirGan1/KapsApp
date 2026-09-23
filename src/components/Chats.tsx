@@ -191,11 +191,29 @@ export default function Chats({
       if (activeTab === "friends") {
         if ((msg.sender === activeChat.id && msg.receiver === currentUserId) || 
             (msg.sender === currentUserId && msg.receiver === activeChat.id)) {
-          setMessages(prev => [...prev, msg]);
+          setMessages(prev => {
+            const optIdx = prev.findIndex(m => m._tempId && m.sender === msg.sender && m.content === msg.content);
+            if (optIdx !== -1) {
+              const updated = [...prev];
+              updated[optIdx] = msg;
+              return updated;
+            }
+            if (prev.some(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
         }
       } else {
         if (msg.group_id === activeChat.id) {
-          setMessages(prev => [...prev, msg]);
+          setMessages(prev => {
+            const optIdx = prev.findIndex(m => m._tempId && m.sender === msg.sender && m.content === msg.content);
+            if (optIdx !== -1) {
+              const updated = [...prev];
+              updated[optIdx] = msg;
+              return updated;
+            }
+            if (prev.some(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
         }
       }
     };
@@ -330,13 +348,38 @@ export default function Chats({
 
   const handleSendText = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!text.trim() || !activeChat || !socket) return;
+    const trimmed = text.trim();
+    if (!trimmed || !activeChat || !socket) return;
     
     emitStopTyping();
+
+    const tempId = `opt_${Date.now()}_${Math.random()}`;
+    const optimisticMsg: any = {
+      id: tempId,
+      _tempId: tempId,
+      sender: currentUserId,
+      receiver: activeTab === "friends" ? activeChat.id : undefined,
+      group_id: activeTab === "groups" ? activeChat.id : undefined,
+      type: "text",
+      content: trimmed,
+      created_at: new Date().toISOString(),
+      reactions: [],
+      reply_to: replyTo?.id,
+      reply_message: replyTo ? {
+        id: replyTo.id,
+        content: replyTo.content,
+        sender_name: replyTo.sender_name,
+        type: replyTo.type
+      } : null,
+      status: 'sending'
+    };
+
+    setMessages(prev => [...prev, optimisticMsg]);
+
     if (activeTab === "friends") {
-      socket.emit("send_message", { receiver: activeChat.id, type: "text", content: text.trim(), reply_to: replyTo?.id });
+      socket.emit("send_message", { receiver: activeChat.id, type: "text", content: trimmed, reply_to: replyTo?.id });
     } else {
-      socket.emit("send_group_message", { group_id: activeChat.id, type: "text", content: text.trim(), reply_to: replyTo?.id });
+      socket.emit("send_group_message", { group_id: activeChat.id, type: "text", content: trimmed, reply_to: replyTo?.id });
     }
     setText("");
     setReplyTo(null);

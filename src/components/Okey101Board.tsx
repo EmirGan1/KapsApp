@@ -15,6 +15,8 @@ import {
   isTileOkey, 
   findBestMeldsInHand, 
   findPairsInHand,
+  autoSortRuns101,
+  autoSortPairs101,
   canAppendTileToMeld 
 } from '../utils/okey101Engine';
 import { okeyAudio } from '../utils/okeyAudio';
@@ -91,6 +93,25 @@ export default function Okey101Board({
     else if (type === 'win') okeyAudio.playVictory();
   };
 
+  // Key for persisting rack tile order across page reloads (F5)
+  const RACK_STORAGE_KEY = `okey101_rack_slots_${currentUserId}`;
+
+  // Persist rack layout across page refreshes (F5) during active play
+  useEffect(() => {
+    if (currentRoom?.status === 'playing') {
+      const slotIds = rack.map((t) => (t ? t.id : null));
+      if (slotIds.some((id) => id !== null)) {
+        try {
+          localStorage.setItem(RACK_STORAGE_KEY, JSON.stringify(slotIds));
+        } catch (e) {}
+      }
+    } else if (currentRoom?.status === 'ended') {
+      try {
+        localStorage.removeItem(RACK_STORAGE_KEY);
+      } catch (e) {}
+    }
+  }, [rack, currentRoom?.status, RACK_STORAGE_KEY]);
+
   // Socket setup
   useEffect(() => {
     if (!socket) return;
@@ -117,21 +138,37 @@ export default function Okey101Board({
     };
 
     const onHand = (hand: Tile101[]) => {
-      // Preserve existing arrangement if possible, or place sequentially
+      // Preserve existing arrangement if possible, or restore from localStorage on F5 refresh
       setRack((prev) => {
         const next: (Tile101 | null)[] = Array(INITIAL_RACK_SIZE).fill(null);
         const availableHand = [...hand];
 
-        // 1. Keep tiles already on the rack in their current slots if still present in hand
-        for (let i = 0; i < prev.length; i++) {
-          const t = prev[i];
-          if (t) {
-            const hIdx = availableHand.findIndex((h) => h.id === t.id);
+        const hasPrev = prev.some((t) => t !== null);
+        let savedOrder: (string | null)[] = [];
+
+        if (hasPrev) {
+          savedOrder = prev.map((t) => (t ? t.id : null));
+        } else {
+          try {
+            const saved = localStorage.getItem(RACK_STORAGE_KEY);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                savedOrder = parsed;
+              }
+            }
+          } catch (e) {}
+        }
+
+        // 1. Keep tiles in their saved/current slots if still present in hand
+        savedOrder.forEach((savedId, idx) => {
+          if (savedId && idx < INITIAL_RACK_SIZE) {
+            const hIdx = availableHand.findIndex((h) => h.id === savedId);
             if (hIdx !== -1) {
-              next[i] = availableHand.splice(hIdx, 1)[0];
+              next[idx] = availableHand.splice(hIdx, 1)[0];
             }
           }
-        }
+        });
 
         // 2. Put remaining newly drawn tiles in the first free slots
         for (const t of availableHand) {
@@ -164,6 +201,25 @@ export default function Okey101Board({
       setTableMessages((prev) => [...prev, msg]);
     };
 
+    // Keep connection and room state fresh when user switches tabs or reconnects
+    const handleReconnectOrFocus = () => {
+      socket.emit("heartbeat");
+      socket.emit("get_my_okey101_hand");
+      if (currentRoom?.id) {
+        socket.emit("join_okey101", { roomId: currentRoom.id });
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleReconnectOrFocus();
+      }
+    };
+
+    socket.on("connect", handleReconnectOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleReconnectOrFocus);
+
     socket.on("okey101_rooms_list", onRoomsList);
     socket.on("okey101_state", onRoomState);
     socket.on("okey101_hand", onHand);
@@ -173,6 +229,9 @@ export default function Okey101Board({
     socket.on("okey101_new_table_message", onNewTableMsg);
 
     return () => {
+      socket.off("connect", handleReconnectOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleReconnectOrFocus);
       socket.off("okey101_rooms_list", onRoomsList);
       socket.off("okey101_state", onRoomState);
       socket.off("okey101_hand", onHand);
@@ -181,7 +240,7 @@ export default function Okey101Board({
       socket.off("okey101_chat_history", onTableChat);
       socket.off("okey101_new_table_message", onNewTableMsg);
     };
-  }, [socket]);
+  }, [socket, currentRoom?.id, RACK_STORAGE_KEY]);
 
   // Sync mute state to audio manager
   useEffect(() => {
@@ -251,6 +310,9 @@ export default function Okey101Board({
 
   const handleLeaveRoom = () => {
     if (!socket) return;
+    try {
+      localStorage.removeItem(RACK_STORAGE_KEY);
+    } catch (e) {}
     socket.emit("leave_okey101");
     setCurrentRoom(null);
     setRack(Array(INITIAL_RACK_SIZE).fill(null));
@@ -283,7 +345,7 @@ export default function Okey101Board({
   const handleDraw = (source: 'deck' | 'discard') => {
     if (!socket || !isMyTurn || currentRoom?.turnPhase !== 'draw') return;
     playSound('draw');
-    socket.emit("okey101_draw", { source });
+    socket.emit("okey101_draw", { roomId: currentRoom?.id, source });
   };
 
   const handleDiscard = (slotIndex: number) => {
@@ -292,7 +354,7 @@ export default function Okey101Board({
     if (!tile) return;
 
     playSound('discard');
-    socket.emit("okey101_discard", { tileId: tile.id });
+    socket.emit("okey101_discard", { roomId: currentRoom?.id, tileId: tile.id });
     setSelectedSlot(null);
     setSelectedTileForAppend(null);
   };
@@ -307,6 +369,7 @@ export default function Okey101Board({
 
     playSound('open');
     socket.emit("okey101_open_hand", {
+      roomId: currentRoom?.id,
       type: 'serial',
       melds: meldAnalysis.melds
     });
@@ -322,13 +385,31 @@ export default function Okey101Board({
 
     playSound('open');
     socket.emit("okey101_open_hand", {
+      roomId: currentRoom?.id,
       type: 'double',
       melds: pairAnalysis.pairs
     });
   };
 
   const handleAppendTileToMeld = (meld: Okey101Meld) => {
-    if (!socket || !isMyTurn || !myPlayer?.hasOpened || !selectedTileForAppend) return;
+    const tileToAppend = selectedTileForAppend || (selectedSlot !== null ? rack[selectedSlot] : null);
+    if (!tileToAppend) {
+      setErrorMessage("Önce ıstakanızdan masadaki pere eklemek istediğiniz taşa tıklayın.");
+      playSound('penalty');
+      return;
+    }
+
+    if (!socket || !isMyTurn) {
+      setErrorMessage("Sıra sizde değilken masaya taş işleyemezsiniz.");
+      playSound('penalty');
+      return;
+    }
+
+    if (!myPlayer?.hasOpened) {
+      setErrorMessage("Masaya taş işlemek için önce kendi elinizi açmış olmalısınız.");
+      playSound('penalty');
+      return;
+    }
 
     if (myPlayer.openedMode === 'double' && meld.type !== 'pair') {
       setErrorMessage("Çift açtığınız için sadece çift perlere taş işleyebilirsiniz.");
@@ -336,7 +417,7 @@ export default function Okey101Board({
       return;
     }
 
-    const check = canAppendTileToMeld(selectedTileForAppend, meld, currentRoom?.okeyTile);
+    const check = canAppendTileToMeld(tileToAppend, meld, currentRoom?.okeyTile);
     if (!check.canAppend) {
       setErrorMessage(check.error || "Seçtiğiniz taş bu pere işlenemez.");
       playSound('penalty');
@@ -345,67 +426,37 @@ export default function Okey101Board({
 
     playSound('append');
     socket.emit("okey101_append_tile", {
+      roomId: currentRoom?.id,
       meldId: meld.id,
-      tileId: selectedTileForAppend.id
+      tileId: tileToAppend.id
+    }, (res: any) => {
+      if (res?.error) {
+        setErrorMessage(res.error);
+        playSound('penalty');
+      } else {
+        setSelectedSlot(null);
+        setSelectedTileForAppend(null);
+      }
     });
-    setSelectedTileForAppend(null);
   };
 
   const handleDeclareFinish = () => {
     if (!socket || !isMyTurn) return;
-    // Prompt confirmation or finish directly
     const discardId = selectedSlot !== null && rack[selectedSlot] ? rack[selectedSlot]?.id : undefined;
-    socket.emit("okey101_declare_finish", { discardTileId: discardId });
+    socket.emit("okey101_declare_finish", { roomId: currentRoom?.id, discardTileId: discardId });
   };
 
   const handleAutoSortRuns = () => {
     if (currentHandTiles.length === 0) return;
-    const sortedMelds = meldAnalysis.melds;
-    const unmelded = meldAnalysis.unmelded;
-
-    const newRack: (Tile101 | null)[] = Array(INITIAL_RACK_SIZE).fill(null);
-    let slot = 0;
-
-    // Place melds with 1 blank space between them
-    for (const meld of sortedMelds) {
-      if (slot + meld.length > INITIAL_RACK_SIZE) break;
-      for (const t of meld) {
-        newRack[slot++] = t;
-      }
-      if (slot < INITIAL_RACK_SIZE) slot++; // Gap
-    }
-
-    // Place remaining unmelded
-    for (const t of unmelded) {
-      const freeIdx = newRack.findIndex((s) => s === null);
-      if (freeIdx !== -1) newRack[freeIdx] = t;
-    }
-
-    setRack(newRack);
+    setRack(prev => autoSortRuns101(prev, currentRoom?.okeyTile));
+    setSelectedSlot(null);
     playSound('draw');
   };
 
   const handleAutoSortPairs = () => {
     if (currentHandTiles.length === 0) return;
-    const sortedPairs = pairAnalysis.pairs;
-    const unmelded = pairAnalysis.unmelded;
-
-    const newRack: (Tile101 | null)[] = Array(INITIAL_RACK_SIZE).fill(null);
-    let slot = 0;
-
-    for (const pair of sortedPairs) {
-      if (slot + 2 > INITIAL_RACK_SIZE) break;
-      newRack[slot++] = pair[0];
-      newRack[slot++] = pair[1];
-      if (slot < INITIAL_RACK_SIZE) slot++; // Gap
-    }
-
-    for (const t of unmelded) {
-      const freeIdx = newRack.findIndex((s) => s === null);
-      if (freeIdx !== -1) newRack[freeIdx] = t;
-    }
-
-    setRack(newRack);
+    setRack(prev => autoSortPairs101(prev, currentRoom?.okeyTile));
+    setSelectedSlot(null);
     playSound('draw');
   };
 
@@ -1095,31 +1146,40 @@ export default function Okey101Board({
           <div className="flex-1 my-2 overflow-y-auto max-h-48 md:max-h-60 space-y-2 pr-1 scrollbar-thin">
             {currentRoom.openedMelds && currentRoom.openedMelds.length > 0 ? (
               <div className="flex flex-wrap gap-2.5 items-start justify-center">
-                {currentRoom.openedMelds.map((meld) => (
-                  <div
-                    key={meld.id}
-                    onClick={() => {
-                      if (selectedTileForAppend && myPlayer?.hasOpened) {
-                        handleAppendTileToMeld(meld);
+                {currentRoom.openedMelds.map((meld) => {
+                  const activeTile = selectedTileForAppend || (selectedSlot !== null ? rack[selectedSlot] : null);
+                  const isAppendReady = Boolean(activeTile && myPlayer?.hasOpened && isMyTurn && currentRoom.turnPhase === 'discard');
+                  return (
+                    <div
+                      key={meld.id}
+                      onClick={() => handleAppendTileToMeld(meld)}
+                      title={
+                        isAppendReady
+                          ? 'Seçili taşı bu pere işlemek için tıklayın'
+                          : myPlayer?.hasOpened
+                          ? 'Taş işlemek için önce ıstakanızdan bir taşa tıklayın'
+                          : 'Taş işlemek için önce el açmalısınız'
                       }
-                    }}
-                    className={`bg-black/50 border rounded-xl p-1.5 flex flex-col gap-1 transition-all ${
-                      selectedTileForAppend && myPlayer?.hasOpened
-                        ? 'hover:border-amber-400 hover:scale-105 cursor-pointer border-amber-500/60 ring-2 ring-amber-500/30'
-                        : 'border-emerald-800/80'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-[10px] text-emerald-400 px-1">
-                      <span className="truncate max-w-[80px]">{meld.playerUsername}</span>
-                      <span className="font-mono text-amber-300 font-bold">{meld.score}p</span>
+                      className={`bg-black/50 border rounded-xl p-1.5 flex flex-col gap-1 transition-all ${
+                        isAppendReady
+                          ? 'hover:border-amber-400 hover:scale-105 cursor-pointer border-amber-500/70 ring-2 ring-amber-500/40 shadow-lg shadow-amber-950/40'
+                          : activeTile && !myPlayer?.hasOpened
+                          ? 'cursor-not-allowed border-emerald-900/60 opacity-80'
+                          : 'hover:border-emerald-700 cursor-pointer border-emerald-800/80'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[10px] text-emerald-400 px-1">
+                        <span className="truncate max-w-[80px]">{meld.playerUsername}</span>
+                        <span className="font-mono text-amber-300 font-bold">{meld.score}p</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {meld.tiles.map((t) => (
+                          <div key={t.id}>{renderTileComponent(t, false, 'sm')}</div>
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      {meld.tiles.map((t) => (
-                        <div key={t.id}>{renderTileComponent(t, false, 'sm')}</div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="h-full flex items-center justify-center text-emerald-600/70 text-xs italic">

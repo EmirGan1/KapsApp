@@ -272,20 +272,32 @@ async function initDb() {
     lastSeen INTEGER
   )`);
 
-  // High Performance DB Indexing for Turso/SQLite
+  // High Performance DB PRAGMAs & Indexing for Turso/SQLite (1GB RAM Optimization)
+  try {
+    await client.execute("PRAGMA cache_size = -32000;");
+    await client.execute("PRAGMA synchronous = NORMAL;");
+    await client.execute("PRAGMA journal_mode = WAL;");
+  } catch (pragmaErr) {}
+
+  try {
+    await client.execute("ALTER TABLE messages ADD COLUMN room_id TEXT");
+  } catch(e) {}
+
   try {
     await client.execute("CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at)");
-    await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at DESC)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at DESC)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_pair_created ON messages(sender, receiver, created_at DESC)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_messages_direct ON messages(sender, receiver)");
-    await client.execute("CREATE INDEX IF NOT EXISTS idx_global_messages_created ON global_messages(created_at)");
-    await client.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)");
-    await client.execute("CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_global_messages_created ON global_messages(created_at DESC)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at DESC)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_followers_pair ON followers(follower_id, following_id)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_followers_following ON followers(following_id)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_likes_post ON likes(post_id)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)");
-    await client.execute("CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at)");
+    await client.execute("CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at DESC)");
     await client.execute("CREATE INDEX IF NOT EXISTS idx_friends_pair ON friends(user1, user2)");
   } catch (idxErr) {
     console.error("Index creation notice:", idxErr);
@@ -485,8 +497,12 @@ async function startServer() {
       methods: ["GET", "POST"],
       credentials: true 
     },
-    perMessageDeflate: false,
-    maxHttpBufferSize: 1e6 // 1 MB limit to prevent large buffers from bloating RAM
+    perMessageDeflate: {
+      threshold: 1024
+    },
+    pingTimeout: 20000,
+    pingInterval: 10000,
+    maxHttpBufferSize: 2e6 // 2 MB limit for balanced memory usage under 1GB RAM ceiling
   });
 
   // REST API Routes
@@ -2321,6 +2337,70 @@ async function startServer() {
     }
   });
 
+  // --- High-Speed In-Memory Message RAM Cache (Max 50 messages per room/conversation for 1GB RAM) ---
+  interface CachedMessage {
+    id: number | string;
+    sender: number;
+    receiver?: number;
+    group_id?: number;
+    type: string;
+    content: string;
+    reply_to?: number | null;
+    reactions: any;
+    file_name?: string | null;
+    file_size?: string | null;
+    created_at: string;
+    sender_name?: string;
+    sender_avatar?: string;
+    sender_color?: string;
+    reply_message?: any;
+    room_id?: string;
+  }
+
+  class MessageRamCache {
+    private cache: Map<string, CachedMessage[]> = new Map();
+    private readonly MAX_PER_ROOM = 50;
+
+    get(roomKey: string): CachedMessage[] | null {
+      const list = this.cache.get(roomKey);
+      return list ? [...list] : null;
+    }
+
+    set(roomKey: string, messages: CachedMessage[]) {
+      this.cache.set(roomKey, messages.slice(-this.MAX_PER_ROOM));
+    }
+
+    push(roomKey: string, message: CachedMessage) {
+      let list = this.cache.get(roomKey);
+      if (!list) {
+        list = [];
+        this.cache.set(roomKey, list);
+      }
+      list.push(message);
+      if (list.length > this.MAX_PER_ROOM) {
+        list.splice(0, list.length - this.MAX_PER_ROOM);
+      }
+    }
+
+    delete(roomKey: string, messageId: number | string) {
+      const list = this.cache.get(roomKey);
+      if (list) {
+        const idx = list.findIndex(m => String(m.id) === String(messageId));
+        if (idx !== -1) list.splice(idx, 1);
+      }
+    }
+
+    clear(roomKey?: string) {
+      if (roomKey) {
+        this.cache.delete(roomKey);
+      } else {
+        this.cache.clear();
+      }
+    }
+  }
+
+  const messageRamCache = new MessageRamCache();
+
   io.on("connection", (socket) => {
     const user = socket.data.user;
     const userIdNum = Number(user.id);
@@ -2341,6 +2421,46 @@ async function startServer() {
     socket.emit("all_user_locations", initialLocations);
 
     // Active ping / heartbeat to keep presence fresh when tab becomes visible
+    const reattachUserGames = () => {
+      // 1. Check 101 Okey active rooms
+      for (const [rId, r] of okey101Rooms.entries()) {
+        const p = r.players.find((player: any) => player.id === user.id);
+        if (p) {
+          p.socketId = socket.id;
+          socket.data.currentOkey101Room = rId;
+          socket.join(`okey101_${rId}`);
+          socket.join(rId);
+          const publicState = getSanitized101Room(r);
+          socket.emit("okey101_state", publicState);
+          socket.emit("table:updated", publicState);
+          if (p.hand) {
+            socket.emit("okey101_hand", p.hand);
+          }
+          break;
+        }
+      }
+
+      // 2. Check Classic Okey active rooms
+      for (const [rId, r] of okeyRooms.entries()) {
+        const p = r.players.find((player: any) => player.id === user.id);
+        if (p) {
+          p.socketId = socket.id;
+          socket.data.currentOkeyRoom = rId;
+          socket.join(`okey_${rId}`);
+          socket.join(rId);
+          const publicState = getSanitizedRoom(r);
+          socket.emit("okey_room_state", publicState);
+          socket.emit("okey_state", publicState);
+          if (p.hand) {
+            socket.emit("okey_hand", p.hand);
+          }
+          break;
+        }
+      }
+    };
+
+    reattachUserGames();
+
     socket.on("heartbeat", () => {
       if (disconnectTimers.has(userIdNum)) {
         clearTimeout(disconnectTimers.get(userIdNum)!);
@@ -2350,6 +2470,7 @@ async function startServer() {
         onlineUsers.set(userIdNum, socket.id);
         io.emit("online_users", Array.from(onlineUsers.keys()));
       }
+      reattachUserGames();
     });
 
     // Real-time Geolocation Sync (RAM ONLY)
@@ -3248,30 +3369,42 @@ async function startServer() {
       }
     });
 
-    // Chat
+    // Chat with In-Memory RAM Cache (Zero disk latency, async Turso persist)
     socket.on("get_messages", async (friendId, cb) => {
-      const msgRes = await client.execute({
-        sql: "SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 30) ORDER BY created_at ASC",
-        args: [user.id, friendId, friendId, user.id]
-      });
-      const populated = await Promise.all(msgRes.rows.map(async (r: any) => {
-        let replyMsg = null;
-        if (r.reply_to) {
-          const refRes = await client.execute({ sql: "SELECT id, sender, type, content, file_name, file_size FROM messages WHERE id = ?", args: [r.reply_to] });
-          if (refRes.rows.length > 0) {
-            const refUser = await getUser(refRes.rows[0].sender as number);
-            replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
+      if (!cb) return;
+      const roomKey = `dm_${Math.min(user.id, friendId)}_${Math.max(user.id, friendId)}`;
+      const cached = messageRamCache.get(roomKey);
+      if (cached && cached.length > 0) {
+        return cb(cached);
+      }
+
+      try {
+        const msgRes = await client.execute({
+          sql: "SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM messages WHERE (sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?) ORDER BY created_at DESC LIMIT 50) ORDER BY created_at ASC",
+          args: [user.id, friendId, friendId, user.id]
+        });
+        const populated = await Promise.all(msgRes.rows.map(async (r: any) => {
+          let replyMsg = null;
+          if (r.reply_to) {
+            const refRes = await client.execute({ sql: "SELECT id, sender, type, content, file_name, file_size FROM messages WHERE id = ?", args: [r.reply_to] });
+            if (refRes.rows.length > 0) {
+              const refUser = await getUser(refRes.rows[0].sender as number);
+              replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
+            }
           }
-        }
-        return { 
-          ...r, 
-          reactions: JSON.parse(r.reactions as string || "[]"),
-          reply_message: replyMsg,
-          file_name: r.file_name,
-          file_size: r.file_size
-        };
-      }));
-      cb(populated);
+          return { 
+            ...r, 
+            reactions: JSON.parse(r.reactions as string || "[]"),
+            reply_message: replyMsg,
+            file_name: r.file_name,
+            file_size: r.file_size
+          };
+        }));
+        messageRamCache.set(roomKey, populated);
+        cb(populated);
+      } catch (err) {
+        cb([]);
+      }
     });
 
     socket.on("send_message", async (data) => {
@@ -3283,40 +3416,71 @@ async function startServer() {
           content = content.slice(0, 1000);
         }
       }
-      const res = await client.execute({
-        sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
-        args: [user.id, receiver, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
-      });
-      const newMsgRes = await client.execute({ sql: "SELECT id, sender, receiver, type, content, reply_to, reactions, file_name, file_size, created_at FROM messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
+      
+      const sUser = await getUser(user.id);
+      const roomKey = `dm_${Math.min(user.id, receiver)}_${Math.max(user.id, receiver)}`;
+      const nowIso = new Date().toISOString();
+      const tempMsgId = `m_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
       let replyMsg = null;
       if (reply_to) {
-        const refRes = await client.execute({ sql: "SELECT id, sender, type, content, file_name, file_size FROM messages WHERE id = ?", args: [reply_to] });
-        if (refRes.rows.length > 0) {
-          const refUser = await getUser(refRes.rows[0].sender as number);
-          replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
+        const cachedList = messageRamCache.get(roomKey);
+        const refCached = cachedList?.find(m => String(m.id) === String(reply_to));
+        if (refCached) {
+          replyMsg = { id: refCached.id, sender: refCached.sender, type: refCached.type, content: refCached.content, sender_name: refCached.sender_name };
+        } else {
+          try {
+            const refRes = await client.execute({ sql: "SELECT id, sender, type, content, file_name, file_size FROM messages WHERE id = ?", args: [reply_to] });
+            if (refRes.rows.length > 0) {
+              const refUser = await getUser(refRes.rows[0].sender as number);
+              replyMsg = { ...refRes.rows[0], sender_name: refUser?.username };
+            }
+          } catch(e) {}
         }
       }
-      const sUser = await getUser(user.id);
-      const newMsg = { 
-        ...newMsgRes.rows[0], 
+
+      const newMsg: any = {
+        id: tempMsgId,
+        sender: user.id,
+        receiver,
+        type,
+        content,
+        reply_to: reply_to || null,
         reactions: [],
         sender_name: sUser?.username,
         sender_avatar: sUser?.avatar,
         sender_color: sUser?.color,
         reply_message: replyMsg,
-        file_name: newMsgRes.rows[0].file_name,
-        file_size: newMsgRes.rows[0].file_size
+        file_name: file_name || null,
+        file_size: file_size || null,
+        created_at: nowIso,
+        room_id: roomKey
       };
-      
+
+      // 1. Instant RAM Cache write (zero delay)
+      messageRamCache.push(roomKey, newMsg);
+
+      // 2. Real-time delivery to peer & local echo
       const targetSocket = onlineUsers.get(receiver);
       if (targetSocket) io.to(targetSocket).emit("new_message", newMsg);
-      socket.emit("new_message", newMsg); // echo back
+      socket.emit("new_message", newMsg);
+
+      // 3. Asynchronously persist to Turso DB & send notification (background non-blocking)
+      client.execute({
+        sql: "INSERT INTO messages (sender, receiver, type, content, reply_to, reactions, file_name, file_size, room_id, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)",
+        args: [user.id, receiver, type, content, reply_to || null, file_name || null, file_size || null, roomKey, nowIso]
+      }).then(res => {
+        newMsg.id = Number(res.lastInsertRowid);
+      }).catch(err => {
+        console.error("Async DM persist error:", err);
+      });
+
       let notifPreview = content;
       if (type === "image") notifPreview = "📷 Fotoğraf";
       else if (type === "voice") notifPreview = "🎤 Ses kaydı";
       else if (type === "file") notifPreview = `📎 ${file_name || "Dosya"}`;
       else if (typeof notifPreview === "string" && notifPreview.length > 80) notifPreview = notifPreview.slice(0, 80) + "...";
-      await addNotification(receiver, "new_message", `${user.username}: ${notifPreview}`, user.id);
+      addNotification(receiver, "new_message", `${user.username}: ${notifPreview}`, user.id).catch(() => {});
     });
 
     const populateMessage = async (m: any, type: "global" | "group") => {
@@ -3343,7 +3507,7 @@ async function startServer() {
       };
     };
 
-    // Global Chat (Strict 30 Limit & Cursor Pagination)
+    // Global Chat (In-Memory RAM Cache & Instant Broadcast)
     socket.on("get_global_messages", async (data, cb) => {
       let limit = 30;
       let beforeId: number | null = null;
@@ -3353,6 +3517,14 @@ async function startServer() {
       } else if (data && typeof data === "object") {
         if (data.limit) limit = Math.min(Number(data.limit), 50);
         if (data.beforeId) beforeId = Number(data.beforeId);
+      }
+
+      if (!beforeId) {
+        const cached = messageRamCache.get("global");
+        if (cached && cached.length > 0) {
+          if (callback) callback(cached);
+          return;
+        }
       }
 
       try {
@@ -3369,6 +3541,9 @@ async function startServer() {
           });
         }
         const populated = await Promise.all(msgs.rows.map(m => populateMessage(m, "global")));
+        if (!beforeId) {
+          messageRamCache.set("global", populated);
+        }
         if (callback) callback(populated);
       } catch (err) {
         if (callback) callback([]);
@@ -3398,13 +3573,59 @@ async function startServer() {
           content = content.slice(0, 1000);
         }
       }
-      const res = await client.execute({
-        sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, '[]', ?, ?, ?)",
-        args: [user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
-      });
-      const newMsgRes = await client.execute({ sql: "SELECT id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM global_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
-      const popMsg = await populateMessage(newMsgRes.rows[0], "global");
+
+      const sUser = await getUser(user.id);
+      const nowIso = new Date().toISOString();
+      const tempId = `g_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+      let replyMsg = null;
+      if (reply_to) {
+        const cachedGlobal = messageRamCache.get("global");
+        const refCached = cachedGlobal?.find(m => String(m.id) === String(reply_to));
+        if (refCached) {
+          replyMsg = { id: refCached.id, sender: refCached.sender, type: refCached.type, content: refCached.content, sender_name: refCached.sender_name };
+        } else {
+          try {
+            const refMsgRes = await client.execute({ sql: `SELECT id, sender, type, content, file_name, file_size FROM global_messages WHERE id = ?`, args: [reply_to] });
+            if (refMsgRes.rows.length > 0) {
+              const rUser = await getUser(refMsgRes.rows[0].sender as number);
+              replyMsg = { ...refMsgRes.rows[0], sender_name: rUser?.username };
+            }
+          } catch(e) {}
+        }
+      }
+
+      const popMsg: any = {
+        id: tempId,
+        sender: user.id,
+        type,
+        content,
+        reply_to: reply_to || null,
+        reactions: [],
+        sender_name: sUser?.username,
+        sender_avatar: sUser?.avatar,
+        sender_color: sUser?.color,
+        reply_message: replyMsg,
+        file_name: file_name || null,
+        file_size: file_size || null,
+        created_at: nowIso
+      };
+
+      // 1. RAM Cache write
+      messageRamCache.push("global", popMsg);
+
+      // 2. Instant real-time broadcast
       io.emit("new_global_message", popMsg);
+
+      // 3. Asynchronous Turso write
+      client.execute({
+        sql: "INSERT INTO global_messages (sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, '[]', ?, ?, ?)",
+        args: [user.id, type, content, reply_to || null, file_name || null, file_size || null, nowIso]
+      }).then(res => {
+        popMsg.id = Number(res.lastInsertRowid);
+      }).catch(err => {
+        console.error("Async global msg error:", err);
+      });
     });
 
     socket.on("clear_global_chat", async () => {
@@ -3412,6 +3633,7 @@ async function startServer() {
         if (!user.username || user.username.trim().toLowerCase() !== 'emirgan') {
           return socket.emit("error_message", "Genel sohbeti temizleme yetkiniz bulunmuyor.");
         }
+        messageRamCache.clear("global");
         await client.execute("DELETE FROM global_messages");
         io.emit("global_chat_cleared");
       } catch (err) {
@@ -3450,12 +3672,24 @@ async function startServer() {
     });
 
     socket.on("get_group_messages", async (groupId, cb) => {
-      const msgsRes = await client.execute({
-        sql: "SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM group_messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC",
-        args: [groupId]
-      });
-      const populated = await Promise.all(msgsRes.rows.map((m: any) => populateMessage(m, "group")));
-      cb(populated);
+      if (!cb) return;
+      const roomKey = `group_${groupId}`;
+      const cached = messageRamCache.get(roomKey);
+      if (cached && cached.length > 0) {
+        return cb(cached);
+      }
+
+      try {
+        const msgsRes = await client.execute({
+          sql: "SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM (SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM group_messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 50) ORDER BY created_at ASC",
+          args: [groupId]
+        });
+        const populated = await Promise.all(msgsRes.rows.map((m: any) => populateMessage(m, "group")));
+        messageRamCache.set(roomKey, populated);
+        cb(populated);
+      } catch (err) {
+        cb([]);
+      }
     });
 
     socket.on("send_group_message", async (data) => {
@@ -3467,23 +3701,65 @@ async function startServer() {
           content = content.slice(0, 1000);
         }
       }
-      const res = await client.execute({
-        sql: "INSERT INTO group_messages (group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
-        args: [group_id, user.id, type, content, reply_to || null, file_name || null, file_size || null, new Date().toISOString()]
-      });
-      
-      const groupRes = await client.execute({ sql: "SELECT id, name, members FROM groups WHERE id = ?", args: [group_id] });
-      if (groupRes.rows.length > 0) {
-        const group = groupRes.rows[0];
-        const members = JSON.parse(group.members as string || "[]");
-        const newMsgRes = await client.execute({ sql: "SELECT id, group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at FROM group_messages WHERE id = ?", args: [Number(res.lastInsertRowid)] });
-        const popMsg = await populateMessage(newMsgRes.rows[0], "group");
-        members.forEach(async (memberId: number) => {
-          const targetSocket = onlineUsers.get(memberId);
-          if (targetSocket) io.to(targetSocket).emit("new_group_message", popMsg);
-          await addNotification(memberId, "new_group_message", `${group.name} grubuna yeni bir mesaj geldi.`);
-        });
+
+      const sUser = await getUser(user.id);
+      const roomKey = `group_${group_id}`;
+      const nowIso = new Date().toISOString();
+      const tempId = `grp_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+      let replyMsg = null;
+      if (reply_to) {
+        const cachedGrp = messageRamCache.get(roomKey);
+        const refCached = cachedGrp?.find(m => String(m.id) === String(reply_to));
+        if (refCached) {
+          replyMsg = { id: refCached.id, sender: refCached.sender, type: refCached.type, content: refCached.content, sender_name: refCached.sender_name };
+        }
       }
+
+      const popMsg: any = {
+        id: tempId,
+        group_id,
+        sender: user.id,
+        type,
+        content,
+        reply_to: reply_to || null,
+        reactions: [],
+        sender_name: sUser?.username,
+        sender_avatar: sUser?.avatar,
+        sender_color: sUser?.color,
+        reply_message: replyMsg,
+        file_name: file_name || null,
+        file_size: file_size || null,
+        created_at: nowIso
+      };
+
+      // 1. Instant RAM Cache write
+      messageRamCache.push(roomKey, popMsg);
+
+      // 2. Fetch group members and deliver instantly
+      client.execute({ sql: "SELECT id, name, members FROM groups WHERE id = ?", args: [group_id] }).then(groupRes => {
+        if (groupRes.rows.length > 0) {
+          const group = groupRes.rows[0];
+          const members = JSON.parse(group.members as string || "[]");
+          members.forEach((memberId: number) => {
+            const targetSocket = onlineUsers.get(memberId);
+            if (targetSocket) io.to(targetSocket).emit("new_group_message", popMsg);
+            if (memberId !== user.id) {
+              addNotification(memberId, "new_group_message", `${group.name} grubuna yeni bir mesaj geldi.`).catch(() => {});
+            }
+          });
+        }
+      }).catch(() => {});
+
+      // 3. Asynchronous Turso write
+      client.execute({
+        sql: "INSERT INTO group_messages (group_id, sender, type, content, reply_to, reactions, file_name, file_size, created_at) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?)",
+        args: [group_id, user.id, type, content, reply_to || null, file_name || null, file_size || null, nowIso]
+      }).then(res => {
+        popMsg.id = Number(res.lastInsertRowid);
+      }).catch(err => {
+        console.error("Async group msg persist error:", err);
+      });
     });
 
     socket.on("typing", async (data) => {
@@ -3900,12 +4176,24 @@ async function startServer() {
       }
     });
 
-    socket.on("okey_draw", ({ source }: { source: 'deck' | 'discard' }) => {
-      const roomId = socket.data.currentOkeyRoom;
+    socket.on("okey_draw", (data: any) => {
+      let roomId = data?.roomId || socket.data.currentOkeyRoom;
+      if (!roomId) {
+        for (const [id, r] of okeyRooms.entries()) {
+          if (r.status === 'playing' && r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            socket.data.currentOkeyRoom = id;
+            socket.join(`okey_${id}`);
+            socket.join(id);
+            break;
+          }
+        }
+      }
       if (!roomId) return;
       const room = okeyRooms.get(roomId);
       if (!room || room.status !== 'playing') return;
 
+      const source = data?.source || data;
       const playerIdx = room.players.findIndex((p: any) => p.id === user.id);
       if (playerIdx === -1 || room.currentTurn !== playerIdx || room.turnPhase !== 'draw') {
         return socket.emit("okey_error", "Şu an taş çekme sırası sizde değil.");
@@ -3938,8 +4226,19 @@ async function startServer() {
       broadcastOkeyRoom(roomId);
     });
 
-    socket.on("okey_discard", (tile: any) => {
-      const roomId = socket.data.currentOkeyRoom;
+    socket.on("okey_discard", (dataOrTile: any) => {
+      let roomId = dataOrTile?.roomId || socket.data.currentOkeyRoom;
+      if (!roomId) {
+        for (const [id, r] of okeyRooms.entries()) {
+          if (r.status === 'playing' && r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            socket.data.currentOkeyRoom = id;
+            socket.join(`okey_${id}`);
+            socket.join(id);
+            break;
+          }
+        }
+      }
       if (!roomId) return;
       const room = okeyRooms.get(roomId);
       if (!room || room.status !== 'playing') return;
@@ -3949,6 +4248,7 @@ async function startServer() {
         return socket.emit("okey_error", "Şu an taş atma sırası sizde değil.");
       }
 
+      const tile = dataOrTile?.tile || dataOrTile;
       const player = room.players[playerIdx];
       const handIdx = player.hand.findIndex((t: any) => t.id === tile.id);
       if (handIdx === -1) {
@@ -5351,7 +5651,18 @@ async function startServer() {
     });
 
     socket.on("okey101_draw", (data: any, cb?: any) => {
-      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      let roomId = data?.roomId || socket.data.currentOkey101Room;
+      if (!roomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.status === 'playing' && r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            socket.data.currentOkey101Room = id;
+            socket.join(`okey101_${id}`);
+            socket.join(id);
+            break;
+          }
+        }
+      }
       const source = data?.source || 'deck';
       const room = okey101Rooms.get(roomId);
       if (!room || room.status !== 'playing') {
@@ -5403,7 +5714,18 @@ async function startServer() {
     });
 
     socket.on("okey101_discard", (data: any, cb?: any) => {
-      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      let roomId = data?.roomId || socket.data.currentOkey101Room;
+      if (!roomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.status === 'playing' && r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            socket.data.currentOkey101Room = id;
+            socket.join(`okey101_${id}`);
+            socket.join(id);
+            break;
+          }
+        }
+      }
       const tileId = data?.tileId;
       const room = okey101Rooms.get(roomId);
       if (!room || room.status !== 'playing') {
@@ -5463,9 +5785,20 @@ async function startServer() {
     });
 
     socket.on("okey101_open_hand", (data: any, cb?: any) => {
-      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      let roomId = data?.roomId || socket.data.currentOkey101Room;
+      if (!roomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.status === 'playing' && r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            socket.data.currentOkey101Room = id;
+            socket.join(`okey101_${id}`);
+            socket.join(id);
+            break;
+          }
+        }
+      }
       const rawMelds = data?.melds;
-      const mode = data?.mode;
+      const mode = data?.mode || data?.type;
       const room = okey101Rooms.get(roomId);
       if (!room || room.status !== 'playing') {
         if (cb) cb({ error: "Oyun aktif değil." });
@@ -5583,7 +5916,18 @@ async function startServer() {
     });
 
     socket.on("okey101_append_tile", (data: any, cb?: any) => {
-      const roomId = data?.roomId || socket.data.currentOkey101Room;
+      let roomId = data?.roomId || socket.data.currentOkey101Room;
+      if (!roomId) {
+        for (const [id, r] of okey101Rooms.entries()) {
+          if (r.status === 'playing' && r.players.some((p: any) => p.id === user.id)) {
+            roomId = id;
+            socket.data.currentOkey101Room = id;
+            socket.join(`okey101_${id}`);
+            socket.join(id);
+            break;
+          }
+        }
+      }
       const meldId = data?.meldId || data?.targetMeldId;
       const tileId = data?.tileId;
       const position = data?.position;
@@ -5633,16 +5977,30 @@ async function startServer() {
         return;
       }
 
-      const insertAt = position || check.insertAt || 'end';
-      if (insertAt === 'start') {
-        tableMeld.tiles.unshift(tile);
+      if (check.orderedTiles && check.orderedTiles.length > 0) {
+        tableMeld.tiles = check.orderedTiles;
+        tableMeld.score = check.score || tableMeld.score;
       } else {
-        tableMeld.tiles.push(tile);
+        const insertAt = position || check.insertAt || 'end';
+        if (insertAt === 'start') {
+          tableMeld.tiles.unshift(tile);
+        } else {
+          tableMeld.tiles.push(tile);
+        }
+        if (check.score) {
+          tableMeld.score = check.score;
+        } else if (tableMeld.type === 'run') {
+          tableMeld.score = (tableMeld.score || 0) + (tile.isOkey ? 10 : tile.number);
+        } else if (tableMeld.type === 'group') {
+          const groupNum = tableMeld.tiles.find((t: any) => !isTileOkey101(t, room.okeyTile))?.number || tile.number;
+          tableMeld.score = tableMeld.tiles.length * groupNum;
+        }
       }
 
       player.hand.splice(tileIdx, 1);
       room.lastActionMessage = `${player.username} masadaki pere taş işledi.`;
       broadcast101Room(roomId);
+      socket.emit("okey101_hand", player.hand);
       if (cb) cb({ success: true });
     });
 

@@ -161,110 +161,130 @@ export const deal101Hands = (
 };
 
 /**
- * Validate a consecutive Run (Seri Per)
- * Same color, consecutive numbers, at least 3 tiles.
- * 12-13-1 is valid. (1 after 13 is allowed).
+ * Robustly analyze whether a collection of tiles forms a valid serial run (ardışık seri),
+ * calculating the maximum possible score and optimal visual tile order (seamlessly placing Okey wildcards).
  */
-export const isValidRun = (tiles: Tile101[], okeyRef?: Tile101 | null): { valid: boolean; score: number } => {
-  if (!tiles || tiles.length < 3 || tiles.length > 13) return { valid: false, score: 0 };
+export interface BestRunAnalysis101 {
+  valid: boolean;
+  score: number;
+  type: 'standard' | 'wrap';
+  sequence: number[];
+  orderedTiles: Tile101[];
+}
+
+export const analyzeBestRunSequence101 = (
+  tiles: Tile101[],
+  okeyRef?: Tile101 | null
+): BestRunAnalysis101 => {
+  if (!tiles || tiles.length < 3 || tiles.length > 13) {
+    return { valid: false, score: 0, type: 'standard', sequence: [], orderedTiles: [...(tiles || [])] };
+  }
 
   const regulars = tiles.filter((t) => !isTileOkey(t, okeyRef));
-  const okeysCount = tiles.length - regulars.length;
+  const jokers = tiles.filter((t) => isTileOkey(t, okeyRef));
 
   if (regulars.length === 0) {
-    // All okeys (rare/theoretical)
-    return { valid: true, score: tiles.length * 10 };
+    return {
+      valid: true,
+      score: tiles.length * 10,
+      type: 'standard',
+      sequence: Array(tiles.length).fill(10),
+      orderedTiles: [...tiles]
+    };
   }
 
   const runColor = regulars[0].color;
   if (regulars.some((t) => t.color !== runColor)) {
-    return { valid: false, score: 0 };
+    return { valid: false, score: 0, type: 'standard', sequence: [], orderedTiles: [...tiles] };
   }
 
-  // Check if standard sequence or 12-13-1 wrapping sequence
-  // Normal consecutive without wrap
-  const canBeStandard = checkStandardSequence(tiles, okeyRef);
-  if (canBeStandard.valid) {
-    return canBeStandard;
+  // Ensure regular tiles have distinct numbers (cannot have duplicate numbers in a single run)
+  const regNumSet = new Set<number>();
+  for (const r of regulars) {
+    if (regNumSet.has(r.number)) {
+      return { valid: false, score: 0, type: 'standard', sequence: [], orderedTiles: [...tiles] };
+    }
+    regNumSet.add(r.number);
   }
 
-  // Check wrap sequence (ends with 13-1 or 12-13-1)
-  const canBeWrap = checkWrapSequence(tiles, okeyRef);
-  if (canBeWrap.valid) {
-    return canBeWrap;
+  const L = tiles.length;
+  const regNums = regulars.map((t) => t.number);
+  let bestCandidate: { score: number; type: 'standard' | 'wrap'; sequence: number[] } | null = null;
+
+  // 1. Standard straight sequence: S .. S + L - 1 (S in 1 .. 13 - L + 1)
+  for (let S = 1; S <= 13 - L + 1; S++) {
+    const E = S + L - 1;
+    if (regNums.every((n) => n >= S && n <= E)) {
+      const seq: number[] = [];
+      let score = 0;
+      for (let n = S; n <= E; n++) {
+        seq.push(n);
+        score += n;
+      }
+      if (!bestCandidate || score > bestCandidate.score) {
+        bestCandidate = { score, type: 'standard', sequence: seq };
+      }
+    }
   }
 
-  return { valid: false, score: 0 };
+  // 2. Wrapping sequence ending in 1 (e.g. 12-13-1, 11-12-13-1, 10-11-12-13-1)
+  if (L >= 3 && L <= 5) {
+    const wrapSeq: number[] = [];
+    let wrapScore = 1; // 1 counts as 1 point at the end of 13
+    for (let pos = 15 - L; pos <= 13; pos++) {
+      wrapSeq.push(pos);
+      wrapScore += pos;
+    }
+    wrapSeq.push(1);
+
+    if (regNums.every((n) => wrapSeq.includes(n))) {
+      if (!bestCandidate || wrapScore > bestCandidate.score) {
+        bestCandidate = { score: wrapScore, type: 'wrap', sequence: wrapSeq };
+      }
+    }
+  }
+
+  if (!bestCandidate) {
+    return { valid: false, score: 0, type: 'standard', sequence: [], orderedTiles: [...tiles] };
+  }
+
+  // Order tiles according to the best sequence
+  const orderedTiles: Tile101[] = [];
+  const unusedRegs = [...regulars];
+  const unusedJokers = [...jokers];
+
+  for (const num of bestCandidate.sequence) {
+    const idx = unusedRegs.findIndex((r) => r.number === num);
+    if (idx !== -1) {
+      orderedTiles.push(unusedRegs.splice(idx, 1)[0]);
+    } else if (unusedJokers.length > 0) {
+      orderedTiles.push(unusedJokers.pop()!);
+    }
+  }
+
+  if (orderedTiles.length !== L) {
+    return { valid: false, score: 0, type: 'standard', sequence: [], orderedTiles: [...tiles] };
+  }
+
+  return {
+    valid: true,
+    score: bestCandidate.score,
+    type: bestCandidate.type,
+    sequence: bestCandidate.sequence,
+    orderedTiles
+  };
 };
 
-function checkStandardSequence(tiles: Tile101[], okeyRef?: Tile101 | null): { valid: boolean; score: number } {
-  const len = tiles.length;
-  // Try all possible starting values for tile[0]
-  for (let startNum = 1; startNum <= 14 - len; startNum++) {
-    let match = true;
-    let score = 0;
-    for (let i = 0; i < len; i++) {
-      const expectedNum = startNum + i;
-      const tile = tiles[i];
-      if (isTileOkey(tile, okeyRef)) {
-        score += expectedNum;
-      } else {
-        if (tile.number !== expectedNum) {
-          match = false;
-          break;
-        }
-        score += tile.number;
-      }
-    }
-    if (match) {
-      return { valid: true, score };
-    }
-  }
-  return { valid: false, score: 0 };
-}
-
-function checkWrapSequence(tiles: Tile101[], okeyRef?: Tile101 | null): { valid: boolean; score: number } {
-  const len = tiles.length;
-  // In Okey, wrap only allows 1 AFTER 13 (e.g. 11-12-13-1 or 12-13-1).
-  // The last tile must be 1, preceding must be 13, etc.
-  const lastTile = tiles[len - 1];
-  if (!isTileOkey(lastTile, okeyRef) && lastTile.number !== 1) {
-    return { valid: false, score: 0 };
-  }
-
-  let match = true;
-  let score = 0;
-  for (let i = 0; i < len; i++) {
-    const tile = tiles[i];
-    let expectedNum = 0;
-    if (i === len - 1) {
-      expectedNum = 1;
-    } else {
-      expectedNum = 14 - (len - i); // e.g. for len=3: i=0 -> 12, i=1 -> 13
-    }
-
-    if (expectedNum < 1 || expectedNum > 13) {
-      match = false;
-      break;
-    }
-
-    if (isTileOkey(tile, okeyRef)) {
-      score += expectedNum;
-    } else {
-      if (tile.number !== expectedNum) {
-        match = false;
-        break;
-      }
-      score += tile.number;
-    }
-  }
-
-  if (match) {
-    return { valid: true, score };
-  }
-
-  return { valid: false, score: 0 };
-}
+/**
+ * Validate a Run meld (Ardışık Seri Per)
+ * 3 to 13 consecutive numbers of the same color.
+ * Special case: 12-13-1 is allowed, but 13-1-2 is not.
+ * Calculates optimal point value seamlessly incorporating Okey.
+ */
+export const isValidRun = (tiles: Tile101[], okeyRef?: Tile101 | null): { valid: boolean; score: number } => {
+  const analysis = analyzeBestRunSequence101(tiles, okeyRef);
+  return { valid: analysis.valid, score: analysis.score };
+};
 
 /**
  * Validate a Group meld (Aynı Sayı Per)
@@ -411,7 +431,7 @@ export const canAppendTileToMeld = (
   tile: Tile101,
   meld: Okey101Meld,
   okeyRef?: Tile101 | null
-): { canAppend: boolean; insertAt?: 'start' | 'end'; error?: string } => {
+): { canAppend: boolean; insertAt?: 'start' | 'end'; orderedTiles?: Tile101[]; score?: number; error?: string } => {
   if (!tile || !meld || !meld.tiles) return { canAppend: false };
 
   // Group Meld Appending (Max 4 tiles)
@@ -422,18 +442,20 @@ export const canAppendTileToMeld = (
 
     const okey = isTileOkey(tile, okeyRef);
     const regulars = meld.tiles.filter((t) => !isTileOkey(t, okeyRef));
-    const targetNumber = regulars.length > 0 ? regulars[0].number : 10;
+    const targetNumber = regulars.length > 0 ? regulars[0].number : (tile.number);
 
     if (!okey && tile.number !== targetNumber) {
       return { canAppend: false, error: `Bu gruba sadece ${targetNumber} numaralı taş eklenebilir.` };
     }
 
-    const existingColors = new Set(meld.tiles.map((t) => t.color));
+    // Only compare against colors of existing regular tiles (Okey has variable color)
+    const existingColors = new Set(regulars.map((t) => t.color));
     if (!okey && existingColors.has(tile.color)) {
       return { canAppend: false, error: 'Bu renk zaten bu grupta bulunuyor.' };
     }
 
-    return { canAppend: true, insertAt: 'end' };
+    const newScore = (meld.tiles.length + 1) * targetNumber;
+    return { canAppend: true, insertAt: 'end', score: newScore };
   }
 
   // Run Meld Appending (Min 3, Max 13)
@@ -442,16 +464,31 @@ export const canAppendTileToMeld = (
       return { canAppend: false, error: 'Bu seri maksimum uzunluğa ulaşmış.' };
     }
 
-    // Try prepending tile
-    const prependTest = [tile, ...meld.tiles];
-    if (isValidRun(prependTest, okeyRef).valid) {
-      return { canAppend: true, insertAt: 'start' };
+    // Test with whole set analyzed
+    const combined = [...meld.tiles, tile];
+    const analysis = analyzeBestRunSequence101(combined, okeyRef);
+    if (analysis.valid) {
+      const isFirst = analysis.orderedTiles[0]?.id === tile.id;
+      return {
+        canAppend: true,
+        insertAt: isFirst ? 'start' : 'end',
+        orderedTiles: analysis.orderedTiles,
+        score: analysis.score
+      };
     }
 
-    // Try appending tile
+    // Direct Prepend Test
+    const prependTest = [tile, ...meld.tiles];
+    const preCheck = isValidRun(prependTest, okeyRef);
+    if (preCheck.valid) {
+      return { canAppend: true, insertAt: 'start', score: preCheck.score };
+    }
+
+    // Direct Append Test
     const appendTest = [...meld.tiles, tile];
-    if (isValidRun(appendTest, okeyRef).valid) {
-      return { canAppend: true, insertAt: 'end' };
+    const appCheck = isValidRun(appendTest, okeyRef);
+    if (appCheck.valid) {
+      return { canAppend: true, insertAt: 'end', score: appCheck.score };
     }
 
     return { canAppend: false, error: 'Bu taş bu serinin başına veya sonuna uymuyor.' };
@@ -577,158 +614,530 @@ export const calculateRoundPenalties = (
   return result;
 };
 
-/**
- * Auto-find best runs and groups in player's hand and calculate potential meld score.
- * Tests multiple extraction orders (runs-first vs groups-first) and selects the partition with the maximum score.
- */
-export const findBestMeldsInHand = (
-  hand: Tile101[],
-  okeyRef?: Tile101 | null
-): { melds: Tile101[][]; totalScore: number; unmelded: Tile101[] } => {
-  if (!hand || hand.length === 0) return { melds: [], totalScore: 0, unmelded: [] };
-
-  const solveMelds = (prioritizeRuns: boolean) => {
-    const available = [...hand];
-    const melds: Tile101[][] = [];
-    let totalScore = 0;
-
-    const findRuns = () => {
-      const colors: TileColor[] = ['red', 'blue', 'black', 'yellow'];
-      for (const c of colors) {
-        const colorTiles = available.filter((t) => t.color === c && !isTileOkey(t, okeyRef));
-        colorTiles.sort((a, b) => a.number - b.number);
-
-        // Check for wrapping runs (11-12-13-1 or 12-13-1)
-        const hasOne = colorTiles.find((t) => t.number === 1);
-        const hasThirteen = colorTiles.find((t) => t.number === 13);
-        const hasTwelve = colorTiles.find((t) => t.number === 12);
-        const hasEleven = colorTiles.find((t) => t.number === 11);
-
-        if (hasOne && hasThirteen && hasTwelve) {
-          const wrapRun = hasEleven
-            ? [hasEleven, hasTwelve, hasThirteen, hasOne]
-            : [hasTwelve, hasThirteen, hasOne];
-          const check = isValidRun(wrapRun, okeyRef);
-          if (check.valid) {
-            melds.push([...wrapRun]);
-            totalScore += check.score;
-            for (const t of wrapRun) {
-              const idx = available.findIndex((at) => at.id === t.id);
-              if (idx !== -1) available.splice(idx, 1);
-            }
-          }
-        }
-
-        // Standard consecutive runs
-        const remainingColorTiles = available.filter((t) => t.color === c && !isTileOkey(t, okeyRef));
-        remainingColorTiles.sort((a, b) => a.number - b.number);
-
-        let currentRun: Tile101[] = [];
-        for (let i = 0; i < remainingColorTiles.length; i++) {
-          if (currentRun.length === 0) {
-            currentRun.push(remainingColorTiles[i]);
-          } else {
-            const last = currentRun[currentRun.length - 1];
-            if (remainingColorTiles[i].number === last.number + 1) {
-              currentRun.push(remainingColorTiles[i]);
-            } else if (remainingColorTiles[i].number === last.number) {
-              continue;
-            } else {
-              if (currentRun.length >= 3) {
-                const check = isValidRun(currentRun, okeyRef);
-                if (check.valid) {
-                  melds.push([...currentRun]);
-                  totalScore += check.score;
-                  for (const t of currentRun) {
-                    const idx = available.findIndex((at) => at.id === t.id);
-                    if (idx !== -1) available.splice(idx, 1);
-                  }
-                }
-              }
-              currentRun = [remainingColorTiles[i]];
-            }
-          }
-        }
-        if (currentRun.length >= 3) {
-          const check = isValidRun(currentRun, okeyRef);
-          if (check.valid) {
-            melds.push([...currentRun]);
-            totalScore += check.score;
-            for (const t of currentRun) {
-              const idx = available.findIndex((at) => at.id === t.id);
-              if (idx !== -1) available.splice(idx, 1);
-            }
-          }
-        }
-      }
-    };
-
-    const findGroups = () => {
-      for (let num = 13; num >= 1; num--) {
-        const numTiles = available.filter((t) => t.number === num && !isTileOkey(t, okeyRef));
-        const uniqueColorTiles: Tile101[] = [];
-        const usedColors = new Set<TileColor>();
-        for (const t of numTiles) {
-          if (!usedColors.has(t.color)) {
-            usedColors.add(t.color);
-            uniqueColorTiles.push(t);
-          }
-        }
-
-        if (uniqueColorTiles.length >= 3) {
-          const check = isValidGroup(uniqueColorTiles, okeyRef);
-          if (check.valid) {
-            melds.push(uniqueColorTiles);
-            totalScore += check.score;
-            for (const t of uniqueColorTiles) {
-              const idx = available.findIndex((at) => at.id === t.id);
-              if (idx !== -1) available.splice(idx, 1);
-            }
-          }
-        }
-      }
-    };
-
-    if (prioritizeRuns) {
-      findRuns();
-      findGroups();
-    } else {
-      findGroups();
-      findRuns();
-    }
-
-    return { melds, totalScore, unmelded: available };
-  };
-
-  const solutionA = solveMelds(true);
-  const solutionB = solveMelds(false);
-
-  return solutionA.totalScore >= solutionB.totalScore ? solutionA : solutionB;
+// Helper to order tiles sequentially within a 101 serial run (with Okey placed in its exact position)
+export const orderSerialRun101 = (tiles: Tile101[], okeyRef?: Tile101 | null): Tile101[] => {
+  const analysis = analyzeBestRunSequence101(tiles, okeyRef);
+  return analysis.valid ? analysis.orderedTiles : [...tiles];
 };
 
-/**
- * Auto-find pairs in hand (for Çift Açma)
- */
-export const findPairsInHand = (
-  hand: Tile101[],
-  okeyRef?: Tile101 | null
-): { pairs: Tile101[][]; unmelded: Tile101[] } => {
-  const available = [...hand];
-  const pairs: Tile101[][] = [];
+// Helper to order tiles within a 101 group meld
+export const orderGroupMeld101 = (tiles: Tile101[], okeyRef?: Tile101 | null): Tile101[] => {
+  const jokers = tiles.filter((t) => isTileOkey(t, okeyRef));
+  const regulars = tiles.filter((t) => !isTileOkey(t, okeyRef));
+  const colorOrder: Record<TileColor, number> = { red: 1, blue: 2, black: 3, yellow: 4, fake: 5 };
+  regulars.sort((a, b) => (colorOrder[a.color] || 99) - (colorOrder[b.color] || 99));
+  return [...regulars, ...jokers];
+};
 
-  for (let i = 0; i < available.length; i++) {
-    for (let j = i + 1; j < available.length; j++) {
-      if (isValidPair(available[i], available[j], okeyRef)) {
-        pairs.push([available[i], available[j]]);
-        available.splice(j, 1);
-        available.splice(i, 1);
+// Organize unmelded 101 tiles (pairs together, run-connectors together, singles sorted)
+export const organizeUnmeldedTiles101 = (unmelded: Tile101[]): Tile101[] => {
+  if (unmelded.length <= 1) return [...unmelded];
+
+  const pool = [...unmelded];
+  const organized: Tile101[] = [];
+
+  // 1. Group identical pairs (same color & number)
+  for (let i = 0; i < pool.length; i++) {
+    const t1 = pool[i];
+    if (!t1) continue;
+    for (let j = i + 1; j < pool.length; j++) {
+      const t2 = pool[j];
+      if (!t2) continue;
+      if (t1.color === t2.color && t1.number === t2.number) {
+        organized.push(t1, t2);
+        pool.splice(j, 1);
+        pool.splice(i, 1);
         i--;
         break;
       }
     }
   }
 
-  return { pairs, unmelded: available };
+  // 2. Group 2-tile run connectors (same color, adjacent numbers or 1-gap)
+  for (let i = 0; i < pool.length; i++) {
+    const t1 = pool[i];
+    if (!t1) continue;
+    for (let j = i + 1; j < pool.length; j++) {
+      const t2 = pool[j];
+      if (!t2) continue;
+      if (t1.color === t2.color && Math.abs(t1.number - t2.number) <= 2 && t1.number !== t2.number) {
+        const pair = [t1, t2].sort((a, b) => a.number - b.number);
+        organized.push(...pair);
+        pool.splice(j, 1);
+        pool.splice(i, 1);
+        i--;
+        break;
+      }
+    }
+  }
+
+  // 3. Group 2-tile number pairs (same number, different color)
+  for (let i = 0; i < pool.length; i++) {
+    const t1 = pool[i];
+    if (!t1) continue;
+    for (let j = i + 1; j < pool.length; j++) {
+      const t2 = pool[j];
+      if (!t2) continue;
+      if (t1.number === t2.number && t1.color !== t2.color) {
+        organized.push(t1, t2);
+        pool.splice(j, 1);
+        pool.splice(i, 1);
+        i--;
+        break;
+      }
+    }
+  }
+
+  // 4. Sort remaining isolated singles by color then number
+  const colorOrder: Record<TileColor, number> = { red: 1, blue: 2, black: 3, yellow: 4, fake: 5 };
+  pool.sort((a, b) => {
+    if (colorOrder[a.color] !== colorOrder[b.color]) {
+      return (colorOrder[a.color] || 99) - (colorOrder[b.color] || 99);
+    }
+    return a.number - b.number;
+  });
+
+  organized.push(...pool);
+  return organized;
+};
+
+interface CandidateMeld101 {
+  tiles: Tile101[];
+  tileIds: string[];
+  type: 'run' | 'group';
+  length: number;
+  score: number;
+}
+
+/**
+ * Auto-find best runs and groups in player's hand and calculate potential meld score.
+ * Explores all combinations of serial and group melds (seamlessly incorporating any Okey in the hand),
+ * and selects the disjoint partition that maximizes the total meld score and tile count.
+ */
+export const findBestMeldsInHand = (
+  hand: Tile101[],
+  okeyRef?: Tile101 | null
+): { melds: Tile101[][]; totalScore: number; unmelded: Tile101[] } => {
+  if (!hand || hand.length < 3) {
+    return { melds: [], totalScore: 0, unmelded: organizeUnmeldedTiles101(hand || []) };
+  }
+
+  const jokers = hand.filter((t) => isTileOkey(t, okeyRef));
+  const regulars = hand.filter((t) => !isTileOkey(t, okeyRef));
+  const candidateMelds: CandidateMeld101[] = [];
+
+  // 1. Generate candidate runs for each color (with 0, 1, or 2 jokers)
+  const colors: TileColor[] = ['red', 'blue', 'black', 'yellow'];
+  for (const c of colors) {
+    const colorTiles = regulars.filter((t) => t.color === c);
+    if (colorTiles.length + jokers.length < 3) continue;
+
+    const byNumber = new Map<number, Tile101[]>();
+    for (const t of colorTiles) {
+      if (!byNumber.has(t.number)) byNumber.set(t.number, []);
+      byNumber.get(t.number)!.push(t);
+    }
+
+    // Straight runs
+    for (let S = 1; S <= 11; S++) {
+      for (let L = 3; L <= Math.min(13 - S + 1, 13); L++) {
+        let missing = 0;
+        const usedRegs: Tile101[] = [];
+
+        for (let num = S; num < S + L; num++) {
+          const matching = byNumber.get(num);
+          if (matching && matching.length > 0) {
+            usedRegs.push(matching[0]);
+          } else {
+            missing++;
+          }
+        }
+
+        if (missing <= jokers.length) {
+          const usedJokers = jokers.slice(0, missing);
+          const allTiles = [...usedRegs, ...usedJokers];
+          const ordered = orderSerialRun101(allTiles, okeyRef);
+          const check = isValidRun(ordered, okeyRef);
+          if (check.valid) {
+            candidateMelds.push({
+              tiles: ordered,
+              tileIds: ordered.map((t) => t.id),
+              type: 'run',
+              length: L,
+              score: check.score
+            });
+          }
+        }
+      }
+    }
+
+    // Wrapping runs: 12-13-1, 11-12-13-1, 10-11-12-13-1
+    const wrapSequences = [
+      [12, 13, 1],
+      [11, 12, 13, 1],
+      [10, 11, 12, 13, 1]
+    ];
+    for (const seq of wrapSequences) {
+      let missing = 0;
+      const usedRegs: Tile101[] = [];
+
+      for (const num of seq) {
+        const matching = byNumber.get(num);
+        if (matching && matching.length > 0) {
+          usedRegs.push(matching[0]);
+        } else {
+          missing++;
+        }
+      }
+
+      if (missing <= jokers.length) {
+        const usedJokers = jokers.slice(0, missing);
+        const allTiles = [...usedRegs, ...usedJokers];
+        const ordered = orderSerialRun101(allTiles, okeyRef);
+        const check = isValidRun(ordered, okeyRef);
+        if (check.valid) {
+          candidateMelds.push({
+            tiles: ordered,
+            tileIds: ordered.map((t) => t.id),
+            type: 'run',
+            length: seq.length,
+            score: check.score
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Generate candidate groups for each number (1..13)
+  for (let num = 1; num <= 13; num++) {
+    const numTiles = regulars.filter((t) => t.number === num);
+    const byColor = new Map<TileColor, Tile101>();
+    for (const t of numTiles) {
+      if (!byColor.has(t.color)) byColor.set(t.color, t);
+    }
+    const uniqueRegs = Array.from(byColor.values());
+
+    // Group size 3
+    if (uniqueRegs.length + jokers.length >= 3) {
+      for (let jCount = 0; jCount <= Math.min(jokers.length, 2); jCount++) {
+        const needRegs = 3 - jCount;
+        if (uniqueRegs.length >= needRegs) {
+          const combinations = (arr: Tile101[], k: number): Tile101[][] => {
+            if (k === 0) return [[]];
+            if (arr.length < k) return [];
+            const head = arr[0];
+            const withHead = combinations(arr.slice(1), k - 1).map((c) => [head, ...c]);
+            const withoutHead = combinations(arr.slice(1), k);
+            return [...withHead, ...withoutHead];
+          };
+
+          const regCombos = combinations(uniqueRegs, needRegs);
+          const chosenJokers = jokers.slice(0, jCount);
+
+          for (const rc of regCombos) {
+            const allTiles = orderGroupMeld101([...rc, ...chosenJokers], okeyRef);
+            const check = isValidGroup(allTiles, okeyRef);
+            if (check.valid) {
+              candidateMelds.push({
+                tiles: allTiles,
+                tileIds: allTiles.map((t) => t.id),
+                type: 'group',
+                length: 3,
+                score: check.score
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Group size 4
+    if (uniqueRegs.length + jokers.length >= 4) {
+      for (let jCount = 0; jCount <= Math.min(jokers.length, 3); jCount++) {
+        const needRegs = 4 - jCount;
+        if (uniqueRegs.length >= needRegs) {
+          const combinations = (arr: Tile101[], k: number): Tile101[][] => {
+            if (k === 0) return [[]];
+            if (arr.length < k) return [];
+            const head = arr[0];
+            const withHead = combinations(arr.slice(1), k - 1).map((c) => [head, ...c]);
+            const withoutHead = combinations(arr.slice(1), k);
+            return [...withHead, ...withoutHead];
+          };
+
+          const regCombos = combinations(uniqueRegs, needRegs);
+          const chosenJokers = jokers.slice(0, jCount);
+
+          for (const rc of regCombos) {
+            const allTiles = orderGroupMeld101([...rc, ...chosenJokers], okeyRef);
+            const check = isValidGroup(allTiles, okeyRef);
+            if (check.valid) {
+              candidateMelds.push({
+                tiles: allTiles,
+                tileIds: allTiles.map((t) => t.id),
+                type: 'group',
+                length: 4,
+                score: check.score
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Deduplicate candidate melds, keeping highest score for the same set of tiles
+  const candidateMap = new Map<string, CandidateMeld101>();
+  for (const m of candidateMelds) {
+    const key = [...m.tileIds].sort().join(',');
+    const existing = candidateMap.get(key);
+    if (!existing || m.score > existing.score) {
+      candidateMap.set(key, m);
+    }
+  }
+  const uniqueCandidates = Array.from(candidateMap.values());
+
+  // Sort candidate melds by score and efficiency
+  uniqueCandidates.sort((a, b) => {
+    const valA = a.score * 1000 + a.length;
+    const valB = b.score * 1000 + b.length;
+    return valB - valA;
+  });
+
+  // Branch and bound search for disjoint combination with maximum score
+  let bestMelds: CandidateMeld101[] = [];
+  let bestScore = 0;
+  let bestTilesCount = 0;
+
+  const backtrack = (idx: number, usedTileIds: Set<string>, currentMelds: CandidateMeld101[], currentScore: number, currentTiles: number) => {
+    // Upper bound estimate
+    let remainingPotentialScore = 0;
+    for (let i = idx; i < uniqueCandidates.length; i++) {
+      const cand = uniqueCandidates[i];
+      let canUse = true;
+      for (const tid of cand.tileIds) {
+        if (usedTileIds.has(tid)) {
+          canUse = false;
+          break;
+        }
+      }
+      if (canUse) remainingPotentialScore += cand.score;
+    }
+
+    if (currentScore + remainingPotentialScore < bestScore) {
+      return;
+    }
+
+    if (currentScore > bestScore || (currentScore === bestScore && currentTiles > bestTilesCount)) {
+      bestScore = currentScore;
+      bestTilesCount = currentTiles;
+      bestMelds = [...currentMelds];
+    }
+
+    for (let i = idx; i < uniqueCandidates.length; i++) {
+      const cand = uniqueCandidates[i];
+      let disjoint = true;
+      for (const tid of cand.tileIds) {
+        if (usedTileIds.has(tid)) {
+          disjoint = false;
+          break;
+        }
+      }
+
+      if (disjoint) {
+        for (const tid of cand.tileIds) usedTileIds.add(tid);
+        currentMelds.push(cand);
+
+        backtrack(i + 1, usedTileIds, currentMelds, currentScore + cand.score, currentTiles + cand.length);
+
+        currentMelds.pop();
+        for (const tid of cand.tileIds) usedTileIds.delete(tid);
+      }
+    }
+  };
+
+  backtrack(0, new Set(), [], 0, 0);
+
+  const usedIds = new Set<string>();
+  const finalMelds: Tile101[][] = [];
+  let totalScore = 0;
+
+  for (const m of bestMelds) {
+    finalMelds.push(m.tiles);
+    totalScore += m.score;
+    for (const tid of m.tileIds) usedIds.add(tid);
+  }
+
+  const rawUnmelded = hand.filter((t) => !usedIds.has(t.id));
+  const organizedUnmelded = organizeUnmeldedTiles101(rawUnmelded);
+
+  return {
+    melds: finalMelds,
+    totalScore,
+    unmelded: organizedUnmelded
+  };
+};
+
+/**
+ * Auto-find pairs in hand (for Çift Açma), using Okey(s) to complete pairs
+ */
+export const findPairsInHand = (
+  hand: Tile101[],
+  okeyRef?: Tile101 | null
+): { pairs: Tile101[][]; unmelded: Tile101[] } => {
+  if (!hand || hand.length === 0) return { pairs: [], unmelded: [] };
+
+  const jokers = hand.filter((t) => isTileOkey(t, okeyRef));
+  const regulars = hand.filter((t) => !isTileOkey(t, okeyRef));
+
+  const pairs: Tile101[][] = [];
+  const unusedRegs = [...regulars];
+  const unusedJokers = [...jokers];
+
+  // 1. Find exact matching pairs (same number and color)
+  for (let i = 0; i < unusedRegs.length; i++) {
+    const t1 = unusedRegs[i];
+    if (!t1) continue;
+    for (let j = i + 1; j < unusedRegs.length; j++) {
+      const t2 = unusedRegs[j];
+      if (!t2) continue;
+      if (t1.color === t2.color && t1.number === t2.number) {
+        pairs.push([t1, t2]);
+        unusedRegs.splice(j, 1);
+        unusedRegs.splice(i, 1);
+        i--;
+        break;
+      }
+    }
+  }
+
+  // 2. Use Okey(s) to pair with highest value unmatched tiles
+  unusedRegs.sort((a, b) => b.number - a.number);
+  while (unusedJokers.length > 0 && unusedRegs.length > 0) {
+    const joker = unusedJokers.pop()!;
+    const reg = unusedRegs.shift()!;
+    pairs.push([reg, joker]);
+  }
+
+  // 3. If two jokers remain, pair them together
+  while (unusedJokers.length >= 2) {
+    pairs.push([unusedJokers.pop()!, unusedJokers.pop()!]);
+  }
+
+  // Sort remaining single tiles
+  const singles = [...unusedRegs, ...unusedJokers];
+  const colorOrder: Record<TileColor, number> = { red: 1, blue: 2, black: 3, yellow: 4, fake: 5 };
+  singles.sort((a, b) => {
+    if (a.number !== b.number) return a.number - b.number;
+    return (colorOrder[a.color] || 99) - (colorOrder[b.color] || 99);
+  });
+
+  return { pairs, unmelded: singles };
+};
+
+/**
+ * Intelligent Auto Sort for 101 Okey Rack
+ */
+export const autoSortRuns101 = (
+  tiles: (Tile101 | null)[],
+  okeyRef?: Tile101 | null
+): (Tile101 | null)[] => {
+  const nonNull = tiles.filter((t): t is Tile101 => t !== null);
+  if (nonNull.length === 0) return [...tiles];
+
+  const { melds, unmelded } = findBestMeldsInHand(nonNull, okeyRef);
+  const newRack: (Tile101 | null)[] = Array(tiles.length).fill(null);
+  const RACK_SIZE = tiles.length;
+  const ROW_LEN = 15; // 2 rows of 15
+
+  let currentSlot = 0;
+
+  // Place melds with 1 slot gap, wrapping cleanly to row 1 if needed
+  for (const meld of melds) {
+    if (currentSlot < ROW_LEN && currentSlot + meld.length > ROW_LEN) {
+      currentSlot = ROW_LEN;
+    }
+
+    if (currentSlot + meld.length > RACK_SIZE) break;
+
+    for (const t of meld) {
+      newRack[currentSlot++] = t;
+    }
+
+    if (currentSlot < RACK_SIZE && currentSlot !== ROW_LEN) {
+      currentSlot++;
+    }
+  }
+
+  // Place organized unmelded tiles
+  for (const t of unmelded) {
+    if (currentSlot < RACK_SIZE) {
+      newRack[currentSlot++] = t;
+    } else {
+      const freeIdx = newRack.findIndex((s) => s === null);
+      if (freeIdx !== -1) newRack[freeIdx] = t;
+    }
+  }
+
+  // Failsafe: guarantee all tiles are present on the rack
+  const placedIds = new Set(newRack.filter((t): t is Tile101 => t !== null).map((t) => t.id));
+  for (const t of nonNull) {
+    if (!placedIds.has(t.id)) {
+      const freeIdx = newRack.findIndex((s) => s === null);
+      if (freeIdx !== -1) {
+        newRack[freeIdx] = t;
+        placedIds.add(t.id);
+      }
+    }
+  }
+
+  return newRack;
+};
+
+/**
+ * Intelligent Auto Sort for 101 Okey Pairs Rack
+ */
+export const autoSortPairs101 = (
+  tiles: (Tile101 | null)[],
+  okeyRef?: Tile101 | null
+): (Tile101 | null)[] => {
+  const nonNull = tiles.filter((t): t is Tile101 => t !== null);
+  if (nonNull.length === 0) return [...tiles];
+
+  const { pairs, unmelded } = findPairsInHand(nonNull, okeyRef);
+  const newRack: (Tile101 | null)[] = Array(tiles.length).fill(null);
+  const RACK_SIZE = tiles.length;
+  let slot = 0;
+
+  for (const pair of pairs) {
+    if (slot + 2 > RACK_SIZE) break;
+    newRack[slot++] = pair[0];
+    newRack[slot++] = pair[1];
+    if (slot < RACK_SIZE) slot++; // Gap between pairs
+  }
+
+  for (const t of unmelded) {
+    if (slot < RACK_SIZE) {
+      newRack[slot++] = t;
+    } else {
+      const freeIdx = newRack.findIndex((s) => s === null);
+      if (freeIdx !== -1) newRack[freeIdx] = t;
+    }
+  }
+
+  // Failsafe: guarantee all tiles are present on rack
+  const placedIds = new Set(newRack.filter((t): t is Tile101 => t !== null).map((t) => t.id));
+  for (const t of nonNull) {
+    if (!placedIds.has(t.id)) {
+      const freeIdx = newRack.findIndex((s) => s === null);
+      if (freeIdx !== -1) {
+        newRack[freeIdx] = t;
+        placedIds.add(t.id);
+      }
+    }
+  }
+
+  return newRack;
 };
 
 /**
@@ -748,6 +1157,8 @@ export const Okey101Engine = {
   calculateRoundPenalties,
   findBestMeldsInHand,
   findPairsInHand,
+  autoSortRuns101,
+  autoSortPairs101,
   isTileOkey,
   initializeGame: (room: any) => {
     const { deck, indicator, okeyTile } = generate101Deck();
