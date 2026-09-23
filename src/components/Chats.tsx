@@ -84,6 +84,10 @@ export default function Chats({
   const [messages, setMessages] = useState<any[]>([]);
   const [text, setText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const isInitialScrollRef = useRef(true);
   
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -168,10 +172,22 @@ export default function Chats({
     
     const roomId = activeTab === "friends" ? `dm_${Math.min(currentUserId, activeChat.id)}_${Math.max(currentUserId, activeChat.id)}` : `group_${activeChat.id}`;
     
+    setHasMore(true);
+    setIsLoadingOlder(false);
+    isInitialScrollRef.current = true;
+
     if (activeTab === "friends") {
-      socket.emit("get_messages", activeChat.id, setMessages);
+      socket.emit("get_messages", { friendId: activeChat.id, limit: 50 }, (data: any[]) => {
+        const list = Array.isArray(data) ? data : [];
+        setMessages(list);
+        if (list.length < 50) setHasMore(false);
+      });
     } else {
-      socket.emit("get_group_messages", activeChat.id, setMessages);
+      socket.emit("get_group_messages", { groupId: activeChat.id, limit: 50 }, (data: any[]) => {
+        const list = Array.isArray(data) ? data : [];
+        setMessages(list);
+        if (list.length < 50) setHasMore(false);
+      });
     }
 
     socket.emit("get_chat_read", roomId, (data: [number, number][]) => setReadReceipts(Object.fromEntries(data)));
@@ -201,6 +217,10 @@ export default function Chats({
             if (prev.some(m => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
+          // Scroll to bottom on new message if near bottom
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 50);
         }
       } else {
         if (msg.group_id === activeChat.id) {
@@ -214,6 +234,9 @@ export default function Chats({
             if (prev.some(m => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 50);
         }
       }
     };
@@ -299,13 +322,65 @@ export default function Chats({
     };
   }, [socket, activeChat, currentUserId, activeTab]);
 
+  // Handle Initial Scroll & Infinite Scroll Up
   useEffect(() => {
+    if (messages.length > 0 && isInitialScrollRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      isInitialScrollRef.current = false;
+    }
     if (messages.length > 0 && socket && activeChat) {
       const roomId = activeTab === "friends" ? `dm_${Math.min(currentUserId, activeChat.id)}_${Math.max(currentUserId, activeChat.id)}` : `group_${activeChat.id}`;
       socket.emit("mark_chat_read", roomId, messages[messages.length - 1].id);
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, socket, activeChat, activeTab, currentUserId]);
+
+  // Load older messages on scroll near top
+  const handleScroll = () => {
+    const container = chatContainerRef.current;
+    if (!container || !socket || !activeChat || !hasMore || isLoadingOlder) return;
+
+    if (container.scrollTop < 80 && messages.length > 0) {
+      const oldestId = messages[0]?.id;
+      if (!oldestId) return;
+
+      setIsLoadingOlder(true);
+      const prevScrollHeight = container.scrollHeight;
+      const prevScrollTop = container.scrollTop;
+
+      const callback = (older: any[]) => {
+        setIsLoadingOlder(false);
+        if (!Array.isArray(older) || older.length === 0) {
+          setHasMore(false);
+          return;
+        }
+        if (older.length < 50) {
+          setHasMore(false);
+        }
+
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const uniqueOlder = older.filter(m => !existingIds.has(m.id));
+          if (uniqueOlder.length === 0) {
+            setHasMore(false);
+            return prev;
+          }
+          return [...uniqueOlder, ...prev];
+        });
+
+        requestAnimationFrame(() => {
+          if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight - prevScrollHeight + prevScrollTop;
+          }
+        });
+      };
+
+      if (activeTab === "friends") {
+        socket.emit("get_messages", { friendId: activeChat.id, beforeId: oldestId, limit: 50 }, callback);
+      } else {
+        socket.emit("get_group_messages", { groupId: activeChat.id, beforeId: oldestId, limit: 50 }, callback);
+      }
+    }
+  };
 
   const emitStopTyping = () => {
     if (stopTypingTimeoutRef.current) {
@@ -720,7 +795,17 @@ export default function Chats({
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0">
+            <div 
+              ref={chatContainerRef}
+              onScroll={handleScroll}
+              className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 min-w-0"
+            >
+              {isLoadingOlder && (
+                <div className="flex justify-center items-center py-2 text-slate-400 gap-2 text-xs">
+                  <Loader2 size={16} className="animate-spin text-blue-500" />
+                  <span>Geçmiş mesajlar yükleniyor...</span>
+                </div>
+              )}
               {messages.map((msg, idx) => {
                 const isMine = msg.sender === currentUserId;
                 const isEmirgan = currentUsername?.trim().toLowerCase() === 'emirgan';

@@ -34,6 +34,8 @@ export default function GlobalChat({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const isInitialScrollDone = useRef(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [users, setUsers] = useState<any[]>(() => [...globalChatCache.users]);
 
   const [isRecording, setIsRecording] = useState(false);
@@ -211,6 +213,49 @@ export default function GlobalChat({
     messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
+  const handleScroll = () => {
+    const container = chatContainerRef.current;
+    if (!container || !socket || !hasMore || isLoadingOlder || messages.length === 0) return;
+
+    if (container.scrollTop < 80) {
+      const oldestId = messages[0]?.id;
+      if (!oldestId) return;
+
+      setIsLoadingOlder(true);
+      const prevScrollHeight = container.scrollHeight;
+      const prevScrollTop = container.scrollTop;
+
+      socket.emit("get_global_messages", { beforeId: oldestId, limit: 50 }, (olderMsgs: any[]) => {
+        setIsLoadingOlder(false);
+        if (!Array.isArray(olderMsgs) || olderMsgs.length === 0) {
+          setHasMore(false);
+          return;
+        }
+        if (olderMsgs.length < 50) {
+          setHasMore(false);
+        }
+
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const uniqueOlder = olderMsgs.filter((m) => !existingIds.has(m.id));
+          if (uniqueOlder.length === 0) {
+            setHasMore(false);
+            return prev;
+          }
+          const merged = [...uniqueOlder, ...prev];
+          globalChatCache.messages = merged;
+          return merged;
+        });
+
+        requestAnimationFrame(() => {
+          if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight - prevScrollHeight + prevScrollTop;
+          }
+        });
+      });
+    }
+  };
+
   useEffect(() => {
     if (messages.length > 0) {
       if (!isInitialScrollDone.current) {
@@ -221,12 +266,12 @@ export default function GlobalChat({
         requestAnimationFrame(() => scrollToBottom("auto"));
         const timer = setTimeout(() => scrollToBottom("auto"), 80);
         return () => clearTimeout(timer);
-      } else {
-        // Smooth scroll for new incoming/outgoing messages
+      } else if (!isLoadingOlder) {
+        // Smooth scroll for new incoming/outgoing messages only if not loading historical messages
         scrollToBottom("smooth");
       }
     }
-  }, [messages.length]);
+  }, [messages.length, isLoadingOlder]);
 
   useEffect(() => {
     if (messages.length > 0 && socket) {
@@ -447,7 +492,17 @@ export default function GlobalChat({
           </div>
         </div>
 
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 space-y-3 sm:space-y-4 min-w-0 overscroll-contain">
+        <div 
+          ref={chatContainerRef} 
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 space-y-3 sm:space-y-4 min-w-0 overscroll-contain"
+        >
+          {isLoadingOlder && (
+            <div className="flex justify-center items-center py-2 text-slate-400 gap-2 text-xs">
+              <Loader2 size={16} className="animate-spin text-blue-500" />
+              <span>Geçmiş genel mesajlar yükleniyor...</span>
+            </div>
+          )}
           {messages.map((msg, index) => {
             const isMine = msg.sender === currentUserId;
             const isEmirgan = currentUsername?.trim().toLowerCase() === 'emirgan';

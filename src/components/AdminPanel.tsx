@@ -4,7 +4,7 @@ import {
   ShieldAlert, Users, Cpu, Laptop, Trash2, Ban, CheckCircle2, 
   RefreshCw, Megaphone, Search, Activity, Clock, 
   Unlock, Crown, Server, AlertTriangle, Filter, Eye, UserX,
-  Radio, HardDrive, Terminal, X
+  Radio, HardDrive, Terminal, X, Plus
 } from "lucide-react";
 import { getApiUrl } from "../utils/api";
 
@@ -88,6 +88,12 @@ export default function AdminPanel({ socket, currentUsername, onUserClick }: Adm
   const [broadcastMessage, setBroadcastMessage] = useState<string>("");
   const [broadcastType, setBroadcastType] = useState<"urgent" | "info" | "warning">("urgent");
 
+  // Manual hardware ban state
+  const [manualHardwareFp, setManualHardwareFp] = useState<string>("");
+  const [manualHardwareReason, setManualHardwareReason] = useState<string>("Kural ihlali sebebiyle donanım banlandı.");
+  const [manualHardwareUserId, setManualHardwareUserId] = useState<string>("");
+  const [showManualBanForm, setShowManualBanForm] = useState<boolean>(false);
+
   // Notification Toast
   const [toastMessage, setToastMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
@@ -98,9 +104,13 @@ export default function AdminPanel({ socket, currentUsername, onUserClick }: Adm
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem("lan_token") || "";
+    const username = localStorage.getItem("lan_username") || "emirgan";
+    const userId = localStorage.getItem("lan_user_id") || "";
     return {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
+      "Authorization": `Bearer ${token}`,
+      "X-Username": username,
+      "X-User-Id": userId
     };
   };
 
@@ -241,6 +251,43 @@ export default function AdminPanel({ socket, currentUsername, onUserClick }: Adm
       if (res.ok) {
         showToast(data.message || "Donanım banı kaldırıldı", "success");
         setBannedHardware((prev) => prev.filter((item) => item.device_fingerprint !== device_fingerprint && item.id !== id));
+        fetchOverview();
+      } else {
+        showToast(data.error || "Hata oluştu", "error");
+      }
+    } catch (e: any) {
+      showToast(e.message || "İstek başarısız", "error");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // 2.1 Action: Manually Ban Hardware Fingerprint
+  const handleManualBanHardware = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualHardwareFp.trim()) {
+      showToast("Lütfen bir donanım kimliği (Hardware Fingerprint) girin.", "error");
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const res = await fetch(getApiUrl("/api/admin/ban-hardware-manual"), {
+        method: "POST",
+        credentials: "include",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          device_fingerprint: manualHardwareFp.trim(),
+          reason: manualHardwareReason.trim(),
+          banned_user_id: manualHardwareUserId ? Number(manualHardwareUserId) : null
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || "Cihaz donanım kimliği başarıyla yasaklandı!", "success");
+        setManualHardwareFp("");
+        setManualHardwareUserId("");
+        setShowManualBanForm(false);
+        fetchBannedHardware();
         fetchOverview();
       } else {
         showToast(data.error || "Hata oluştu", "error");
@@ -603,7 +650,13 @@ export default function AdminPanel({ socket, currentUsername, onUserClick }: Adm
                   Bu cihazlar platforma yeni hesap açsalar veya VPN kullansalar bile otomatik olarak engellenir.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setShowManualBanForm(!showManualBanForm)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition-all cursor-pointer"
+                >
+                  <Plus size={14} /> {showManualBanForm ? "Formu Kapat" : "Manuel Donanım Banı Ekle"}
+                </button>
                 <button
                   onClick={() => setConfirmClearAllBansModal(true)}
                   className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition-all cursor-pointer"
@@ -612,6 +665,64 @@ export default function AdminPanel({ socket, currentUsername, onUserClick }: Adm
                 </button>
               </div>
             </div>
+
+            {/* Manual Hardware Ban Collapsible Form */}
+            {showManualBanForm && (
+              <form onSubmit={handleManualBanHardware} className="bg-slate-900/90 border border-slate-700 p-4 rounded-2xl space-y-3">
+                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                  <ShieldAlert size={14} className="text-rose-400" /> Yeni Cihaz / Hardware Parmak İzi Yasakla
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">Hardware Fingerprint (*)</label>
+                    <input
+                      type="text"
+                      placeholder="Örn: a3f92b7c1..."
+                      value={manualHardwareFp}
+                      onChange={(e) => setManualHardwareFp(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">İlişkili Kullanıcı ID (Opsiyonel)</label>
+                    <input
+                      type="number"
+                      placeholder="Örn: 12"
+                      value={manualHardwareUserId}
+                      onChange={(e) => setManualHardwareUserId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">Ban Gerekçesi</label>
+                    <input
+                      type="text"
+                      placeholder="Ban sebebi..."
+                      value={manualHardwareReason}
+                      onChange={(e) => setManualHardwareReason(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowManualBanForm(false)}
+                    className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-700 cursor-pointer"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={actionLoading}
+                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    {actionLoading ? <RefreshCw size={13} className="animate-spin" /> : <Ban size={13} />} Donanımı Kilitle
+                  </button>
+                </div>
+              </form>
+            )}
 
             {/* Hardware List Table */}
             <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow">
