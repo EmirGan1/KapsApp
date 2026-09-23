@@ -289,9 +289,12 @@ async function initDb() {
     banned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Unban and reset all existing banned IPs as requested
+  // Unban and reset all existing banned IPs and Hardware bans as requested
   try {
     await client.execute("DELETE FROM banned_ips;");
+    await client.execute("DELETE FROM banned_hardware;");
+    await client.execute("DELETE FROM banned_devices;");
+    await client.execute("UPDATE users SET is_banned = 0, isBanned = 0, ban_reason = NULL, banned_at = NULL WHERE is_banned = 1 OR isBanned = 1;");
   } catch(e) {}
 
   // User Ban & Hardware Tracking Column Migrations
@@ -1271,11 +1274,270 @@ async function startServer() {
   // Admin audit records for banned hardware
   app.get(["/api/admin/banned-records", "/api/admin/banned-hardware"], requireEmirganAdmin, async (req, res) => {
     try {
-      const hwRes = await client.execute("SELECT * FROM banned_hardware ORDER BY banned_at DESC LIMIT 100");
+      const hwRes = await client.execute("SELECT * FROM banned_hardware ORDER BY banned_at DESC LIMIT 200");
       return res.json({
         hardware: hwRes.rows,
         devices: hwRes.rows
       });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Overall System Metrics & Health Dashboard
+  app.get("/api/admin/overview", requireEmirganAdmin, async (req, res) => {
+    try {
+      const [usersCountRes, bannedUsersRes, bannedHwRes, postsRes, messagesRes, announcementsRes] = await Promise.all([
+        client.execute("SELECT COUNT(*) as c FROM users"),
+        client.execute("SELECT COUNT(*) as c FROM users WHERE is_banned = 1 OR isBanned = 1"),
+        client.execute("SELECT COUNT(*) as c FROM banned_hardware"),
+        client.execute("SELECT COUNT(*) as c FROM posts"),
+        client.execute("SELECT COUNT(*) as c FROM messages"),
+        client.execute("SELECT COUNT(*) as c FROM announcements")
+      ]);
+
+      const totalUsers = Number(usersCountRes.rows[0]?.c || 0);
+      const bannedUsersCount = Number(bannedUsersRes.rows[0]?.c || 0);
+      const bannedHardwareCount = Number(bannedHwRes.rows[0]?.c || 0);
+      const totalPosts = Number(postsRes.rows[0]?.c || 0);
+      const totalMessages = Number(messagesRes.rows[0]?.c || 0);
+      const totalAnnouncements = Number(announcementsRes.rows[0]?.c || 0);
+
+      const mem = process.memoryUsage();
+
+      return res.json({
+        totalUsers,
+        onlineCount: onlineUsers.size,
+        bannedUsersCount,
+        bannedHardwareCount,
+        totalPosts,
+        totalMessages,
+        totalAnnouncements,
+        uptimeSeconds: Math.floor(process.uptime()),
+        memoryRssMb: Math.round(mem.rss / 1024 / 1024),
+        nodeVersion: process.version,
+        serverTime: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error("Admin overview error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Get all users with search, filter and pagination
+  app.get("/api/admin/users", requireEmirganAdmin, async (req, res) => {
+    try {
+      const search = (req.query.search as string || "").trim();
+      const filter = (req.query.filter as string || "all").trim(); // all | banned | active | admins
+
+      let sql = `SELECT id, username, email, avatar, color, is_admin, is_banned, isBanned, banned_at, ban_reason,
+                 created_at, last_active, device_fingerprint, last_device_id, last_ip, uno_wins
+                 FROM users WHERE 1=1`;
+      const args: any[] = [];
+
+      if (search) {
+        sql += ` AND (username LIKE ? OR email LIKE ? OR id = ?)`;
+        args.push(`%${search}%`, `%${search}%`, Number(search) || -1);
+      }
+
+      if (filter === "banned") {
+        sql += ` AND (is_banned = 1 OR isBanned = 1)`;
+      } else if (filter === "active") {
+        sql += ` AND (is_banned = 0 OR is_banned IS NULL) AND (isBanned = 0 OR isBanned IS NULL)`;
+      } else if (filter === "admins") {
+        sql += ` AND (is_admin = 1 OR username = 'emirgan')`;
+      }
+
+      sql += ` ORDER BY id DESC LIMIT 200`;
+
+      const result = await client.execute({ sql, args });
+
+      const usersWithStatus = result.rows.map((u) => {
+        const uid = Number(u.id);
+        const isOnline = onlineUsers.has(uid);
+        return {
+          ...u,
+          isOnline
+        };
+      });
+
+      return res.json({ users: usersWithStatus });
+    } catch (err: any) {
+      console.error("Admin get users error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Clear ALL Hardware Bans at once
+  app.post("/api/admin/clear-all-hardware-bans", requireEmirganAdmin, async (req, res) => {
+    try {
+      await client.execute("DELETE FROM banned_hardware");
+      try { await client.execute("DELETE FROM banned_devices"); } catch(e){}
+      bannedHardwareSet.clear();
+
+      // Optionally unban all banned users if requested
+      if (req.body?.unbanUsers) {
+        await client.execute("UPDATE users SET is_banned = 0, isBanned = 0, ban_reason = NULL, banned_at = NULL");
+        queryCache.clear();
+      }
+
+      io.emit("admin_bans_reset", { message: "Tüm donanım banları yönetici tarafından kaldırıldı." });
+
+      return res.json({ 
+        success: true, 
+        message: "Tüm donanım banları başarıyla sıfırlandı ve temizlendi." 
+      });
+    } catch (err: any) {
+      console.error("Admin clear all hardware bans error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Unban specific Hardware Fingerprint
+  app.post("/api/admin/unban-hardware", requireEmirganAdmin, async (req, res) => {
+    try {
+      const { device_fingerprint, id } = req.body;
+      if (!device_fingerprint && !id) {
+        return res.status(400).json({ error: "device_fingerprint veya id gereklidir." });
+      }
+
+      if (device_fingerprint) {
+        await client.execute({
+          sql: "DELETE FROM banned_hardware WHERE device_fingerprint = ?",
+          args: [device_fingerprint]
+        });
+        bannedHardwareSet.delete(device_fingerprint);
+      } else if (id) {
+        const row = await client.execute({
+          sql: "SELECT device_fingerprint FROM banned_hardware WHERE id = ?",
+          args: [id]
+        });
+        if (row.rows.length > 0 && row.rows[0].device_fingerprint) {
+          bannedHardwareSet.delete(String(row.rows[0].device_fingerprint));
+        }
+        await client.execute({
+          sql: "DELETE FROM banned_hardware WHERE id = ?",
+          args: [id]
+        });
+      }
+
+      return res.json({ 
+        success: true, 
+        message: "Cihaz donanım banı başarıyla kaldırıldı." 
+      });
+    } catch (err: any) {
+      console.error("Admin unban hardware error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Unban User Account
+  app.post("/api/admin/unban-user", requireEmirganAdmin, async (req, res) => {
+    try {
+      const targetId = Number(req.body?.userId || req.body?.id);
+      if (!targetId) return res.status(400).json({ error: "Geçerli bir kullanıcı ID gereklidir." });
+
+      await client.execute({
+        sql: "UPDATE users SET is_banned = 0, isBanned = 0, ban_reason = NULL, banned_at = NULL WHERE id = ?",
+        args: [targetId]
+      });
+      invalidateUserCache(targetId);
+
+      const targetRes = await client.execute({ sql: "SELECT username, device_fingerprint FROM users WHERE id = ?", args: [targetId] });
+      const targetUser = targetRes.rows[0];
+
+      // Also remove associated hardware fingerprint from ban if requested
+      if (targetUser?.device_fingerprint && req.body?.unbanHardwareToo) {
+        const fp = String(targetUser.device_fingerprint);
+        await client.execute({ sql: "DELETE FROM banned_hardware WHERE device_fingerprint = ?", args: [fp] });
+        bannedHardwareSet.delete(fp);
+      }
+
+      io.emit("user_unbanned", { userId: targetId, username: targetUser?.username });
+
+      return res.json({ 
+        success: true, 
+        message: `"${targetUser?.username || targetId}" kullanıcısının banı başarıyla kaldırıldı.` 
+      });
+    } catch (err: any) {
+      console.error("Admin unban user error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Toggle Admin Status
+  app.post("/api/admin/users/:id/toggle-admin", requireEmirganAdmin, async (req, res) => {
+    try {
+      const targetId = Number(req.params.id);
+      const targetRes = await client.execute({ sql: "SELECT id, username, is_admin FROM users WHERE id = ?", args: [targetId] });
+      if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
+      const targetUser = targetRes.rows[0];
+
+      if (targetUser.username && (targetUser.username as string).toLowerCase() === "emirgan") {
+        return res.status(400).json({ error: "Kurucu yönetici statüsü değiştirilemez." });
+      }
+
+      const newAdminVal = targetUser.is_admin ? 0 : 1;
+      await client.execute({
+        sql: "UPDATE users SET is_admin = ? WHERE id = ?",
+        args: [newAdminVal, targetId]
+      });
+      invalidateUserCache(targetId);
+
+      return res.json({ 
+        success: true, 
+        is_admin: newAdminVal,
+        message: `"${targetUser.username}" için adminlik durumu güncellendi: ${newAdminVal ? "Admin yapıldı" : "Adminlik kaldırıldı"}.` 
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Broadcast High-Priority Alert / Flash Notification
+  app.post("/api/admin/broadcast-alert", requireEmirganAdmin, async (req, res) => {
+    try {
+      const { title, message, type } = req.body;
+      if (!message || !message.trim()) {
+        return res.status(400).json({ error: "Mesaj içeriği boş olamaz." });
+      }
+
+      io.emit("admin_broadcast_alert", {
+        title: title || "📢 YÖNETİCİ DUYURUSU",
+        message: message.trim(),
+        type: type || "urgent",
+        sender: "emirgan",
+        timestamp: Date.now()
+      });
+
+      return res.json({ success: true, message: "Canlı duyuru tüm kullanıcılara iletildi." });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Access & Security Audit Logs (5651)
+  app.get("/api/admin/access-logs", requireEmirganAdmin, async (req, res) => {
+    try {
+      const logsRes = await client.execute("SELECT * FROM access_logs ORDER BY timestamp DESC LIMIT 150");
+      return res.json({ logs: logsRes.rows });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin: Purge Feed Post
+  app.post("/api/admin/purge-post", requireEmirganAdmin, async (req, res) => {
+    try {
+      const postId = Number(req.body?.postId);
+      if (!postId) return res.status(400).json({ error: "Geçerli bir postId gereklidir." });
+
+      await client.execute({ sql: "DELETE FROM posts WHERE id = ?", args: [postId] });
+      await client.execute({ sql: "DELETE FROM comments WHERE post_id = ?", args: [postId] });
+      await client.execute({ sql: "DELETE FROM likes WHERE post_id = ?", args: [postId] });
+
+      io.emit("feed_updated");
+      return res.json({ success: true, message: "Gönderi kalıcı olarak silindi." });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }

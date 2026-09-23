@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
-import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2, Radio, MapPin, Megaphone } from "lucide-react";
+import { MessageSquare, LayoutGrid, Users, UserCircle2, Globe, Bell, Folder, Moon, Sun, Gamepad2, Radio, MapPin, Megaphone, Calculator, Crown } from "lucide-react";
 import Auth from "./components/Auth";
 import Feed from "./components/Feed";
 import Chats from "./components/Chats";
@@ -15,6 +15,8 @@ import Announcements, { AnnouncementItem } from "./components/Announcements";
 import AnnouncementModal from "./components/AnnouncementModal";
 import ToastContainer, { ToastItem } from "./components/ToastContainer";
 import DeviceBanScreen from "./components/DeviceBanScreen";
+import KapNspire from "./components/KapNspire/KapNspire";
+import AdminPanel from "./components/AdminPanel";
 import { getSocketUrl } from "./utils/api";
 import { getCachedHardwareFingerprint, getHardwareFingerprint } from "./utils/deviceFingerprint";
 
@@ -33,7 +35,7 @@ export default function App() {
   const [onlineUsers, setOnlineUsers] = useState<number[]>([]);
   const [currentUserId, setCurrentUserId] = useState<number>(Number(localStorage.getItem("lan_user_id")) || 0);
   
-  const [activeTab, setActiveTab] = useState<"announcements" | "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map">("chats");
+  const [activeTab, setActiveTab] = useState<"announcements" | "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map" | "nspire" | "admin">("chats");
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
   const [viewingUserId, setViewingUserId] = useState<number>(currentUserId);
   const [targetChatUserId, setTargetChatUserId] = useState<number | null>(null);
@@ -344,6 +346,17 @@ export default function App() {
       newSocket.on("new_announcement", handleIncomingAnnouncement);
       newSocket.on("new_global_announcement", handleIncomingAnnouncement);
 
+      // Admin Broadcast Live Alert Listener
+      newSocket.on("admin_broadcast_alert", (alert: any) => {
+        addToast({
+          type: "system",
+          title: alert.title || "📢 YÖNETİCİ DUYURUSU",
+          text: alert.message,
+          senderName: "Emirgan (Yönetici)",
+          senderColor: "#e11d48"
+        });
+      });
+
       // Initial check for unread announcements
       newSocket.emit("get_announcements", (res: any) => {
         if (res?.announcements && Array.isArray(res.announcements) && res.announcements.length > 0) {
@@ -435,7 +448,7 @@ export default function App() {
     return <Auth onAuthSuccess={handleAuthSuccess} />;
   }
 
-  const handleTabChange = (tab: "announcements" | "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map") => {
+  const handleTabChange = (tab: "announcements" | "global" | "chats" | "feed" | "friends" | "profile" | "notifications" | "subject" | "games" | "voice" | "map" | "nspire" | "admin") => {
     setActiveTab(tab);
     if (tab === "announcements") {
       setHasUnreadAnnouncement(false);
@@ -467,6 +480,8 @@ export default function App() {
     setViewingUserId(userId);
     setActiveTab("profile");
   };
+
+  const isEmirgan = (username || "").trim().toLowerCase() === "emirgan";
 
   return (
     <div className="flex flex-col md:flex-row h-[100dvh] w-full max-w-[100vw] bg-white dark:bg-slate-900 md:bg-slate-50 md:dark:bg-slate-950 overflow-hidden font-sans transition-colors duration-200">
@@ -502,12 +517,27 @@ export default function App() {
 
       {/* Desktop Sidebar */}
       <div className="hidden md:flex w-24 lg:w-64 flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-colors duration-200">
-        <div className="p-6">
-          <h1 className="text-2xl font-black text-blue-600 tracking-tight hidden lg:block">KapsApp</h1>
-          <h1 className="text-2xl font-black text-blue-600 tracking-tight lg:hidden">KA</h1>
+        <div className="p-6 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black text-blue-600 tracking-tight hidden lg:block">KapsApp</h1>
+            <h1 className="text-2xl font-black text-blue-600 tracking-tight lg:hidden">KA</h1>
+          </div>
+          {isEmirgan && (
+            <span className="hidden lg:inline-flex px-2 py-0.5 bg-amber-500/10 text-amber-500 dark:text-amber-400 border border-amber-500/20 rounded-md text-[10px] font-bold">
+              ROOT
+            </span>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden">
           <nav className="px-4 space-y-2">
+            {isEmirgan && (
+              <NavItem 
+                icon={<Crown className="text-amber-500 animate-pulse" />} 
+                label="👑 Emirgan Panel" 
+                active={activeTab === 'admin'} 
+                onClick={() => handleTabChange('admin')} 
+              />
+            )}
             <NavItem 
               icon={<Megaphone className="text-amber-500 dark:text-amber-400" />} 
               label="Duyurular" 
@@ -522,6 +552,7 @@ export default function App() {
             <NavItem icon={<Users />} label="Arkadaşlar" active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
             <NavItem icon={<Radio />} label="Sesli & Görüntülü" active={activeTab === 'voice'} onClick={() => handleTabChange('voice')} />
             <NavItem icon={<Gamepad2 />} label="Oyunlar" active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
+            <NavItem icon={<Calculator className="text-cyan-500 dark:text-cyan-400" />} label="Kap-Nspire" active={activeTab === 'nspire'} onClick={() => handleTabChange('nspire')} />
             <NavItem icon={<Bell />} label="Bildirimler" active={activeTab === 'notifications'} badge={unreadNotificationsCount} onClick={() => handleTabChange('notifications')} />
             <NavItem icon={<UserCircle2 />} label="Profil" active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
           </nav>
@@ -567,6 +598,13 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col relative w-full max-w-full overflow-hidden">
+        {activeTab === 'admin' && isEmirgan && (
+          <AdminPanel 
+            socket={socket} 
+            currentUsername={username} 
+            onUserClick={handleUserClick} 
+          />
+        )}
         {activeTab === 'announcements' && (
           <Announcements 
             socket={socket} 
@@ -641,11 +679,23 @@ export default function App() {
         <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'games' ? 'flex' : 'hidden'}`}>
           <Games socket={socket} currentUserId={currentUserId} username={username} avatar={avatar} color={color} onUserClick={handleUserClick} />
         </div>
+
+        {/* Persistently mounted Kap-Nspire CAS Calculator to preserve calculation history and graph state */}
+        <div className={`flex-1 flex-col relative w-full h-full ${activeTab === 'nspire' ? 'flex' : 'hidden'}`}>
+          <KapNspire />
+        </div>
       </div>
 
       {/* Mobile Bottom Nav */}
       <div className="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md pb-safe shrink-0 z-30">
         <nav className="flex items-center justify-around px-1 py-1.5 overflow-x-auto no-scrollbar">
+          {isEmirgan && (
+            <MobileNavItem 
+              icon={<Crown size={22} className="text-amber-500 animate-pulse" />} 
+              active={activeTab === 'admin'} 
+              onClick={() => handleTabChange('admin')} 
+            />
+          )}
           <MobileNavItem icon={<Megaphone size={22} className="text-amber-500" />} active={activeTab === 'announcements'} dotBadge={hasUnreadAnnouncement} onClick={() => handleTabChange('announcements')} />
           <MobileNavItem icon={<Globe size={22} />} active={activeTab === 'global'} badge={unreadGlobalCount} onClick={() => handleTabChange('global')} />
           <MobileNavItem icon={<MessageSquare size={22} />} active={activeTab === 'chats'} badge={unreadDmCount} onClick={() => handleTabChange('chats')} />
@@ -653,6 +703,7 @@ export default function App() {
           <MobileNavItem icon={<MapPin size={22} className="text-emerald-500" />} active={activeTab === 'map'} onClick={() => handleTabChange('map')} />
           <MobileNavItem icon={<Radio size={22} />} active={activeTab === 'voice'} onClick={() => handleTabChange('voice')} />
           <MobileNavItem icon={<Gamepad2 size={22} />} active={activeTab === 'games'} onClick={() => handleTabChange('games')} />
+          <MobileNavItem icon={<Calculator size={22} className="text-cyan-500" />} active={activeTab === 'nspire'} onClick={() => handleTabChange('nspire')} />
           <MobileNavItem icon={<Users size={22} />} active={activeTab === 'friends'} onClick={() => handleTabChange('friends')} />
           <MobileNavItem icon={<Bell size={22} />} active={activeTab === 'notifications'} badge={unreadNotificationsCount} onClick={() => handleTabChange('notifications')} />
           <MobileNavItem icon={<UserCircle2 size={22} />} active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />

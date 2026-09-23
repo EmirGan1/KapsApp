@@ -10,7 +10,8 @@ export const BACKEND_URL = (
 /**
  * Returns relative or absolute API URL
  */
-export function getApiUrl(path: string): string {
+export function getApiUrl(path: string = ""): string {
+  if (!path) return BACKEND_URL || "";
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   return BACKEND_URL ? `${BACKEND_URL}${cleanPath}` : cleanPath;
 }
