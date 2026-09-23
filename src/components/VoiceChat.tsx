@@ -1,27 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Socket } from 'socket.io-client';
 import { 
-  Mic, 
-  MicOff, 
-  Video,
-  VideoOff,
-  Headphones, 
+  Video, 
   Radio, 
-  Users, 
   Crown, 
-  PhoneOff, 
   Plus, 
   Search, 
-  MoreVertical, 
-  AlertCircle, 
-  Volume2, 
-  VolumeX, 
-  X,
-  Camera,
-  CameraOff
+  X, 
+  MicOff 
 } from 'lucide-react';
 import { VoiceRoom, VoiceParticipant } from '../types';
 import Avatar from './Avatar';
+import { useWebRTC } from '../hooks/useWebRTC';
+import { VideoRoomView } from './VideoRoom';
+import { MAX_ROOM_USERS } from '../utils/webrtcConfig';
 
 interface VoiceChatProps {
   socket: Socket | null;
@@ -31,17 +23,6 @@ interface VoiceChatProps {
   color?: string;
   onUserClick?: (userId: number) => void;
 }
-
-const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' }
-  ],
-  iceCandidatePoolSize: 10
-};
 
 // Memoized Voice Room Card for Lobby
 const VoiceRoomCard = React.memo(({ 
@@ -128,216 +109,7 @@ const VoiceRoomCard = React.memo(({
   );
 });
 
-// Dynamic Video Participant Card for Inside Room
-const VoiceVideoParticipantCard = React.memo(({
-  participant,
-  isSelf,
-  isHost,
-  isCurrentRoomHost,
-  stream,
-  isDeafened,
-  onKick,
-  onForceMute,
-  onForceCameraOff,
-  onUserClick
-}: {
-  participant: VoiceParticipant;
-  isSelf: boolean;
-  isHost: boolean;
-  isCurrentRoomHost: boolean;
-  stream: MediaStream | null;
-  isDeafened: boolean;
-  onKick?: (userId: number) => void;
-  onForceMute?: (userId: number) => void;
-  onForceCameraOff?: (userId: number) => void;
-  onUserClick?: (userId: number) => void;
-}) => {
-  const [showMenu, setShowMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  // Callback ref to attach stream to video element immediately on mount
-  const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
-    videoRef.current = node;
-    if (node && stream && !participant.isVideoOff) {
-      if (node.srcObject !== stream) {
-        node.srcObject = stream;
-      }
-      node.play().catch(() => {});
-    }
-  }, [stream, participant.isVideoOff]);
-
-  // Attach stream to video element when stream or status changes
-  useEffect(() => {
-    if (videoRef.current) {
-      if (stream && !participant.isVideoOff) {
-        if (videoRef.current.srcObject !== stream) {
-          videoRef.current.srcObject = stream;
-        }
-        videoRef.current.play().catch(() => {});
-      } else {
-        videoRef.current.srcObject = null;
-      }
-    }
-  }, [stream, participant.isVideoOff, isSelf]);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-    if (showMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showMenu]);
-
-  const showVideo = !participant.isVideoOff && stream && stream.getVideoTracks().length > 0;
-
-  return (
-    <div className={`relative w-full h-full min-h-[180px] sm:min-h-[220px] rounded-2xl overflow-hidden bg-slate-900 border transition-all duration-200 flex flex-col justify-between shadow-md ${
-      participant.isSpeaking
-        ? 'border-emerald-500 shadow-[0_0_24px_rgba(16,185,129,0.35)] ring-2 ring-emerald-500/70'
-        : 'border-slate-800 hover:border-slate-700'
-    }`}>
-      
-      {/* Video Stream Element */}
-      {showVideo ? (
-        <div className="absolute inset-0 w-full h-full bg-black">
-          <video
-            ref={setVideoRef}
-            autoPlay
-            playsInline
-            muted={isSelf || isDeafened}
-            className={`w-full h-full object-cover ${isSelf ? 'scale-x-[-1]' : ''}`}
-          />
-        </div>
-      ) : (
-        /* Video Off: Centered Avatar Placeholder */
-        <div 
-          onClick={() => onUserClick && onUserClick(participant.id)}
-          className="absolute inset-0 flex flex-col items-center justify-center p-4 bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 cursor-pointer"
-        >
-          <div className="relative">
-            <div 
-              className={`w-20 h-20 sm:w-24 sm:h-24 rounded-full flex items-center justify-center font-black text-2xl sm:text-3xl text-white shadow-xl transition-all duration-300 ${
-                participant.isSpeaking
-                  ? 'ring-4 ring-emerald-500 ring-offset-4 ring-offset-slate-900 scale-105 animate-pulse'
-                  : 'ring-2 ring-slate-700'
-              }`}
-            >
-              <Avatar url={participant.avatar} color={participant.color} name={participant.username} size={20} />
-            </div>
-
-            {/* Camera Off Mini Badge */}
-            <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-slate-800/90 text-slate-300 flex items-center justify-center border-2 border-slate-900 shadow">
-              <CameraOff size={13} />
-            </div>
-          </div>
-          <span className="text-[11px] text-slate-400 font-medium mt-3 bg-slate-800/70 px-2.5 py-0.5 rounded-full border border-slate-700/60">
-            Kamera Kapalı
-          </span>
-        </div>
-      )}
-
-      {/* Top Overlay: Badges & Host Menu */}
-      <div className="relative z-10 p-3 flex items-center justify-between pointer-events-none">
-        <div className="flex items-center gap-1.5">
-          {isHost && (
-            <span className="px-2 py-0.5 rounded-md bg-amber-500/90 text-slate-950 text-[10px] font-black flex items-center gap-1 shadow-sm backdrop-blur-xs">
-              <Crown size={11} />
-              Host
-            </span>
-          )}
-          {participant.isMuted && (
-            <span className="p-1 rounded-md bg-rose-600/90 text-white text-[10px] font-bold flex items-center shadow-sm backdrop-blur-xs" title="Mikrofon Kapalı">
-              <MicOff size={12} />
-            </span>
-          )}
-          {participant.isVideoOff && (
-            <span className="p-1 rounded-md bg-slate-800/90 text-slate-300 text-[10px] font-bold flex items-center shadow-sm backdrop-blur-xs" title="Kamera Kapalı">
-              <VideoOff size={12} />
-            </span>
-          )}
-        </div>
-
-        {/* Host Control Actions Dropdown */}
-        {isCurrentRoomHost && !isSelf && (
-          <div className="relative pointer-events-auto" ref={menuRef}>
-            <button
-              onClick={() => setShowMenu(prev => !prev)}
-              aria-label="Yönetici İşlemleri"
-              className="w-8 h-8 rounded-lg bg-black/50 hover:bg-black/80 text-white/80 hover:text-white flex items-center justify-center backdrop-blur-sm transition-colors border border-white/10"
-            >
-              <MoreVertical size={16} />
-            </button>
-
-            {showMenu && (
-              <div className="absolute right-0 top-full mt-1.5 w-52 bg-slate-900 text-slate-100 rounded-xl shadow-2xl border border-slate-700 py-1.5 z-40 animate-in fade-in zoom-in-95 duration-100">
-                <div className="px-3 py-1.5 text-[11px] font-bold text-slate-400 border-b border-slate-800 truncate">
-                  {participant.username}
-                </div>
-                <button
-                  onClick={() => {
-                    setShowMenu(false);
-                    onForceMute && onForceMute(participant.id);
-                  }}
-                  className="w-full px-3 py-2 text-left text-xs font-semibold text-amber-400 hover:bg-amber-950/40 flex items-center gap-2 transition-colors"
-                >
-                  <MicOff size={14} />
-                  <span>Sustur (Mute)</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setShowMenu(false);
-                    onForceCameraOff && onForceCameraOff(participant.id);
-                  }}
-                  className="w-full px-3 py-2 text-left text-xs font-semibold text-blue-400 hover:bg-blue-950/40 flex items-center gap-2 transition-colors"
-                >
-                  <CameraOff size={14} />
-                  <span>Kamerayı Kapatmaya Zorla</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setShowMenu(false);
-                    onKick && onKick(participant.id);
-                  }}
-                  className="w-full px-3 py-2 text-left text-xs font-semibold text-rose-400 hover:bg-rose-950/40 flex items-center gap-2 transition-colors"
-                >
-                  <X size={14} />
-                  <span>Odadan At (Kick)</span>
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Bottom Overlay: Name & Speaking Pulse */}
-      <div className="relative z-10 p-3 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="font-bold text-xs sm:text-sm text-white truncate drop-shadow-sm">
-            {participant.username} {isSelf && <span className="text-[11px] text-blue-400 font-medium">(Sen)</span>}
-          </span>
-        </div>
-
-        {participant.isSpeaking ? (
-          <div className="flex items-center gap-1 bg-emerald-500/90 text-white px-2 py-0.5 rounded-full text-[10px] font-bold shadow-sm animate-pulse">
-            <Volume2 size={11} />
-            <span>Konuşuyor</span>
-          </div>
-        ) : participant.isMuted ? (
-          <span className="text-[10px] text-rose-400 font-semibold bg-black/40 px-2 py-0.5 rounded-full">
-            Sessizde
-          </span>
-        ) : null}
-      </div>
-    </div>
-  );
-});
+VoiceRoomCard.displayName = 'VoiceRoomCard';
 
 export default function VoiceChat({
   socket,
@@ -352,307 +124,52 @@ export default function VoiceChat({
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Creation Modal
+  // Creation Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [newRoomCapacity, setNewRoomCapacity] = useState(8);
   const [isCreating, setIsCreating] = useState(false);
 
-  // Media Controls State
-  const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
-  const [isDeafened, setIsDeafened] = useState(false);
-  const [isSpeakingLocal, setIsSpeakingLocal] = useState(false);
-  const [mediaPermissionError, setMediaPermissionError] = useState<string | null>(null);
-
-  // Streams & WebRTC Refs
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
-  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
-  const remoteAudioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const speakingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const isMutedRef = useRef(isMuted);
-  const isVideoOffRef = useRef(isVideoOff);
-  const isDeafenedRef = useRef(isDeafened);
-  const currentRoomRef = useRef(currentRoom);
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    isVideoOffRef.current = isVideoOff;
-  }, [isVideoOff]);
-
-  useEffect(() => {
-    isDeafenedRef.current = isDeafened;
-  }, [isDeafened]);
-
+  const currentRoomRef = useRef<VoiceRoom | null>(null);
   useEffect(() => {
     currentRoomRef.current = currentRoom;
   }, [currentRoom]);
 
-  // Clean WebRTC streams, peer connections, and hardware devices (turn off camera LED)
-  const cleanupWebRTC = useCallback(() => {
-    if (speakingIntervalRef.current) {
-      clearInterval(speakingIntervalRef.current);
-      speakingIntervalRef.current = null;
-    }
-
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-
-    // Stop all local tracks explicitly to turn off camera LED and mic
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
-        try {
-          track.stop();
-        } catch (e) {
-          console.warn("Error stopping track:", e);
-        }
-      });
-      localStreamRef.current = null;
-    }
-    setLocalStream(null);
-
-    // Close all P2P peer connections
-    peerConnectionsRef.current.forEach((pc) => {
-      try {
-        pc.close();
-      } catch (e) {
-        console.warn("Error closing RTCPeerConnection:", e);
-      }
-    });
-    peerConnectionsRef.current.clear();
-    pendingCandidatesRef.current.clear();
-
-    // Clean remote audio elements
-    remoteAudioElementsRef.current.forEach((audio) => {
-      audio.pause();
-      audio.srcObject = null;
-      audio.remove();
-    });
-    remoteAudioElementsRef.current.clear();
-
-    setRemoteStreams(new Map());
-    setIsSpeakingLocal(false);
-    setMediaPermissionError(null);
-  }, []);
-
-  // Helper to process queued ICE candidates after remote description is set
-  const processQueuedCandidates = async (remoteSocketId: string, pc: RTCPeerConnection) => {
-    const queue = pendingCandidatesRef.current.get(remoteSocketId);
-    if (queue && queue.length > 0) {
-      while (queue.length > 0) {
-        const candidate = queue.shift();
-        if (candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (e) {
-            console.warn("Failed to apply queued ICE candidate:", e);
-          }
-        }
-      }
-    }
-    pendingCandidatesRef.current.delete(remoteSocketId);
-  };
-
-  // Setup Local Media (Audio + Video)
-  const setupLocalMedia = useCallback(async () => {
-    try {
-      cleanupWebRTC();
-
-      let stream: MediaStream;
-      try {
-        // Attempt audio + video
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user'
-          }
-        });
-        setIsVideoOff(false);
-      } catch (videoErr) {
-        console.warn("Video + Audio getUserMedia failed, attempting audio only:", videoErr);
-        // Fallback to audio only if camera is unavailable/denied
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: false
-        });
-        setIsVideoOff(true);
-      }
-
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-
-      // Check initial mute state
-      stream.getAudioTracks().forEach(track => {
-        track.enabled = !isMutedRef.current;
-      });
-
-      // Web Audio API Speaking Detection
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        const audioCtx = new AudioCtx();
-        audioContextRef.current = audioCtx;
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
-        analyserRef.current = analyser;
-
-        const source = audioCtx.createMediaStreamSource(stream);
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        let wasSpeaking = false;
-
-        speakingIntervalRef.current = setInterval(() => {
-          if (isMutedRef.current || !analyserRef.current) {
-            if (wasSpeaking) {
-              wasSpeaking = false;
-              setIsSpeakingLocal(false);
-              if (socket && currentRoomRef.current) {
-                socket.emit("voice_update_status", {
-                  roomId: currentRoomRef.current.id,
-                  isSpeaking: false
-                });
-              }
-            }
-            return;
-          }
-
-          analyserRef.current.getByteFrequencyData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-          }
-          const average = sum / dataArray.length;
-          const isNowSpeaking = average > 18; // Sensible voice threshold
-
-          if (isNowSpeaking !== wasSpeaking) {
-            wasSpeaking = isNowSpeaking;
-            setIsSpeakingLocal(isNowSpeaking);
-            if (socket && currentRoomRef.current) {
-              socket.emit("voice_update_status", {
-                roomId: currentRoomRef.current.id,
-                isSpeaking: isNowSpeaking
-              });
-            }
-          }
-        }, 120);
-      }
-
-      return stream;
-    } catch (err: any) {
-      console.warn("Media access failed or denied:", err);
-      setMediaPermissionError("Kamera veya mikrofon erişimi sağlanamadı. Lütfen tarayıcı izinlerini kontrol edin.");
-      return null;
-    }
-  }, [cleanupWebRTC, socket]);
-
-  // Create Peer Connection for a remote user with both Audio and Video tracks
-  const createPeerConnection = useCallback((remoteSocketId: string, currentLocalStream: MediaStream | null) => {
-    if (peerConnectionsRef.current.has(remoteSocketId)) {
-      return peerConnectionsRef.current.get(remoteSocketId)!;
-    }
-
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-    peerConnectionsRef.current.set(remoteSocketId, pc);
-
-    // 2. Add local tracks to peer connection
-    if (currentLocalStream) {
-      currentLocalStream.getTracks().forEach(track => {
-        pc.addTrack(track, currentLocalStream);
-      });
-    }
-
-    // 4. ICE candidate exchange
-    pc.onicecandidate = (event) => {
-      if (event.candidate && socket) {
-        socket.emit("voice_ice_candidate", {
-          targetSocketId: remoteSocketId,
-          candidate: event.candidate
-        });
-      }
-    };
-
-    // 2. Track matching and stream handling
-    pc.ontrack = (event) => {
-      const remoteStream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-      
-      setRemoteStreams(prev => {
-        const next = new Map(prev);
-        const existing = next.get(remoteSocketId);
-        if (existing) {
-          if (!existing.getTracks().some(t => t.id === event.track.id)) {
-            existing.addTrack(event.track);
-          }
-          next.set(remoteSocketId, new MediaStream(existing.getTracks()));
-        } else {
-          next.set(remoteSocketId, remoteStream);
-        }
-        return next;
-      });
-
-      // Background audio element fallback to guarantee audio playback
-      let audioEl = remoteAudioElementsRef.current.get(remoteSocketId);
-      if (!audioEl) {
-        audioEl = new Audio();
-        audioEl.autoplay = true;
-        (audioEl as any).playsInline = true;
-        remoteAudioElementsRef.current.set(remoteSocketId, audioEl);
-        document.body.appendChild(audioEl);
-      }
-      audioEl.srcObject = remoteStream;
-      audioEl.muted = isDeafenedRef.current;
-      audioEl.play().catch(e => console.warn("Remote audio play:", e));
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        const audioEl = remoteAudioElementsRef.current.get(remoteSocketId);
-        if (audioEl) {
-          audioEl.pause();
-          audioEl.remove();
-          remoteAudioElementsRef.current.delete(remoteSocketId);
-        }
-        setRemoteStreams(prev => {
-          const next = new Map(prev);
-          next.delete(remoteSocketId);
-          return next;
-        });
-      }
-    };
-
-    return pc;
-  }, [socket]);
+  // Hook-based WebRTC management
+  const {
+    localStream,
+    remoteStreams,
+    isMuted,
+    isVideoOff,
+    isDeafened,
+    isSpeakingLocal,
+    mediaPermissionError,
+    setupLocalMedia,
+    toggleMute,
+    toggleVideo,
+    toggleDeafen,
+    cleanupWebRTC,
+    initiateOfferToPeer,
+    removePeerConnection,
+    handleRemoteForceMute,
+    handleRemoteForceCameraOff
+  } = useWebRTC({
+    socket,
+    currentUserId,
+    roomId: currentRoom?.id,
+    participantCount: currentRoom?.participants.length || 1
+  });
 
   // Load Rooms list on mount
   useEffect(() => {
     if (!socket) return;
 
-    socket.emit("get_voice_rooms", (roomList: VoiceRoom[]) => {
+    socket.emit('get_voice_rooms', (roomList: VoiceRoom[]) => {
       setRooms(roomList || []);
       setIsLoading(false);
     });
 
-    socket.emit("get_my_voice_room", (res: any) => {
+    socket.emit('get_my_voice_room', (res: any) => {
       if (res && res.success && res.room) {
         setCurrentRoom(res.room);
       }
@@ -666,68 +183,51 @@ export default function VoiceChat({
       if (currentRoomRef.current && currentRoomRef.current.id === updatedRoom.id) {
         setCurrentRoom(updatedRoom);
       }
-      setRooms(prev => prev.map(r => r.id === updatedRoom.id ? updatedRoom : r));
+      setRooms((prev) => prev.map((r) => (r.id === updatedRoom.id ? updatedRoom : r)));
     };
 
-    const handleUserJoined = async (participant: VoiceParticipant) => {
+    // When a new user joins, update participants & initiate WebRTC offer
+    const handleUserJoined = (participant: VoiceParticipant) => {
       if (!currentRoomRef.current) return;
-      setCurrentRoom(prev => prev ? {
-        ...prev,
-        participants: [...prev.participants.filter(p => p.id !== participant.id), participant]
-      } : null);
+      setCurrentRoom((prev) =>
+        prev
+          ? {
+              ...prev,
+              participants: [
+                ...prev.participants.filter((p) => p.id !== participant.id),
+                participant
+              ]
+            }
+          : null
+      );
 
       // Offer to the new participant
       if (participant.socketId && participant.id !== currentUserId) {
-        let stream = localStreamRef.current;
-        if (!stream) stream = await setupLocalMedia();
-        const pc = createPeerConnection(participant.socketId, stream);
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit("voice_offer", {
-            targetSocketId: participant.socketId,
-            offer
-          });
-        } catch (err) {
-          console.warn("Error creating voice offer:", err);
-        }
+        initiateOfferToPeer(participant.socketId);
       }
     };
 
     const handleUserLeft = (data: { userId: number; socketId: string }) => {
       if (currentRoomRef.current) {
-        setCurrentRoom(prev => prev ? {
-          ...prev,
-          participants: prev.participants.filter(p => p.id !== data.userId)
-        } : null);
+        setCurrentRoom((prev) =>
+          prev
+            ? {
+                ...prev,
+                participants: prev.participants.filter((p) => p.id !== data.userId)
+              }
+            : null
+        );
       }
-
       if (data.socketId) {
-        const pc = peerConnectionsRef.current.get(data.socketId);
-        if (pc) {
-          pc.close();
-          peerConnectionsRef.current.delete(data.socketId);
-        }
-        pendingCandidatesRef.current.delete(data.socketId);
-        const audioEl = remoteAudioElementsRef.current.get(data.socketId);
-        if (audioEl) {
-          audioEl.pause();
-          audioEl.remove();
-          remoteAudioElementsRef.current.delete(data.socketId);
-        }
-        setRemoteStreams(prev => {
-          const next = new Map(prev);
-          next.delete(data.socketId);
-          return next;
-        });
+        removePeerConnection(data.socketId);
       }
     };
 
     const handleRoomClosed = (data: { reason?: string }) => {
       cleanupWebRTC();
       setCurrentRoom(null);
-      alert(data.reason || "Oda kapatıldı.");
-      socket.emit("get_voice_rooms", (roomList: VoiceRoom[]) => {
+      alert(data.reason || 'Oda kapatıldı.');
+      socket.emit('get_voice_rooms', (roomList: VoiceRoom[]) => {
         setRooms(roomList || []);
       });
     };
@@ -735,60 +235,35 @@ export default function VoiceChat({
     const handleKicked = (data: { reason?: string }) => {
       cleanupWebRTC();
       setCurrentRoom(null);
-      alert(data.reason || "Oda kurucusu tarafından sesli/görüntülü odadan çıkarıldınız.");
-      socket.emit("get_voice_rooms", (roomList: VoiceRoom[]) => {
+      alert(data.reason || 'Oda kurucusu tarafından sesli/görüntülü odadan çıkarıldınız.');
+      socket.emit('get_voice_rooms', (roomList: VoiceRoom[]) => {
         setRooms(roomList || []);
       });
     };
 
-    const handleForceMute = (data: { reason?: string }) => {
-      setIsMuted(true);
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach(t => { t.enabled = false; });
-      }
-      if (currentRoomRef.current) {
-        socket.emit("voice_update_status", {
-          roomId: currentRoomRef.current.id,
-          isMuted: true
-        });
-      }
-      alert(data.reason || "Oda kurucusu mikrofonunuzu kapattı.");
+    const handleForceMuteReceived = (data: { reason?: string }) => {
+      handleRemoteForceMute();
+      alert(data.reason || 'Oda kurucusu mikrofonunuzu kapattı.');
     };
 
-    const handleForceCameraOff = (data: { reason?: string }) => {
-      // Forcefully stop camera tracks to release hardware LED
-      if (localStreamRef.current) {
-        localStreamRef.current.getVideoTracks().forEach(track => {
-          track.stop();
-          localStreamRef.current?.removeTrack(track);
-        });
-      }
-      // Replace video track with null on all peers
-      peerConnectionsRef.current.forEach((pc) => {
-        const senders = pc.getSenders();
-        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-        if (videoSender) {
-          videoSender.replaceTrack(null).catch(() => {});
-        }
-      });
-
-      setIsVideoOff(true);
-      if (currentRoomRef.current) {
-        socket.emit("voice_update_status", {
-          roomId: currentRoomRef.current.id,
-          isVideoOff: true
-        });
-      }
-      alert(data.reason || "Oda kurucusu kameranızı kapattı.");
+    const handleForceCameraOffReceived = (data: { reason?: string }) => {
+      handleRemoteForceCameraOff();
+      alert(data.reason || 'Oda kurucusu kameranızı kapattı.');
     };
 
-    const handleUserStatusChanged = (data: { userId: number; isMuted?: boolean; isSpeaking?: boolean; isDeafened?: boolean; isVideoOff?: boolean }) => {
+    const handleUserStatusChanged = (data: {
+      userId: number;
+      isMuted?: boolean;
+      isSpeaking?: boolean;
+      isDeafened?: boolean;
+      isVideoOff?: boolean;
+    }) => {
       if (currentRoomRef.current) {
-        setCurrentRoom(prev => {
+        setCurrentRoom((prev) => {
           if (!prev) return null;
           return {
             ...prev,
-            participants: prev.participants.map(p => {
+            participants: prev.participants.map((p) => {
               if (p.id === data.userId) {
                 return {
                   ...p,
@@ -805,82 +280,37 @@ export default function VoiceChat({
       }
     };
 
-    // Signaling Handlers
-    const handleVoiceOffer = async (data: { senderSocketId: string; senderUserId: number; offer: any }) => {
-      let stream = localStreamRef.current;
-      if (!stream) stream = await setupLocalMedia();
-      const pc = createPeerConnection(data.senderSocketId, stream);
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        await processQueuedCandidates(data.senderSocketId, pc);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("voice_answer", {
-          targetSocketId: data.senderSocketId,
-          answer
-        });
-      } catch (err) {
-        console.warn("Error handling voice offer:", err);
-      }
-    };
-
-    const handleVoiceAnswer = async (data: { senderSocketId: string; answer: any }) => {
-      const pc = peerConnectionsRef.current.get(data.senderSocketId);
-      if (pc) {
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          await processQueuedCandidates(data.senderSocketId, pc);
-        } catch (err) {
-          console.warn("Error handling voice answer:", err);
-        }
-      }
-    };
-
-    const handleVoiceIceCandidate = async (data: { senderSocketId: string; candidate: any }) => {
-      if (!data?.senderSocketId || !data?.candidate) return;
-      const pc = peerConnectionsRef.current.get(data.senderSocketId);
-      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (err) {
-          console.warn("Error adding ICE candidate:", err);
-        }
-      } else {
-        const queue = pendingCandidatesRef.current.get(data.senderSocketId) || [];
-        queue.push(data.candidate);
-        pendingCandidatesRef.current.set(data.senderSocketId, queue);
-      }
-    };
-
-    socket.on("voice_rooms_list", handleRoomsList);
-    socket.on("voice_room_updated", handleRoomUpdated);
-    socket.on("voice_user_joined", handleUserJoined);
-    socket.on("voice_user_left", handleUserLeft);
-    socket.on("voice_room_closed", handleRoomClosed);
-    socket.on("kick_from_voice", handleKicked);
-    socket.on("voice_force_mute_received", handleForceMute);
-    socket.on("voice_force_camera_off_received", handleForceCameraOff);
-    socket.on("voice_user_status_changed", handleUserStatusChanged);
-    socket.on("voice_offer", handleVoiceOffer);
-    socket.on("voice_answer", handleVoiceAnswer);
-    socket.on("voice_ice_candidate", handleVoiceIceCandidate);
+    socket.on('voice_rooms_list', handleRoomsList);
+    socket.on('voice_room_updated', handleRoomUpdated);
+    socket.on('voice_user_joined', handleUserJoined);
+    socket.on('voice_user_left', handleUserLeft);
+    socket.on('voice_room_closed', handleRoomClosed);
+    socket.on('kick_from_voice', handleKicked);
+    socket.on('voice_force_mute_received', handleForceMuteReceived);
+    socket.on('voice_force_camera_off_received', handleForceCameraOffReceived);
+    socket.on('voice_user_status_changed', handleUserStatusChanged);
 
     return () => {
-      socket.off("voice_rooms_list", handleRoomsList);
-      socket.off("voice_room_updated", handleRoomUpdated);
-      socket.off("voice_user_joined", handleUserJoined);
-      socket.off("voice_user_left", handleUserLeft);
-      socket.off("voice_room_closed", handleRoomClosed);
-      socket.off("kick_from_voice", handleKicked);
-      socket.off("voice_force_mute_received", handleForceMute);
-      socket.off("voice_force_camera_off_received", handleForceCameraOff);
-      socket.off("voice_user_status_changed", handleUserStatusChanged);
-      socket.off("voice_offer", handleVoiceOffer);
-      socket.off("voice_answer", handleVoiceAnswer);
-      socket.off("voice_ice_candidate", handleVoiceIceCandidate);
+      socket.off('voice_rooms_list', handleRoomsList);
+      socket.off('voice_room_updated', handleRoomUpdated);
+      socket.off('voice_user_joined', handleUserJoined);
+      socket.off('voice_user_left', handleUserLeft);
+      socket.off('voice_room_closed', handleRoomClosed);
+      socket.off('kick_from_voice', handleKicked);
+      socket.off('voice_force_mute_received', handleForceMuteReceived);
+      socket.off('voice_force_camera_off_received', handleForceCameraOffReceived);
+      socket.off('voice_user_status_changed', handleUserStatusChanged);
       cleanupWebRTC();
     };
-  }, [socket, currentUserId, createPeerConnection, setupLocalMedia, cleanupWebRTC]);
+  }, [
+    socket,
+    currentUserId,
+    cleanupWebRTC,
+    initiateOfferToPeer,
+    removePeerConnection,
+    handleRemoteForceMute,
+    handleRemoteForceCameraOff
+  ]);
 
   // Create Room Handler
   const handleCreateRoom = async (e: React.FormEvent) => {
@@ -888,35 +318,38 @@ export default function VoiceChat({
     if (!socket || isCreating) return;
 
     setIsCreating(true);
-    socket.emit("create_voice_room", {
-      name: newRoomName || `${currentUsername}'in Odası`,
-      maxParticipants: newRoomCapacity
-    }, async (res: any) => {
-      setIsCreating(false);
-      if (res && res.success && res.room) {
-        setCurrentRoom(res.room);
-        setShowCreateModal(false);
-        setNewRoomName('');
-        await setupLocalMedia();
-      } else {
-        alert(res?.message || "Oda oluşturulamadı.");
+    socket.emit(
+      'create_voice_room',
+      {
+        name: newRoomName || `${currentUsername}'in Odası`,
+        maxParticipants: newRoomCapacity
+      },
+      async (res: any) => {
+        setIsCreating(false);
+        if (res && res.success && res.room) {
+          setCurrentRoom(res.room);
+          setShowCreateModal(false);
+          setNewRoomName('');
+          await setupLocalMedia(true);
+        } else {
+          alert(res?.message || 'Oda oluşturulamadı.');
+        }
       }
-    });
+    );
   };
 
-  // Join Room Handler
+  // Join Room Handler with batched peer initiation
   const handleJoinRoom = async (roomId: string) => {
     if (!socket) return;
-    await setupLocalMedia();
+    await setupLocalMedia(true);
 
-    socket.emit("join_voice_room", { roomId }, async (res: any) => {
+    socket.emit('join_voice_room', { roomId }, async (res: any) => {
       if (res && res.success && res.room) {
         setCurrentRoom(res.room);
-        // Existing peers in the room will automatically receive 'voice_user_joined' from the server
-        // and initiate the offer to this new client. This prevents offer collisions.
+        // Existing peers will receive voice_user_joined and initiate offers to this new participant
       } else {
         cleanupWebRTC();
-        alert(res?.message || "Odaya katılınamadı.");
+        alert(res?.message || 'Odaya katılınamadı.');
       }
     });
   };
@@ -925,312 +358,99 @@ export default function VoiceChat({
   const handleLeaveRoom = () => {
     if (!socket) return;
     cleanupWebRTC();
-    socket.emit("leave_voice_room");
+    socket.emit('leave_voice_room');
     setCurrentRoom(null);
-  };
-
-  // Toggle Mute (Microphone)
-  const handleToggleMute = () => {
-    const nextMuted = !isMuted;
-    setIsMuted(nextMuted);
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(t => {
-        t.enabled = !nextMuted;
-      });
-    }
-
-    if (socket && currentRoom) {
-      socket.emit("voice_update_status", {
-        roomId: currentRoom.id,
-        isMuted: nextMuted
-      });
-    }
-  };
-
-  // Toggle Video (Camera)
-  const handleToggleVideo = async () => {
-    if (!isVideoOff) {
-      // Turn Camera OFF: Stop tracks to turn off hardware LED and conserve bandwidth
-      const videoTracks = localStreamRef.current?.getVideoTracks() || [];
-      videoTracks.forEach(t => {
-        t.stop();
-        localStreamRef.current?.removeTrack(t);
-      });
-
-      // Replace with null track on all peer senders
-      peerConnectionsRef.current.forEach((pc) => {
-        const senders = pc.getSenders();
-        const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-        if (videoSender) {
-          videoSender.replaceTrack(null).catch(() => {});
-        }
-      });
-
-      setIsVideoOff(true);
-      if (socket && currentRoom) {
-        socket.emit("voice_update_status", {
-          roomId: currentRoom.id,
-          isVideoOff: true
-        });
-      }
-    } else {
-      // Turn Camera ON: Get new video stream and update senders
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user'
-          }
-        });
-        const newVideoTrack = camStream.getVideoTracks()[0];
-        if (newVideoTrack) {
-          if (!localStreamRef.current) {
-            localStreamRef.current = new MediaStream();
-          }
-          localStreamRef.current.addTrack(newVideoTrack);
-          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
-
-          // Update video track in all active RTCPeerConnections
-          for (const [sId, pc] of peerConnectionsRef.current.entries()) {
-            const senders = pc.getSenders();
-            const videoSender = senders.find(s => s.track && s.track.kind === 'video') || senders.find(s => !s.track);
-            if (videoSender) {
-              await videoSender.replaceTrack(newVideoTrack).catch(() => {});
-            } else {
-              pc.addTrack(newVideoTrack, localStreamRef.current);
-              try {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                socket?.emit("voice_offer", { targetSocketId: sId, offer });
-              } catch (e) {
-                console.warn("Renegotiation failed:", e);
-              }
-            }
-          }
-
-          setIsVideoOff(false);
-          if (socket && currentRoom) {
-            socket.emit("voice_update_status", {
-              roomId: currentRoom.id,
-              isVideoOff: false
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("Camera access failed:", err);
-        alert("Kamera erişimi sağlanamadı. Lütfen tarayıcı kamera izinlerini kontrol edin.");
-      }
-    }
-  };
-
-  // Toggle Deafen (Kulaklık)
-  const handleToggleDeafen = () => {
-    const nextDeafen = !isDeafened;
-    setIsDeafened(nextDeafen);
-
-    // Mute all remote audio elements
-    remoteAudioElementsRef.current.forEach(audio => {
-      audio.muted = nextDeafen;
-    });
-
-    if (socket && currentRoom) {
-      socket.emit("voice_update_status", {
-        roomId: currentRoom.id,
-        isDeafened: nextDeafen
-      });
-    }
   };
 
   // Host Action: Kick
   const handleKickUser = (targetUserId: number) => {
     if (!socket || !currentRoom) return;
-    if (confirm("Bu kullanıcıyı odadan atmak istediğinize emin misiniz?")) {
-      socket.emit("voice_kick_user", {
-        roomId: currentRoom.id,
-        targetUserId
-      }, (res: any) => {
-        if (!res?.success) {
-          alert(res?.message || "Kullanıcı atılamadı.");
+    if (confirm('Bu kullanıcıyı odadan atmak istediğinize emin misiniz?')) {
+      socket.emit(
+        'voice_kick_user',
+        {
+          roomId: currentRoom.id,
+          targetUserId
+        },
+        (res: any) => {
+          if (!res?.success) {
+            alert(res?.message || 'Kullanıcı atılamadı.');
+          }
         }
-      });
+      );
     }
   };
 
   // Host Action: Force Mute
   const handleForceMuteUser = (targetUserId: number) => {
     if (!socket || !currentRoom) return;
-    socket.emit("voice_force_mute", {
-      roomId: currentRoom.id,
-      targetUserId
-    }, (res: any) => {
-      if (!res?.success) {
-        alert(res?.message || "Kullanıcı susturulamadı.");
+    socket.emit(
+      'voice_force_mute',
+      {
+        roomId: currentRoom.id,
+        targetUserId
+      },
+      (res: any) => {
+        if (!res?.success) {
+          alert(res?.message || 'Kullanıcı susturulamadı.');
+        }
       }
-    });
+    );
   };
 
   // Host Action: Force Camera Off
   const handleForceCameraOffUser = (targetUserId: number) => {
     if (!socket || !currentRoom) return;
-    socket.emit("voice_force_camera_off", {
-      roomId: currentRoom.id,
-      targetUserId
-    }, (res: any) => {
-      if (!res?.success) {
-        alert(res?.message || "Kamera kapatılamadı.");
+    socket.emit(
+      'voice_force_camera_off',
+      {
+        roomId: currentRoom.id,
+        targetUserId
+      },
+      (res: any) => {
+        if (!res?.success) {
+          alert(res?.message || 'Kamera kapatılamadı.');
+        }
       }
-    });
+    );
   };
 
-  const filteredRooms = rooms.filter(r => 
-    r.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    r.hostUsername.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredRooms = rooms.filter(
+    (r) =>
+      r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      r.hostUsername.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const isCurrentRoomHost = currentRoom?.hostId === currentUserId;
-  const participantCount = currentRoom?.participants.length || 1;
-
-  // Compute dynamic grid classes based on participant count
-  const getGridClasses = (count: number) => {
-    if (count <= 1) return 'grid grid-cols-1 max-w-2xl mx-auto h-[62vh] sm:h-[68vh]';
-    if (count === 2) return 'grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 h-[62vh] sm:h-[68vh]';
-    if (count === 3 || count === 4) return 'grid grid-cols-2 gap-3 sm:gap-4 h-[62vh] sm:h-[68vh]';
-    if (count === 5 || count === 6) return 'grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 h-[62vh] sm:h-[68vh]';
-    return 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 auto-rows-fr';
-  };
 
   return (
     <div className="flex-1 flex flex-col h-full w-full max-w-full bg-slate-950 text-slate-100 overflow-hidden select-none">
       
-      {/* View 1: Inside Active Video / Voice Room */}
+      {/* View 1: Active 20-Person Video / Voice Room */}
       {currentRoom ? (
-        <div className="flex-1 flex flex-col h-full w-full overflow-hidden relative bg-slate-950">
-          
-          {/* Room Top Bar */}
-          <div className="px-4 sm:px-6 py-3 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 flex items-center justify-between gap-4 shrink-0 shadow-sm z-20">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-400 flex items-center justify-center shrink-0">
-                <Radio size={20} className="animate-pulse" />
-              </div>
-              <div className="min-w-0">
-                <h2 className="text-base sm:text-lg font-black text-white truncate">
-                  {currentRoom.name}
-                </h2>
-                <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span className="flex items-center gap-1 font-medium">
-                    <Crown size={12} className="text-amber-500" />
-                    {currentRoom.hostUsername}
-                  </span>
-                  <span>•</span>
-                  <span>{currentRoom.participants.length}/{currentRoom.maxParticipants} Kişi</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Leave Room Button */}
-            <button
-              onClick={handleLeaveRoom}
-              className="min-h-[40px] px-3.5 sm:px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 border border-rose-500/30 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all active:scale-95 shadow-sm shrink-0"
-            >
-              <PhoneOff size={16} />
-              <span className="hidden xs:inline">Ayrıl</span>
-            </button>
-          </div>
-
-          {/* Media Permission Alert if error */}
-          {mediaPermissionError && (
-            <div className="mx-4 mt-3 p-3 bg-amber-950/60 border border-amber-800/80 rounded-xl text-amber-300 text-xs flex items-center gap-2 shrink-0">
-              <AlertCircle size={16} className="shrink-0 text-amber-400" />
-              <span>{mediaPermissionError}</span>
-            </div>
-          )}
-
-          {/* Dynamic Video Grid Area */}
-          <div className="flex-1 overflow-y-auto p-3 sm:p-5 pb-28 flex flex-col justify-center">
-            <div className="w-full max-w-6xl mx-auto h-full flex flex-col justify-center">
-              <div className={getGridClasses(participantCount)}>
-                {currentRoom.participants.map((participant) => {
-                  const isSelf = participant.id === currentUserId;
-                  const stream = isSelf ? localStream : (remoteStreams.get(participant.socketId) || null);
-
-                  return (
-                    <VoiceVideoParticipantCard
-                      key={participant.id}
-                      participant={participant}
-                      isSelf={isSelf}
-                      isHost={participant.id === currentRoom.hostId}
-                      isCurrentRoomHost={isCurrentRoomHost}
-                      stream={stream}
-                      isDeafened={isDeafened}
-                      onKick={handleKickUser}
-                      onForceMute={handleForceMuteUser}
-                      onForceCameraOff={handleForceCameraOffUser}
-                      onUserClick={onUserClick}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Floating Bottom Control Bar (Dock) */}
-          <div className="absolute bottom-4 left-0 right-0 px-4 flex justify-center pointer-events-none z-30">
-            <div className="bg-slate-900/95 backdrop-blur-xl px-5 sm:px-8 py-3 rounded-2xl border border-slate-800 shadow-2xl flex items-center gap-3 sm:gap-5 pointer-events-auto max-w-lg w-full justify-around">
-              
-              {/* Mic Toggle Button */}
-              <button
-                onClick={handleToggleMute}
-                title={isMuted ? "Mikrofonu Aç" : "Mikrofonu Kapat"}
-                className={`min-w-[48px] min-h-[48px] rounded-xl flex items-center justify-center transition-all shadow-md active:scale-95 ${
-                  isMuted
-                    ? 'bg-rose-600 hover:bg-rose-500 text-white ring-2 ring-rose-500/30'
-                    : isSpeakingLocal
-                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white ring-4 ring-emerald-500/40 animate-pulse'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
-                }`}
-              >
-                {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
-              </button>
-
-              {/* Camera Toggle Button */}
-              <button
-                onClick={handleToggleVideo}
-                title={isVideoOff ? "Kamerayı Aç" : "Kamerayı Kapat"}
-                className={`min-w-[48px] min-h-[48px] rounded-xl flex items-center justify-center transition-all shadow-md active:scale-95 ${
-                  isVideoOff
-                    ? 'bg-rose-600 hover:bg-rose-500 text-white ring-2 ring-rose-500/30'
-                    : 'bg-blue-600 hover:bg-blue-500 text-white ring-2 ring-blue-500/30'
-                }`}
-              >
-                {isVideoOff ? <CameraOff size={22} /> : <Camera size={22} />}
-              </button>
-
-              {/* Deafen / Sound Toggle Button */}
-              <button
-                onClick={handleToggleDeafen}
-                title={isDeafened ? "Sesi Aç" : "Kulaklığı Kapat (Sağırlaştır)"}
-                className={`min-w-[48px] min-h-[48px] rounded-xl flex items-center justify-center transition-all shadow-md active:scale-95 ${
-                  isDeafened
-                    ? 'bg-amber-600 hover:bg-amber-500 text-white ring-2 ring-amber-500/30'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
-                }`}
-              >
-                {isDeafened ? <VolumeX size={22} /> : <Headphones size={22} />}
-              </button>
-
-              {/* End / Leave Button */}
-              <button
-                onClick={handleLeaveRoom}
-                title="Odadan Ayrıl"
-                className="min-w-[48px] min-h-[48px] rounded-xl bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-all shadow-md active:scale-95"
-              >
-                <PhoneOff size={22} />
-              </button>
-            </div>
-          </div>
-        </div>
+        <VideoRoomView
+          roomName={currentRoom.name}
+          hostUsername={currentRoom.hostUsername}
+          maxParticipants={currentRoom.maxParticipants}
+          participants={currentRoom.participants}
+          currentUserId={currentUserId}
+          isHost={isCurrentRoomHost}
+          localStream={localStream}
+          remoteStreams={remoteStreams}
+          isMuted={isMuted}
+          isVideoOff={isVideoOff}
+          isDeafened={isDeafened}
+          isSpeakingLocal={isSpeakingLocal}
+          mediaPermissionError={mediaPermissionError}
+          onToggleMute={toggleMute}
+          onToggleVideo={toggleVideo}
+          onToggleDeafen={toggleDeafen}
+          onLeaveRoom={handleLeaveRoom}
+          onKickUser={handleKickUser}
+          onForceMuteUser={handleForceMuteUser}
+          onForceCameraOffUser={handleForceCameraOffUser}
+          onUserClick={onUserClick}
+        />
       ) : (
         /* View 2: Voice & Video Rooms Lobby */
         <div className="flex-1 flex flex-col h-full w-full overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -1248,7 +468,7 @@ export default function VoiceChat({
                   </span>
                 </div>
                 <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-                  Arkadaşlarınla yüksek kaliteli, düşük gecikmeli sesli ve kameralı odalara katıl veya yeni oda kur.
+                  Arkadaşlarınla 20 kişiye kadar yüksek kaliteli, düşük gecikmeli sesli ve kameralı odalara katıl veya yeni oda kur.
                 </p>
               </div>
 
@@ -1320,7 +540,7 @@ export default function VoiceChat({
         </div>
       )}
 
-      {/* Create Room Modal */}
+      {/* Create Room Modal with 20-Person Capacity Option */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl border border-slate-200 dark:border-slate-700 animate-in fade-in zoom-in-95 duration-150 text-slate-900 dark:text-slate-100">
@@ -1359,21 +579,23 @@ export default function VoiceChat({
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
-                    Maksimum Kişi Sayısı
+                    Maksimum Kişi Sayısı (Maks. {MAX_ROOM_USERS})
                   </label>
-                  <span className="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md">
+                  <span className="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/40 px-2.5 py-0.5 rounded-md">
                     {newRoomCapacity} Kişi
                   </span>
                 </div>
-                <div className="grid grid-cols-5 gap-1.5 pt-1">
-                  {[2, 4, 6, 8, 10].map((cap) => (
+                
+                {/* 20-Person Capacity Range Buttons */}
+                <div className="grid grid-cols-6 gap-1.5 pt-1">
+                  {[2, 4, 8, 12, 16, 20].map((cap) => (
                     <button
                       key={cap}
                       type="button"
                       onClick={() => setNewRoomCapacity(cap)}
                       className={`min-h-[44px] rounded-xl text-xs font-bold transition-all ${
                         newRoomCapacity === cap
-                          ? 'bg-blue-600 text-white shadow-sm'
+                          ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-500/40'
                           : 'bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                       }`}
                     >

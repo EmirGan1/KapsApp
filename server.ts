@@ -1358,6 +1358,8 @@ async function startServer() {
     joinedAt: string;
   }
 
+  const MAX_VOICE_ROOM_PARTICIPANTS = 20;
+
   interface ServerVoiceRoom {
     id: string;
     name: string;
@@ -4724,7 +4726,7 @@ async function startServer() {
 
       const rawName = (data?.name || "").trim();
       const roomName = rawName.slice(0, 35) || `${user.username}'in Odası`;
-      const maxParticipants = Math.min(10, Math.max(2, Number(data?.maxParticipants) || 8));
+      const maxParticipants = Math.min(MAX_VOICE_ROOM_PARTICIPANTS, Math.max(2, Number(data?.maxParticipants) || 8));
       const roomId = `vr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
       const newParticipant: ServerVoiceParticipant = {
