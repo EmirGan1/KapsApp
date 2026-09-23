@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
+import AdminModerationMenu from "./AdminModerationMenu";
 import { MediaModalData } from "../types";
 import { getApiUrl } from "../utils/api";
 
@@ -444,19 +445,15 @@ export default function Profile({
             )}
 
             {isEmirgan && (
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    setDeleteUserError("");
-                    setShowDeleteUserModal(true);
-                  }}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-md shadow-red-600/20 transition-all cursor-pointer text-sm"
-                  title="Kullanıcıyı Kalıcı Olarak Sil veya Banla (Yönetici)"
-                >
-                  <UserX size={16} />
-                  <span>Yönetici: Ban / Sil</span>
-                </button>
-              </div>
+              <AdminModerationMenu
+                targetUserId={userProfile.id}
+                targetUsername={userProfile.username}
+                currentUsername={currentUsername}
+                variant="button"
+                onSuccess={() => {
+                  onUserClick(currentUserId);
+                }}
+              />
             )}
           </div>
         )}

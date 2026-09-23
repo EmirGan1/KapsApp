@@ -1,3 +1,5 @@
+import { getCachedDeviceId, getDeviceId } from "./deviceFingerprint";
+
 // Frontend API & WebSocket Yapılandırması (VDS / KapsApp Mimari Standardı)
 // Varsayılan olarak tüm istekler ve soket bağlantıları aynı origin üzerinden göreceli (relative path)
 // çalışır: /api/* ve /socket.io/*.
@@ -27,11 +29,27 @@ export function getSocketUrl(): string | undefined {
 
 /**
  * HTML/404 veya sunucu uyku/başlangıç modundayken oluşabilecek "Unexpected token" JSON çökmesini engelleyen
- * güvenli fetch yardımcısı.
+ * ve otomatik X-Device-Id başlığı ekleyen güvenli fetch yardımcısı.
  */
 export async function safeFetchJson<T = any>(input: string, init?: RequestInit): Promise<T> {
   const targetUrl = getApiUrl(input);
-  const res = await fetch(targetUrl, init);
+  
+  // Ensure device ID is available
+  let deviceId = getCachedDeviceId();
+  if (!deviceId) {
+    deviceId = await getDeviceId();
+  }
+
+  const headers = new Headers(init?.headers || {});
+  if (!headers.has("X-Device-Id") && deviceId) {
+    headers.set("X-Device-Id", deviceId);
+  }
+
+  const res = await fetch(targetUrl, {
+    ...init,
+    headers
+  });
+
   const contentType = res.headers.get("content-type");
 
   if (!contentType || !contentType.includes("application/json")) {
@@ -41,6 +59,15 @@ export async function safeFetchJson<T = any>(input: string, init?: RequestInit):
   }
 
   const data = await res.json();
+  
+  // Device Ban interceptor
+  if (res.status === 403 && (data.banned || data.type === "device_banned")) {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("kaps:device_banned", { detail: data }));
+    }
+    throw new Error(data.error || "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır.");
+  }
+
   if (!res.ok) {
     throw new Error(data.error || "İşlem gerçekleştirilemedi.");
   }

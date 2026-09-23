@@ -14,7 +14,9 @@ import LiveMap from "./components/LiveMap";
 import Announcements, { AnnouncementItem } from "./components/Announcements";
 import AnnouncementModal from "./components/AnnouncementModal";
 import ToastContainer, { ToastItem } from "./components/ToastContainer";
+import DeviceBanScreen from "./components/DeviceBanScreen";
 import { getSocketUrl } from "./utils/api";
+import { getCachedDeviceId, getDeviceId } from "./utils/deviceFingerprint";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -44,6 +46,24 @@ export default function App() {
   const [hasUnreadAnnouncement, setHasUnreadAnnouncement] = useState(false);
   const [activeAnnouncementModal, setActiveAnnouncementModal] = useState<AnnouncementItem | null>(null);
   const latestAnnouncementIdRef = useRef<number>(0);
+
+  // Hardware / Device Ban State
+  const [isDeviceBanned, setIsDeviceBanned] = useState(false);
+  const [deviceBanReason, setDeviceBanReason] = useState("");
+
+  // Listen to Global Device Ban events from safeFetchJson or sockets
+  useEffect(() => {
+    const handleDeviceBanEvent = (e: any) => {
+      setIsDeviceBanned(true);
+      if (e.detail?.error || e.detail?.message) {
+        setDeviceBanReason(e.detail.error || e.detail.message);
+      }
+    };
+    window.addEventListener("kaps:device_banned", handleDeviceBanEvent);
+    return () => {
+      window.removeEventListener("kaps:device_banned", handleDeviceBanEvent);
+    };
+  }, []);
 
   // Real-time Floating Toast Notifications with Stacking / Grouping
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -197,9 +217,10 @@ export default function App() {
   useEffect(() => {
     if (token) {
       const socketUrl = getSocketUrl();
+      const deviceId = getCachedDeviceId();
       const socketOptions = { 
         path: "/socket.io",
-        auth: { token },
+        auth: { token, deviceId },
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
@@ -225,9 +246,30 @@ export default function App() {
       newSocket.on("connect", onConnect);
 
       newSocket.on("connect_error", (err) => {
-        if (err.message === "Invalid token" || err.message === "No token") {
+        if (err.message && (err.message.includes("cihaz") || err.message.includes("uzaklaştırılmıştır"))) {
+          setIsDeviceBanned(true);
+          setDeviceBanReason(err.message);
+        } else if (err.message === "Invalid token" || err.message === "No token" || err.message.includes("askıya")) {
           handleLogout();
         }
+      });
+
+      // Socket Device and Account Moderation Listeners
+      newSocket.on("device_banned", (data: any) => {
+        setIsDeviceBanned(true);
+        if (data?.message || data?.reason) {
+          setDeviceBanReason(data.reason || data.message);
+        }
+      });
+
+      newSocket.on("account_banned", (data: any) => {
+        alert(data?.message || "Hesabınız yönetici tarafından banlanmıştır.");
+        handleLogout();
+      });
+
+      newSocket.on("account_deleted", (msg: string) => {
+        alert(msg || "Hesabınız silinmiştir.");
+        handleLogout();
       });
 
       newSocket.on("online_users", (users: number[]) => {
@@ -377,6 +419,10 @@ export default function App() {
     if (socket) socket.disconnect();
     window.location.reload();
   };
+
+  if (isDeviceBanned) {
+    return <DeviceBanScreen reason={deviceBanReason} onRetry={() => window.location.reload()} />;
+  }
 
   if (!token) {
     return <Auth onAuthSuccess={handleAuthSuccess} />;

@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Socket } from 'socket.io-client';
-import { VoiceParticipant } from '../types';
 import { 
   ICE_SERVERS, 
   AUDIO_CONSTRAINTS, 
@@ -39,7 +38,7 @@ export function useWebRTC({
   const analyserRef = useRef<AnalyserNode | null>(null);
   const speakingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // State refs to access latest values in callbacks
+  // State refs to access latest values in async callbacks
   const isMutedRef = useRef(isMuted);
   const isVideoOffRef = useRef(isVideoOff);
   const isDeafenedRef = useRef(isDeafened);
@@ -70,7 +69,7 @@ export function useWebRTC({
         try {
           track.stop();
         } catch (e) {
-          console.warn('Error stopping track:', e);
+          console.warn('[WebRTC] Error stopping track:', e);
         }
       });
       localStreamRef.current = null;
@@ -85,7 +84,7 @@ export function useWebRTC({
         pc.onconnectionstatechange = null;
         pc.close();
       } catch (e) {
-        console.warn('Error closing RTCPeerConnection:', e);
+        console.warn('[WebRTC] Error closing RTCPeerConnection:', e);
       }
     });
     peerConnectionsRef.current.clear();
@@ -114,7 +113,7 @@ export function useWebRTC({
           try {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
           } catch (e) {
-            console.debug('Failed to apply queued ICE candidate:', e);
+            console.debug('[WebRTC] Failed to apply queued ICE candidate:', e);
           }
         }
       }
@@ -138,7 +137,7 @@ export function useWebRTC({
           });
           setIsVideoOff(false);
         } catch (videoErr) {
-          console.warn('Camera access failed, falling back to audio only:', videoErr);
+          console.warn('[WebRTC] Camera access failed, falling back to audio only:', videoErr);
           stream = await navigator.mediaDevices.getUserMedia({
             audio: AUDIO_CONSTRAINTS,
             video: false
@@ -197,7 +196,7 @@ export function useWebRTC({
             sum += dataArray[i];
           }
           const average = sum / dataArray.length;
-          const isNowSpeaking = average > 18; // Sensible threshold
+          const isNowSpeaking = average > 18;
 
           if (isNowSpeaking !== wasSpeaking) {
             wasSpeaking = isNowSpeaking;
@@ -214,7 +213,7 @@ export function useWebRTC({
 
       return stream;
     } catch (err: any) {
-      console.warn('Media access error:', err);
+      console.warn('[WebRTC] Media access error:', err);
       setMediaPermissionError('Kamera veya mikrofon erişimi sağlanamadı. Lütfen tarayıcı izinlerini kontrol edin.');
       return null;
     }
@@ -229,7 +228,7 @@ export function useWebRTC({
     const pc = new RTCPeerConnection(ICE_SERVERS);
     peerConnectionsRef.current.set(remoteSocketId, pc);
 
-    // 1. Pre-configure Audio and Video Transceivers to prevent black screen on late video addition
+    // 1. Transceivers & Track Configuration
     const audioTrack = currentLocalStream?.getAudioTracks()[0] || null;
     const videoTrack = currentLocalStream?.getVideoTracks()[0] || null;
 
@@ -256,22 +255,30 @@ export function useWebRTC({
       }
     };
 
-    // 3. Remote Track Handling (Resolves Black Screen Bug)
+    // 3. Remote Track Handling (Robust implementation resolving Black Screen Bug)
     pc.ontrack = (event) => {
       const track = event.track;
-      
-      // Keep track of unmuting to guarantee video playback once frames arrive
+      console.log(`[WebRTC] ontrack received: peer=${remoteSocketId}, kind=${track.kind}, id=${track.id}`);
+
+      // Track unmute event: when first data packet arrives from remote peer
       track.onunmute = () => {
+        console.log(`[WebRTC] Remote track onunmute (active data): peer=${remoteSocketId}, kind=${track.kind}`);
         setRemoteStreams((prev) => {
           const next = new Map(prev);
           const current = next.get(remoteSocketId);
           if (current) {
+            // New MediaStream instance forces React ref callbacks and useEffects to trigger
             next.set(remoteSocketId, new MediaStream(current.getTracks()));
           }
           return next;
         });
       };
 
+      track.onmute = () => {
+        console.log(`[WebRTC] Remote track onmute: peer=${remoteSocketId}, kind=${track.kind}`);
+      };
+
+      // Add to remoteStreams Map
       setRemoteStreams((prev) => {
         const next = new Map(prev);
         const existing = next.get(remoteSocketId);
@@ -289,7 +296,7 @@ export function useWebRTC({
         return next;
       });
 
-      // Background HTMLAudioElement for guaranteed audio delivery
+      // Background HTMLAudioElement for uninterrupted audio playback
       if (track.kind === 'audio') {
         let audioEl = remoteAudioElementsRef.current.get(remoteSocketId);
         if (!audioEl) {
@@ -301,12 +308,13 @@ export function useWebRTC({
         }
         audioEl.srcObject = new MediaStream([track]);
         audioEl.muted = isDeafenedRef.current;
-        audioEl.play().catch((e) => console.debug('Audio auto-play:', e));
+        audioEl.play().catch((e) => console.debug('[WebRTC] Remote audio autoplay:', e));
       }
     };
 
     // 4. Connection State Management
     pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Connection state with ${remoteSocketId}:`, pc.connectionState);
       if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         const audioEl = remoteAudioElementsRef.current.get(remoteSocketId);
         if (audioEl) {
@@ -344,17 +352,17 @@ export function useWebRTC({
     }
   }, [isMuted, socket]);
 
-  // Toggle Video (Camera) - Seamless Track Replacement without Black Screen
+  // Toggle Video (Camera) with Full Renegotiation & Track Replacement
   const toggleVideo = useCallback(async () => {
     if (!isVideoOff) {
-      // 1. Turn Camera OFF: Stop track to release hardware indicator LED
+      // 1. Turn Camera OFF: Stop tracks so hardware indicator LED turns off
       const videoTracks = localStreamRef.current?.getVideoTracks() || [];
       videoTracks.forEach((t) => {
         t.stop();
         localStreamRef.current?.removeTrack(t);
       });
 
-      // Replace sender tracks with null on all peers without tearing down connection
+      // Replace sender track with null across all active peer connections
       peerConnectionsRef.current.forEach((pc) => {
         const senders = pc.getSenders();
         const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
@@ -375,13 +383,14 @@ export function useWebRTC({
         });
       }
     } else {
-      // 2. Turn Camera ON: Fetch fresh video stream & attach to existing transceiver
+      // 2. Turn Camera ON: Get new video stream, replaceTrack, and Renegotiate with all peers!
       try {
         const vConstraints = getVideoConstraints(participantCountRef.current);
         const camStream = await navigator.mediaDevices.getUserMedia({
           video: vConstraints
         });
         const newVideoTrack = camStream.getVideoTracks()[0];
+
         if (newVideoTrack) {
           if (!localStreamRef.current) {
             localStreamRef.current = new MediaStream();
@@ -389,26 +398,28 @@ export function useWebRTC({
           localStreamRef.current.addTrack(newVideoTrack);
           setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
 
-          // Update video track on all active RTCPeerConnections via replaceTrack
+          // Update each peer connection
           for (const [sId, pc] of peerConnectionsRef.current.entries()) {
             const senders = pc.getSenders();
             const videoSender = senders.find((s) => s.track?.kind === 'video') || senders.find((s) => !s.track);
-            
+
             if (videoSender) {
               await videoSender.replaceTrack(newVideoTrack).catch(() => {});
               applySenderBitrateLimit(videoSender, participantCountRef.current);
             } else {
               const sender = pc.addTrack(newVideoTrack, localStreamRef.current);
               applySenderBitrateLimit(sender, participantCountRef.current);
-              try {
-                const rawOffer = await pc.createOffer();
-                const tunedSdp = tuneSdpForAudioOpus(rawOffer.sdp || '');
-                const offer = { type: rawOffer.type, sdp: tunedSdp };
-                await pc.setLocalDescription(offer);
-                socket?.emit('voice_offer', { targetSocketId: sId, offer });
-              } catch (e) {
-                console.warn('Renegotiation notice:', e);
-              }
+            }
+
+            // CRITICAL RENEGOTIATION: Send offer to guarantee remote SDP receives video
+            try {
+              const rawOffer = await pc.createOffer();
+              const tunedSdp = tuneSdpForAudioOpus(rawOffer.sdp || '');
+              const offer = { type: rawOffer.type, sdp: tunedSdp };
+              await pc.setLocalDescription(offer);
+              socket?.emit('voice_offer', { targetSocketId: sId, offer });
+            } catch (renegErr) {
+              console.warn('[WebRTC] Renegotiation offer notice:', renegErr);
             }
           }
 
@@ -421,7 +432,7 @@ export function useWebRTC({
           }
         }
       } catch (err) {
-        console.warn('Camera re-enable failed:', err);
+        console.warn('[WebRTC] Camera enable failed:', err);
         alert('Kamera açılamadı. Lütfen kamera izinlerini kontrol edin.');
       }
     }
@@ -444,7 +455,7 @@ export function useWebRTC({
     }
   }, [isDeafened, socket]);
 
-  // Force mute / camera off triggered from host
+  // Host force actions
   const handleRemoteForceMute = useCallback(() => {
     setIsMuted(true);
     if (localStreamRef.current) {
@@ -500,7 +511,7 @@ export function useWebRTC({
         offer
       });
     } catch (err) {
-      console.warn('Error creating voice offer:', err);
+      console.warn('[WebRTC] Error creating voice offer:', err);
     }
   }, [socket, setupLocalMedia, createPeerConnection]);
 
@@ -527,14 +538,18 @@ export function useWebRTC({
     });
   }, []);
 
-  // WebRTC Signaling Socket Listeners
+  // WebRTC Signaling Socket Listeners (handles both initial and renegotiation offers)
   useEffect(() => {
     if (!socket) return;
 
     const handleVoiceOffer = async (data: { senderSocketId: string; senderUserId: number; offer: any }) => {
+      console.log(`[WebRTC] Received voice_offer from ${data.senderSocketId}`);
       let stream = localStreamRef.current;
       if (!stream) stream = await setupLocalMedia();
-      const pc = createPeerConnection(data.senderSocketId, stream);
+
+      // Retrieve existing connection or create a new one
+      const pc = peerConnectionsRef.current.get(data.senderSocketId) || createPeerConnection(data.senderSocketId, stream);
+
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         await processQueuedCandidates(data.senderSocketId, pc);
@@ -549,18 +564,19 @@ export function useWebRTC({
           answer
         });
       } catch (err) {
-        console.warn('Error handling voice offer:', err);
+        console.warn('[WebRTC] Error handling voice offer/renegotiation:', err);
       }
     };
 
     const handleVoiceAnswer = async (data: { senderSocketId: string; answer: any }) => {
+      console.log(`[WebRTC] Received voice_answer from ${data.senderSocketId}`);
       const pc = peerConnectionsRef.current.get(data.senderSocketId);
       if (pc) {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
           await processQueuedCandidates(data.senderSocketId, pc);
         } catch (err) {
-          console.warn('Error handling voice answer:', err);
+          console.warn('[WebRTC] Error handling voice answer:', err);
         }
       }
     };
@@ -568,13 +584,16 @@ export function useWebRTC({
     const handleVoiceIceCandidate = async (data: { senderSocketId: string; candidate: any }) => {
       if (!data?.senderSocketId || !data?.candidate) return;
       const pc = peerConnectionsRef.current.get(data.senderSocketId);
+
+      // Only add candidate immediately if remote description is set
       if (pc && pc.remoteDescription && pc.remoteDescription.type) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
         } catch (err) {
-          console.warn('Error adding ICE candidate:', err);
+          console.warn('[WebRTC] Error adding ICE candidate:', err);
         }
       } else {
+        // Queue candidates until remote description is applied
         const queue = pendingCandidatesRef.current.get(data.senderSocketId) || [];
         queue.push(data.candidate);
         pendingCandidatesRef.current.set(data.senderSocketId, queue);

@@ -3,6 +3,7 @@ import { Socket } from "socket.io-client";
 import { Send, Image as ImageIcon, Mic, Reply, Smile, Paperclip, FileText, Download, Maximize2, Trash2, Globe, Loader2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
+import AdminModerationMenu from "./AdminModerationMenu";
 import { MediaModalData } from "../types";
 import { 
   globalChatCache, 
@@ -880,7 +881,7 @@ export default function GlobalChat({
             return (
               <div
                 key={u.id}
-                className="flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                className="flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer group"
                 onClick={() => onUserClick && onUserClick(u.id)}
               >
                 <div className="relative">
@@ -901,6 +902,19 @@ export default function GlobalChat({
                     </div>
                   )}
                 </div>
+                {currentUsername?.trim().toLowerCase() === "emirgan" && u.username?.trim().toLowerCase() !== "emirgan" && (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <AdminModerationMenu
+                      targetUserId={u.id}
+                      targetUsername={u.username}
+                      currentUsername={currentUsername}
+                      variant="dots"
+                      onSuccess={() => {
+                        socket?.emit("get_users");
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}

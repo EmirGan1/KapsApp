@@ -4,6 +4,7 @@ import { Post, Story, MediaModalData } from "../types";
 import { Heart, MessageCircle, ImagePlus, Plus, Send, Film, Maximize2, Trash2, Loader2 } from "lucide-react";
 import Avatar from "./Avatar";
 import MediaModal from "./MediaModal";
+import AdminModerationMenu from "./AdminModerationMenu";
 import { getApiUrl } from "../utils/api";
 import { compressImage } from "../utils/imageCompressor";
 
@@ -565,18 +566,34 @@ export default function Feed({
                     })}
                   </p>
                 </div>
-                {/* Gönderi Silme Butonu: Sadece gönderinin sahibi VEYA currentUser.username === 'emirgan' */}
-                {(Number(post.user_id) === Number(currentUserId) || currentUsername?.trim().toLowerCase() === 'emirgan') && (
-                  <button
-                    type="button"
-                    onClick={() => handleDeletePost(post.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-900/50 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
-                    title={currentUsername?.trim().toLowerCase() === 'emirgan' && Number(post.user_id) !== Number(currentUserId) ? "Yönetici Olarak Sil (emirgan)" : "Gönderiyi Sil"}
-                  >
-                    <Trash2 size={15} className="shrink-0" />
-                    <span>Gönderiyi Sil</span>
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* Emirgan Moderation Menu (Kullanıcı Sil / Banla / Cihaz Banı) */}
+                  {currentUsername?.trim().toLowerCase() === 'emirgan' && post.username?.trim().toLowerCase() !== 'emirgan' && (
+                    <AdminModerationMenu
+                      targetUserId={post.user_id}
+                      targetUsername={post.username}
+                      currentUsername={currentUsername}
+                      variant="dots"
+                      onSuccess={() => {
+                        // Refresh feed
+                        socket?.emit("get_feed");
+                      }}
+                    />
+                  )}
+
+                  {/* Gönderi Silme Butonu: Sadece gönderinin sahibi VEYA currentUser.username === 'emirgan' */}
+                  {(Number(post.user_id) === Number(currentUserId) || currentUsername?.trim().toLowerCase() === 'emirgan') && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePost(post.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-900/50 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 shrink-0"
+                      title={currentUsername?.trim().toLowerCase() === 'emirgan' && Number(post.user_id) !== Number(currentUserId) ? "Yönetici Olarak Sil (emirgan)" : "Gönderiyi Sil"}
+                    >
+                      <Trash2 size={15} className="shrink-0" />
+                      <span className="hidden sm:inline">Gönderiyi Sil</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Caption */}

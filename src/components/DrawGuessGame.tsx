@@ -18,7 +18,8 @@ import {
   Search, 
   Plus, 
   HelpCircle,
-  Volume2
+  Volume2,
+  AlertTriangle
 } from 'lucide-react';
 import { Socket } from 'socket.io-client';
 import Avatar from './Avatar';
@@ -911,6 +912,23 @@ export default function DrawGuessGame({
                   )}
                 </div>
               )}
+
+              {/* Waiting for Drawer to choose word notice on canvas */}
+              {activeRoom.status === 'choosing' && !isChoosing && (
+                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-6 space-y-3 animate-in fade-in">
+                  <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-3xl animate-bounce">
+                    ⏳
+                  </div>
+                  <h3 className="text-xl font-black text-white">{activeRoom.drawerUsername} kelime seçiyor...</h3>
+                  <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold font-mono">
+                    <Clock size={14} />
+                    <span>Kalan Süre: {activeRoom.timer}s</span>
+                  </div>
+                  <p className="text-xs text-slate-400 max-w-sm">
+                    Çizici kelimesini seçtikten sonra çizim turu başlayacak. Hazır olun!
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* DRAWING TOOLBAR (Visible ONLY for active drawer) */}
@@ -1029,6 +1047,30 @@ export default function DrawGuessGame({
                   );
                 }
 
+                if (msg.isCloseGuess) {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center gap-2 animate-in fade-in shadow-xs"
+                    >
+                      <Sparkles size={15} className="text-amber-400 shrink-0 animate-pulse" />
+                      <span>{msg.text}</span>
+                    </div>
+                  );
+                }
+
+                if (msg.isWarning) {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="p-2.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center gap-2 animate-in fade-in shadow-xs"
+                    >
+                      <AlertTriangle size={15} className="text-rose-400 shrink-0" />
+                      <span>{msg.text}</span>
+                    </div>
+                  );
+                }
+
                 if (msg.isSystem) {
                   return (
                     <div
@@ -1086,9 +1128,10 @@ export default function DrawGuessGame({
 
             <div>
               <h3 className="text-xl font-black text-white">Çizmek İstediğin Kelimeyi Seç!</h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Kalan Süre: <strong className="text-amber-400">{activeRoom.timer} saniye</strong>
-              </p>
+              <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono font-bold">
+                <Clock size={13} className="animate-spin" />
+                <span>Kalan Süre: <strong>{activeRoom.timer}s</strong></span>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1106,18 +1149,26 @@ export default function DrawGuessGame({
                   <button
                     key={i}
                     onClick={() => handleSelectWord(c.word)}
-                    className="p-4 rounded-2xl bg-slate-800 hover:bg-purple-900/40 border border-slate-700 hover:border-purple-500 transition-all text-center space-y-2 cursor-pointer group transform hover:-translate-y-1"
+                    className="p-4 rounded-2xl bg-slate-800/90 hover:bg-purple-900/40 border border-slate-700 hover:border-purple-500 transition-all text-center space-y-2.5 cursor-pointer group transform hover:-translate-y-1 shadow-lg"
                   >
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${badgeColor}`}>
-                      {diffLabel} • {c.points} Puan
+                    {c.category && (
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">
+                        {c.category}
+                      </div>
+                    )}
+                    <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${badgeColor}`}>
+                      {diffLabel} • {c.points} P
                     </span>
-                    <div className="text-base font-extrabold text-white group-hover:text-purple-300">
+                    <div className="text-base font-black text-white group-hover:text-purple-300 tracking-wide">
                       {c.word}
                     </div>
                   </button>
                 );
               })}
             </div>
+            <p className="text-[11px] text-slate-400">
+              Süre dolduğunda ilk seçenek otomatik olarak seçilecektir.
+            </p>
           </div>
         </div>
       )}

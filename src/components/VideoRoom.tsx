@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Mic, 
   MicOff, 
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { VoiceParticipant } from '../types';
 import Avatar from './Avatar';
+import RemoteVideo from './RemoteVideo';
 
 interface VideoTileProps {
   participant: VoiceParticipant;
@@ -46,7 +47,6 @@ export const VideoTile = React.memo(({
   const [showMenu, setShowMenu] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Check if stream has active video track
   const videoTrack = stream ? stream.getVideoTracks()[0] : null;
@@ -56,58 +56,6 @@ export const VideoTile = React.memo(({
     videoTrack.enabled && 
     !participant.isVideoOff
   );
-
-  // Robust video element binder: attaches stream and safely triggers play
-  const bindStreamToVideo = useCallback((element: HTMLVideoElement | null) => {
-    if (!element) return;
-    if (stream && hasLiveVideoTrack) {
-      if (element.srcObject !== stream) {
-        element.srcObject = stream;
-      }
-      element.play()
-        .then(() => setIsVideoPlaying(true))
-        .catch((err) => {
-          console.debug('Autoplay handling:', err);
-          // Retry with muted guarantee
-          element.muted = true;
-          element.play().catch(() => {});
-        });
-    } else {
-      element.srcObject = null;
-      setIsVideoPlaying(false);
-    }
-  }, [stream, hasLiveVideoTrack]);
-
-  // Callback ref for initial mount binding
-  const setVideoRef = useCallback((node: HTMLVideoElement | null) => {
-    videoRef.current = node;
-    bindStreamToVideo(node);
-  }, [bindStreamToVideo]);
-
-  // Synchronize on stream, track, or participant video status changes
-  useEffect(() => {
-    bindStreamToVideo(videoRef.current);
-  }, [bindStreamToVideo]);
-
-  // Listen to track unmute/mute events to immediately update video rendering
-  useEffect(() => {
-    if (!videoTrack) return;
-
-    const handleUnmute = () => {
-      bindStreamToVideo(videoRef.current);
-    };
-    const handleMute = () => {
-      setIsVideoPlaying(false);
-    };
-
-    videoTrack.addEventListener('unmute', handleUnmute);
-    videoTrack.addEventListener('mute', handleMute);
-
-    return () => {
-      videoTrack.removeEventListener('unmute', handleUnmute);
-      videoTrack.removeEventListener('mute', handleMute);
-    };
-  }, [videoTrack, bindStreamToVideo]);
 
   // Outside click handler for host control dropdown
   useEffect(() => {
@@ -133,23 +81,16 @@ export const VideoTile = React.memo(({
         : 'border-slate-800 hover:border-slate-700'
     }`}>
       
-      {/* Video Stream Element with Anti-Black Screen Attributes */}
+      {/* Video Stream Element with Anti-Black Screen RemoteVideo Component */}
       {hasLiveVideoTrack && (
         <div className={`absolute inset-0 w-full h-full bg-black transition-opacity duration-300 ${
           showVideo ? 'opacity-100 z-0' : 'opacity-0 -z-10'
         }`}>
-          <video
-            ref={setVideoRef}
-            autoPlay
-            playsInline
-            muted={true} // MUST be muted for video element to guarantee browser autoplay
-            onLoadedMetadata={() => {
-              if (videoRef.current) {
-                videoRef.current.play().then(() => setIsVideoPlaying(true)).catch(() => {});
-              }
-            }}
-            onPlay={() => setIsVideoPlaying(true)}
-            className={`w-full h-full object-cover ${isSelf ? 'scale-x-[-1]' : ''}`}
+          <RemoteVideo
+            stream={stream}
+            isSelf={isSelf}
+            muted={true}
+            onVideoPlaying={setIsVideoPlaying}
           />
         </div>
       )}

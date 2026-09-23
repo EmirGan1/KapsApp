@@ -46,6 +46,13 @@ import {
   COLOR_STYLES,
   shuffleCards 
 } from "./src/utils/unoEngine.ts";
+import {
+  GARTIC_WORDS_POOL,
+  getRandomWords,
+  isCloseGuess,
+  containsSecretWord,
+  normalizeTr
+} from "./src/server/garticWords.ts";
 
 dotenv.config();
 
@@ -272,6 +279,33 @@ async function initDb() {
     lastSeen INTEGER
   )`);
 
+  // Banned Devices Table (Permanent Hardware / Browser Fingerprint Ban)
+  await client.execute(`CREATE TABLE IF NOT EXISTS banned_devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT UNIQUE NOT NULL,
+    last_ip TEXT,
+    banned_by TEXT DEFAULT 'emirgan',
+    reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Banned IPs Table
+  await client.execute(`CREATE TABLE IF NOT EXISTS banned_ips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip_address TEXT UNIQUE NOT NULL,
+    banned_by TEXT DEFAULT 'emirgan',
+    reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // User Ban & Device Tracking Column Migrations
+  try { await client.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN banned_at TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN ban_reason TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN last_device_id TEXT"); } catch(e){}
+  try { await client.execute("CREATE INDEX IF NOT EXISTS idx_banned_devices_id ON banned_devices(device_id)"); } catch(e){}
+  try { await client.execute("CREATE INDEX IF NOT EXISTS idx_banned_ips_addr ON banned_ips(ip_address)"); } catch(e){}
+
   // High Performance DB PRAGMAs & Indexing for Turso/SQLite (1GB RAM Optimization)
   try {
     await client.execute("PRAGMA cache_size = -32000;");
@@ -378,6 +412,26 @@ async function startServer() {
       args: [userId, ipAddress || "Bilinmiyor", action, new Date().toISOString()]
     }).catch(err => console.error("Access log error:", err));
   };
+
+  // In-Memory Fast Lookup for Banned Devices & IPs (0ms response time for 1GB RAM efficiency)
+  const bannedDevicesSet = new Set<string>();
+  const bannedIpsSet = new Set<string>();
+
+  const loadBannedRecords = async () => {
+    try {
+      const devRes = await client.execute("SELECT device_id FROM banned_devices");
+      devRes.rows.forEach((r) => {
+        if (r.device_id) bannedDevicesSet.add(String(r.device_id).trim());
+      });
+      const ipRes = await client.execute("SELECT ip_address FROM banned_ips");
+      ipRes.rows.forEach((r) => {
+        if (r.ip_address) bannedIpsSet.add(String(r.ip_address).trim());
+      });
+    } catch (e) {
+      console.error("Error loading banned devices/ips:", e);
+    }
+  };
+  await loadBannedRecords();
   
   // CORS Configuration (VDS & Domain Origin List)
   const allowedOrigins = [
@@ -405,11 +459,37 @@ async function startServer() {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Device-Id"]
   }));
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Global Gateway Ban Interceptor for Hardware / Device & IP Bans
+  app.use((req, res, next) => {
+    // Whitelist static uploads and non-API paths
+    if (req.path.startsWith("/uploads/") || req.path === "/favicon.ico" || req.path === "/api/health") {
+      return next();
+    }
+
+    const rawDeviceId = req.headers["x-device-id"] || req.query.deviceId;
+    const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
+    const clientIp = getClientIp(req);
+
+    const isDeviceBanned = Boolean(deviceId && bannedDevicesSet.has(deviceId));
+    const isIpBanned = Boolean(clientIp && clientIp !== "Bilinmiyor" && bannedIpsSet.has(clientIp));
+
+    if (isDeviceBanned || isIpBanned) {
+      if (req.path.startsWith("/api/")) {
+        return res.status(403).json({
+          banned: true,
+          type: "device_banned",
+          error: "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."
+        });
+      }
+    }
+    next();
+  });
 
   // High-performance User Cache with TTL to reduce database round-trips
   const userCache = new Map<number, { data: any; expiresAt: number }>();
@@ -560,11 +640,13 @@ async function startServer() {
 
       const lastSeen = new Date().toISOString();
       const clientIp = getClientIp(req);
+      const rawDeviceId = req.headers["x-device-id"] || req.body?.deviceId;
+      const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
       const locConsentValue = (locationConsent === true || locationConsent === 1) ? 1 : 0;
       
       const insertResult = await client.execute({
-        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip, locationConsent, isBanned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
-        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp, locConsentValue]
+        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip, last_device_id, locationConsent, isBanned, is_banned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp, deviceId || null, locConsentValue]
       });
 
       const newUserId = Number(insertResult.lastInsertRowid);
@@ -581,16 +663,19 @@ async function startServer() {
   app.post(["/api/login", "/api/auth/login"], async (req, res) => {
     try {
       const { username, password } = req.body;
+      const rawDeviceId = req.headers["x-device-id"] || req.body?.deviceId;
+      const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
+
       const userRes = await client.execute({
-        sql: "SELECT id, username, password, color, avatar, isBanned, locationConsent, is_admin FROM users WHERE username = ?",
+        sql: "SELECT id, username, password, color, avatar, isBanned, is_banned, locationConsent, is_admin FROM users WHERE username = ?",
         args: [username]
       });
       
       if (userRes.rows.length > 0) {
         const user = userRes.rows[0];
 
-        // 5651 Moderation: Ban Check
-        if (Number(user.isBanned) === 1 || user.isBanned === "1") {
+        // 5651 & Emirgan Moderation: Ban Check
+        if (Number(user.isBanned) === 1 || Number(user.is_banned) === 1 || user.isBanned === "1") {
           return res.status(403).json({ error: "Hesabınız kural ihlali nedeniyle askıya alınmıştır." });
         }
 
@@ -603,8 +688,8 @@ async function startServer() {
           }
           const clientIp = getClientIp(req);
           await client.execute({
-            sql: "UPDATE users SET token = ?, color = ?, last_ip = ?, last_seen = ? WHERE id = ?",
-            args: [token, color, clientIp, new Date().toISOString(), user.id]
+            sql: "UPDATE users SET token = ?, color = ?, last_ip = ?, last_device_id = COALESCE(?, last_device_id), last_seen = ? WHERE id = ?",
+            args: [token, color, clientIp, deviceId || null, new Date().toISOString(), user.id]
           });
 
           // Asynchronously log login traffic for 5651 compliance
@@ -946,59 +1031,6 @@ async function startServer() {
     }
   });
 
-  // Admin (emirgan) User Deletion Endpoint
-  app.delete("/api/admin/users/:id", async (req, res) => {
-    try {
-      const token = req.headers.authorization?.replace("Bearer ", "");
-      if (!token) return res.status(401).json({ error: "Unauthorized" });
-      const userRes = await client.execute({ sql: "SELECT id, username FROM users WHERE token = ?", args: [token] });
-      if (userRes.rows.length === 0) return res.status(401).json({ error: "Unauthorized" });
-      const authUser = userRes.rows[0];
-
-      const isEmirgan = authUser.username && (authUser.username as string).trim().toLowerCase() === 'emirgan';
-      if (!isEmirgan) {
-        return res.status(403).json({ error: "Yetkisiz işlem: Sadece yönetici emirgan kullanıcı silebilir." });
-      }
-
-      const targetId = Number(req.params.id);
-      const targetRes = await client.execute({ sql: "SELECT id, username FROM users WHERE id = ?", args: [targetId] });
-      if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
-      const targetUser = targetRes.rows[0];
-      if (targetUser.username && (targetUser.username as string).trim().toLowerCase() === 'emirgan') {
-        return res.status(400).json({ error: "Yönetici hesabı silinemez." });
-      }
-
-      // Kalıcı olarak Turso'dan ilişkili tüm verilerle temizle
-      await client.execute({ sql: "DELETE FROM users WHERE id = ?", args: [targetId] });
-      await client.execute({ sql: "DELETE FROM posts WHERE user_id = ?", args: [targetId] });
-      await client.execute({ sql: "DELETE FROM likes WHERE user_id = ?", args: [targetId] });
-      await client.execute({ sql: "DELETE FROM comments WHERE user_id = ?", args: [targetId] });
-      await client.execute({ sql: "DELETE FROM friends WHERE user1 = ? OR user2 = ?", args: [targetId, targetId] });
-      await client.execute({ sql: "DELETE FROM messages WHERE sender = ? OR receiver = ?", args: [targetId, targetId] });
-      await client.execute({ sql: "DELETE FROM stories WHERE user_id = ?", args: [targetId] });
-      await client.execute({ sql: "DELETE FROM notifications WHERE user_id = ?", args: [targetId] });
-      await client.execute({ sql: "DELETE FROM last_known_locations WHERE userId = ?", args: [targetId] });
-      userLiveLocations.delete(targetId);
-
-      const targetSocketId = onlineUsers.get(targetId);
-      if (targetSocketId) {
-        const targetSocket = io.sockets.sockets.get(targetSocketId);
-        if (targetSocket) {
-          targetSocket.emit("account_deleted", "Hesabınız yönetici tarafından kapatılmıştır.");
-          targetSocket.disconnect(true);
-        }
-        onlineUsers.delete(targetId);
-      }
-
-      io.emit("user_deleted", { userId: targetId });
-      io.emit("feed_updated");
-      io.emit("friends_updated");
-      return res.json({ success: true, message: "Kullanıcı başarıyla silindi." });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // Socket Online Tracking with Reconnection Grace Period (Graceful disconnect for mobile networks)
   const onlineUsers = new Map<number, string>();
   const disconnectTimers = new Map<number, NodeJS.Timeout>();
@@ -1019,6 +1051,222 @@ async function startServer() {
     lastSeen?: number;
   }
   const userLiveLocations = new Map<number, UserLiveLocation>();
+
+  // Strict Admin Middleware: ONLY user "emirgan" is permitted
+  const requireEmirganAdmin = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ")
+        ? authHeader.substring(7)
+        : ((req.query.token as string) || (req.body?.token as string) || "");
+
+      if (!token) {
+        return res.status(401).json({ error: "Yetkisiz işlem: Oturum açılmalıdır." });
+      }
+
+      const userRes = await client.execute({
+        sql: "SELECT id, username, is_admin FROM users WHERE token = ?",
+        args: [token]
+      });
+
+      if (userRes.rows.length === 0) {
+        return res.status(401).json({ error: "Yetkisiz işlem: Geçersiz oturum." });
+      }
+
+      const authUser = userRes.rows[0];
+      const usernameStr = (authUser.username as string || "").trim().toLowerCase();
+
+      if (usernameStr !== "emirgan") {
+        return res.status(403).json({ error: "Yetkisiz işlem: Bu moderasyon işlemi sadece 'emirgan' yöneticisine aittir." });
+      }
+
+      (req as any).adminUser = authUser;
+      next();
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  };
+
+  // 1. Admin (emirgan) User Deletion: Kalıcı Olarak Veritabanından Tüm İlişkili Kayıtları Temizler
+  app.delete(["/api/admin/users/:id/delete", "/api/admin/users/:id"], requireEmirganAdmin, async (req, res) => {
+    try {
+      const targetId = Number(req.params.id);
+      const targetRes = await client.execute({ sql: "SELECT id, username FROM users WHERE id = ?", args: [targetId] });
+      if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
+      const targetUser = targetRes.rows[0];
+      if (targetUser.username && (targetUser.username as string).trim().toLowerCase() === "emirgan") {
+        return res.status(400).json({ error: "Yönetici hesabı silinemez." });
+      }
+
+      // Kalıcı olarak Turso veritabanından ilişkili tüm verileri temizle
+      await client.execute({ sql: "DELETE FROM users WHERE id = ?", args: [targetId] });
+      await client.execute({ sql: "DELETE FROM posts WHERE user_id = ?", args: [targetId] });
+      await client.execute({ sql: "DELETE FROM likes WHERE user_id = ?", args: [targetId] });
+      await client.execute({ sql: "DELETE FROM comments WHERE user_id = ?", args: [targetId] });
+      await client.execute({ sql: "DELETE FROM friends WHERE user1 = ? OR user2 = ?", args: [targetId, targetId] });
+      await client.execute({ sql: "DELETE FROM messages WHERE sender = ? OR receiver = ?", args: [targetId, targetId] });
+      await client.execute({ sql: "DELETE FROM stories WHERE user_id = ?", args: [targetId] });
+      await client.execute({ sql: "DELETE FROM notifications WHERE user_id = ? OR target_id = ?", args: [targetId, targetId] });
+      await client.execute({ sql: "DELETE FROM last_known_locations WHERE userId = ?", args: [targetId] });
+      userLiveLocations.delete(targetId);
+      invalidateUserCache(targetId);
+
+      // Disconnect all sockets of this target user
+      io.sockets.sockets.forEach((s) => {
+        if (Number(s.data.user?.id) === targetId) {
+          s.emit("account_deleted", "Hesabınız yönetici tarafından kalıcı olarak silinmiştir.");
+          s.disconnect(true);
+        }
+      });
+      onlineUsers.delete(targetId);
+
+      io.emit("user_deleted", { userId: targetId });
+      io.emit("feed_updated");
+      io.emit("friends_updated");
+      io.emit("online_users", Array.from(onlineUsers.keys()));
+      return res.json({ success: true, message: `"${targetUser.username}" kullanıcısının hesabı ve tüm verileri kalıcı olarak silindi.` });
+    } catch (err: any) {
+      console.error("Admin delete user error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 2. Admin (emirgan) Permanent Account Ban: Hesabı Askıya Alır ve Oturumu Kapatır
+  app.post(["/api/admin/users/:id/ban-account", "/api/admin/users/:id/ban"], requireEmirganAdmin, async (req, res) => {
+    try {
+      const targetId = Number(req.params.id);
+      const reason = req.body?.reason || "Kural ihlali sebebiyle kalıcı olarak banlandınız.";
+
+      const targetRes = await client.execute({ sql: "SELECT id, username FROM users WHERE id = ?", args: [targetId] });
+      if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
+      const targetUser = targetRes.rows[0];
+
+      if (targetUser.username && (targetUser.username as string).trim().toLowerCase() === "emirgan") {
+        return res.status(400).json({ error: "Yönetici hesabı banlanamaz." });
+      }
+
+      await client.execute({
+        sql: "UPDATE users SET is_banned = 1, isBanned = 1, banned_at = ?, ban_reason = ?, token = NULL WHERE id = ?",
+        args: [new Date().toISOString(), reason, targetId]
+      });
+      invalidateUserCache(targetId);
+
+      // Disconnect all sockets of this user immediately
+      io.sockets.sockets.forEach((s) => {
+        if (Number(s.data.user?.id) === targetId) {
+          s.emit("account_banned", { reason, message: "Hesabınız yönetici tarafından kalıcı olarak banlandı." });
+          s.disconnect(true);
+        }
+      });
+      onlineUsers.delete(targetId);
+
+      io.emit("user_banned", { userId: targetId, username: targetUser.username, reason });
+      io.emit("online_users", Array.from(onlineUsers.keys()));
+
+      return res.json({ success: true, message: `"${targetUser.username}" hesabı kalıcı olarak banlandı.` });
+    } catch (err: any) {
+      console.error("Admin ban account error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 3. Admin (emirgan) Permanent Hardware / Device Ban: Tarayıcı Parmak İzi (Fingerprint) & IP Kilidi
+  app.post("/api/admin/users/:id/ban-device", requireEmirganAdmin, async (req, res) => {
+    try {
+      const targetId = Number(req.params.id);
+      const reason = req.body?.reason || "Kurallara aykırı faaliyet sebebiyle cihaz engellendi.";
+
+      const targetRes = await client.execute({ 
+        sql: "SELECT id, username, last_ip, last_device_id FROM users WHERE id = ?", 
+        args: [targetId] 
+      });
+      if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
+      const targetUser = targetRes.rows[0];
+
+      if (targetUser.username && (targetUser.username as string).trim().toLowerCase() === "emirgan") {
+        return res.status(400).json({ error: "Yönetici cihazı banlanamaz." });
+      }
+
+      // Check active sockets for real-time device ID and IP
+      let activeDeviceId = "";
+      let activeIp = "";
+      io.sockets.sockets.forEach((s) => {
+        if (Number(s.data.user?.id) === targetId) {
+          if (s.data.deviceId) activeDeviceId = s.data.deviceId;
+          if (s.data.ip && s.data.ip !== "Bilinmiyor") activeIp = s.data.ip;
+        }
+      });
+
+      const deviceIdToBan = (req.body?.deviceId || activeDeviceId || targetUser.last_device_id || "").trim();
+      const ipToBan = (req.body?.ipAddress || activeIp || targetUser.last_ip || "").trim();
+
+      if (deviceIdToBan) {
+        await client.execute({
+          sql: "INSERT INTO banned_devices (device_id, last_ip, banned_by, reason) VALUES (?, ?, 'emirgan', ?) ON CONFLICT(device_id) DO UPDATE SET last_ip = excluded.last_ip, reason = excluded.reason",
+          args: [deviceIdToBan, ipToBan || null, reason]
+        });
+        bannedDevicesSet.add(deviceIdToBan);
+      }
+
+      if (ipToBan && ipToBan !== "Bilinmiyor") {
+        await client.execute({
+          sql: "INSERT INTO banned_ips (ip_address, banned_by, reason) VALUES (?, 'emirgan', ?) ON CONFLICT(ip_address) DO UPDATE SET reason = excluded.reason",
+          args: [ipToBan, reason]
+        });
+        bannedIpsSet.add(ipToBan);
+      }
+
+      // Kalıcı olarak hesabı da banla
+      await client.execute({
+        sql: "UPDATE users SET is_banned = 1, isBanned = 1, banned_at = ?, ban_reason = ?, token = NULL WHERE id = ?",
+        args: [new Date().toISOString(), `Cihaz Banı: ${reason}`, targetId]
+      });
+      invalidateUserCache(targetId);
+
+      // Disconnect all sockets matching user, deviceId, or IP
+      io.sockets.sockets.forEach((s) => {
+        const matchesUser = Number(s.data.user?.id) === targetId;
+        const matchesDevice = Boolean(deviceIdToBan && s.data.deviceId === deviceIdToBan);
+        const matchesIp = Boolean(ipToBan && s.data.ip === ipToBan);
+
+        if (matchesUser || matchesDevice || matchesIp) {
+          s.emit("device_banned", {
+            reason,
+            message: "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."
+          });
+          s.disconnect(true);
+        }
+      });
+      onlineUsers.delete(targetId);
+
+      io.emit("user_banned", { userId: targetId, username: targetUser.username, deviceBanned: true });
+      io.emit("online_users", Array.from(onlineUsers.keys()));
+
+      return res.json({ 
+        success: true, 
+        message: `"${targetUser.username}" kullanıcısının cihazı ve IP adresi kalıcı olarak engellendi.`,
+        bannedDeviceId: deviceIdToBan || null,
+        bannedIp: ipToBan || null
+      });
+    } catch (err: any) {
+      console.error("Admin ban device error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin audit records for banned devices & IPs
+  app.get("/api/admin/banned-records", requireEmirganAdmin, async (req, res) => {
+    try {
+      const devRes = await client.execute("SELECT * FROM banned_devices ORDER BY created_at DESC LIMIT 100");
+      const ipRes = await client.execute("SELECT * FROM banned_ips ORDER BY created_at DESC LIMIT 100");
+      return res.json({
+        devices: devRes.rows,
+        ips: ipRes.rows
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
 
   const saveLastLocationToDb = (loc: UserLiveLocation) => {
     client.execute({
@@ -1397,34 +1645,10 @@ async function startServer() {
   };
 
   // --- DRAW & GUESS (ÇİZ & TAHMİN ET) IN-MEMORY LOGIC ---
-  const DRAWGUESS_WORDS_EASY = [
-    "Elma", "Kedi", "Köpek", "Güneş", "Ağaç", "Araba", "Balık", "Ev", "Top", "Masa",
-    "Kitap", "Çiçek", "Kuş", "Bardak", "Yıldız", "Kapı", "Saat", "Ayakkabı", "Gözlük", "Kalem",
-    "Şapka", "Sandalye", "Telefon", "Uçak", "Muz", "Ekmek", "Kalp", "Bulut", "Mum", "Çanta",
-    "Çilek", "Karpuz", "Limon", "Göz", "Burun", "Kulak", "Tarak", "Kaşık", "Çatal", "Bıçak",
-    "Gemi", "Tren", "Bisiklet", "Bayrak", "Kutu", "Ayna", "Yatak", "Kelebek", "Yumurta", "Peynir"
-  ];
-
-  const DRAWGUESS_WORDS_MEDIUM = [
-    "Gitar", "Dinozor", "Roket", "Panda", "Yanardağ", "Helikopter", "Denizaltı", "Paraşüt", "Şemsiye", "Mikroskop",
-    "Teleskop", "Hamburger", "Robot", "Palyaço", "Gökkuşağı", "Kanguru", "Zürafa", "Piramit", "Kaykay", "Motosiklet",
-    "Akvaryum", "Kamera", "Denizkızı", "Kardan Adam", "Bukalemun", "Ahtapot", "Penguen", "Aslan", "Kaplan", "Piyano",
-    "Trompet", "Satranç", "Mikrofon", "Kamp Çadırı", "Tost Makinesi", "Dondurma", "Deniz Feneri", "Astronot", "Trafik Lambası"
-  ];
-
-  const DRAWGUESS_WORDS_HARD = [
-    "Yerçekimi", "Zaman Yolculuğu", "Karadelik", "Fotosentez", "Labirent", "Elektrik Santrali", "Meteor Yağmuru", "Heyelan", "Matruşka", "DNA Sarmalı",
-    "Atmosfer", "Süpersonik", "Pusula", "Yanılsama", "Küresel Isınma", "Manyetizma", "Hipnoz", "Ekosistem", "Fosilleşme", "Kutup Işıkları",
-    "Deprem", "Bumerang", "Periskop", "Kum Saati", "Yapay Zeka", "Akupunktur", "Simya", "Gölge Oyunu", "Hologram"
-  ];
-
   const drawGuessRooms = new Map<string, any>();
 
   const normalizeTrText = (text: string) => {
-    return (text || '')
-      .trim()
-      .toLocaleLowerCase('tr-TR')
-      .replace(/[\s\-_]+/g, '');
+    return normalizeTr(text);
   };
 
   const createWordMask = (word: string) => {
@@ -1523,6 +1747,7 @@ async function startServer() {
     clearTimeout(room.roundEndTimeout);
     if (room.strokeHistory) room.strokeHistory.length = 0;
     if (room.chatMessages) room.chatMessages.length = 0;
+    if (room.usedWords) room.usedWords.clear();
     room.players = [];
     drawGuessRooms.delete(roomId);
   };
@@ -1958,6 +2183,10 @@ async function startServer() {
     const drawer = room.players[room.currentDrawerIndex];
     if (!drawer) return;
 
+    if (!room.usedWords) {
+      room.usedWords = new Set<string>();
+    }
+
     room.drawerId = drawer.id;
     room.drawerUsername = drawer.username;
     room.status = 'choosing';
@@ -1966,18 +2195,21 @@ async function startServer() {
       p.roundScore = 0;
     });
 
-    // Pick 3 words
-    const randomEasy = DRAWGUESS_WORDS_EASY[Math.floor(Math.random() * DRAWGUESS_WORDS_EASY.length)];
-    const randomMed = DRAWGUESS_WORDS_MEDIUM[Math.floor(Math.random() * DRAWGUESS_WORDS_MEDIUM.length)];
-    const randomHard = DRAWGUESS_WORDS_HARD[Math.floor(Math.random() * DRAWGUESS_WORDS_HARD.length)];
+    // Pick 3 words using anti-repeat manager across 3 difficulties/categories
+    const { words, poolWasReset } = getRandomWords(3, room.usedWords);
+    if (poolWasReset && room.usedWords.size > 0) {
+      room.usedWords.clear();
+    }
 
-    room.wordChoices = [
-      { word: randomEasy, difficulty: 'easy', points: 100 },
-      { word: randomMed, difficulty: 'medium', points: 200 },
-      { word: randomHard, difficulty: 'hard', points: 350 }
-    ];
+    room.wordChoices = words.map(w => ({
+      word: w.word,
+      category: w.category,
+      difficulty: w.difficulty,
+      points: w.points
+    }));
 
-    room.timer = 15;
+    // 10s choice window as requested
+    room.timer = 10;
     broadcastDrawGuessRoom(room.id);
 
     const sysMsg = {
@@ -1991,13 +2223,24 @@ async function startServer() {
     addDrawGuessChatMessage(room, sysMsg);
     io.to(`drawguess_${room.id}`).emit('drawguess_chat_message', sysMsg);
 
-    // If drawer doesn't choose within 15s, pick easy word automatically
-    room.chooseTimeout = setTimeout(() => {
-      if (drawGuessRooms.has(room.id) && room.status === 'choosing') {
-        const choice = room.wordChoices[0];
-        startDrawGuessDrawing(room, choice.word, choice.points);
+    // Live countdown timer for choosing
+    room.timerInterval = setInterval(() => {
+      if (!drawGuessRooms.has(room.id) || room.status !== 'choosing') {
+        clearInterval(room.timerInterval);
+        return;
       }
-    }, 15000);
+
+      room.timer--;
+      io.to(`drawguess_${room.id}`).emit('drawguess_timer', { timer: room.timer });
+
+      if (room.timer <= 0) {
+        clearInterval(room.timerInterval);
+        if (room.status === 'choosing' && room.wordChoices && room.wordChoices.length > 0) {
+          const choice = room.wordChoices[0];
+          startDrawGuessDrawing(room, choice.word, choice.points);
+        }
+      }
+    }, 1000);
   };
 
   const startDrawGuessDrawing = (room: any, selectedWord: string, points: number) => {
@@ -2005,6 +2248,11 @@ async function startServer() {
     clearTimeout(room.chooseTimeout);
     clearInterval(room.timerInterval);
     if (room.strokeHistory) room.strokeHistory.length = 0;
+
+    if (!room.usedWords) {
+      room.usedWords = new Set<string>();
+    }
+    room.usedWords.add(normalizeTr(selectedWord));
 
     room.currentWord = selectedWord;
     room.currentWordPoints = points || 150;
@@ -2293,45 +2541,62 @@ async function startServer() {
   };
 
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth.token;
+    // 1. Device ID & IP extraction
+    const rawDeviceId = socket.handshake.auth?.deviceId || 
+      socket.handshake.headers["x-device-id"] || 
+      socket.handshake.query?.deviceId;
+    const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
+
+    const clientIpHeader = socket.handshake.headers["x-forwarded-for"];
+    let socketIp = "Bilinmiyor";
+    if (typeof clientIpHeader === "string" && clientIpHeader.trim()) {
+      socketIp = clientIpHeader.split(",")[0].trim();
+    } else if (Array.isArray(clientIpHeader) && clientIpHeader.length > 0) {
+      socketIp = clientIpHeader[0].split(",")[0].trim();
+    } else if (socket.handshake.address) {
+      socketIp = socket.handshake.address;
+    }
+
+    // 2. Hardware / Device Ban & IP Ban Check
+    if ((deviceId && bannedDevicesSet.has(deviceId)) || (socketIp && socketIp !== "Bilinmiyor" && bannedIpsSet.has(socketIp))) {
+      socket.emit("device_banned", {
+        reason: "Kurallara aykırı faaliyet sebebiyle cihaz engellendi.",
+        message: "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."
+      });
+      return next(new Error("Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."));
+    }
+
+    const token = socket.handshake.auth?.token;
     if (!token) return next(new Error("No token"));
     
     try {
       const userRes = await client.execute({
-        sql: "SELECT id, username, avatar, color, isBanned, is_admin FROM users WHERE token = ?",
+        sql: "SELECT id, username, avatar, color, isBanned, is_banned, is_admin FROM users WHERE token = ?",
         args: [token]
       });
       if (userRes.rows.length === 0) return next(new Error("Invalid token"));
       const userObj = userRes.rows[0];
 
-      // 5651 Moderation: Banned check on socket authentication
-      if (Number(userObj.isBanned) === 1 || userObj.isBanned === "1") {
+      // 5651 & Emirgan Moderation: Banned check on socket authentication
+      if (Number(userObj.isBanned) === 1 || Number(userObj.is_banned) === 1 || userObj.isBanned === "1") {
         return next(new Error("Hesabınız kural ihlali nedeniyle askıya alınmıştır."));
       }
       
-      // Update last_ip and last_seen on authenticated socket connection
-      const clientIpHeader = socket.handshake.headers["x-forwarded-for"];
-      let socketIp = "Bilinmiyor";
-      if (typeof clientIpHeader === "string" && clientIpHeader.trim()) {
-        socketIp = clientIpHeader.split(",")[0].trim();
-      } else if (Array.isArray(clientIpHeader) && clientIpHeader.length > 0) {
-        socketIp = clientIpHeader[0].split(",")[0].trim();
-      } else if (socket.handshake.address) {
-        socketIp = socket.handshake.address;
-      }
-
-      if (socketIp && socketIp !== "Bilinmiyor") {
+      // Update last_ip, last_device_id and last_seen on authenticated socket connection
+      if ((socketIp && socketIp !== "Bilinmiyor") || deviceId) {
         try {
           await client.execute({
-            sql: "UPDATE users SET last_ip = ?, last_seen = ? WHERE id = ?",
-            args: [socketIp, new Date().toISOString(), userObj.id]
+            sql: "UPDATE users SET last_ip = COALESCE(?, last_ip), last_device_id = COALESCE(?, last_device_id), last_seen = ? WHERE id = ?",
+            args: [socketIp !== "Bilinmiyor" ? socketIp : null, deviceId || null, new Date().toISOString(), userObj.id]
           });
           userObj.last_ip = socketIp;
+          userObj.last_device_id = deviceId;
         } catch (e) {}
       }
 
       socket.data.user = userObj;
       socket.data.ip = socketIp;
+      socket.data.deviceId = deviceId;
       logAccess(Number(userObj.id), socketIp, 'connect');
       next();
     } catch(e) {
@@ -5025,6 +5290,7 @@ async function startServer() {
         status: 'lobby',
         currentWord: '',
         wordChoices: [],
+        usedWords: new Set<string>(),
         timer: 0,
         roundDuration: 70,
         players: [creatorPlayer],
@@ -5301,14 +5567,33 @@ async function startServer() {
       const player = room.players.find((p: any) => p.id === user.id);
       if (!player) return;
 
-      // Check if active guessing turn
       const isDrawer = room.drawerId === user.id;
       const isDrawingStatus = room.status === 'drawing';
 
-      if (isDrawingStatus && !isDrawer && !player.hasGuessed) {
-        if (normalizeTrText(trimmedText) === normalizeTrText(room.currentWord)) {
+      // 1. Anti-Spoiler: Drawer or players who already guessed cannot reveal the word
+      if (isDrawingStatus && room.currentWord && (isDrawer || player.hasGuessed)) {
+        if (containsSecretWord(trimmedText, room.currentWord)) {
+          socket.emit("drawguess_chat_message", {
+            id: 'dg_warn_' + Date.now(),
+            userId: user.id,
+            username: 'Sistem',
+            text: isDrawer
+              ? '⚠️ Çizen oyuncu kelimeyi veya ipucunu sohbete yazamaz!'
+              : '⚠️ Kelimeyi zaten bildiniz, cevabı sohbete yazamazsınız! 🤫',
+            isSystem: true,
+            isWarning: true,
+            createdAt: new Date().toISOString()
+          });
+          return;
+        }
+      }
+
+      // 2. Active Guessing Check
+      if (isDrawingStatus && !isDrawer && !player.hasGuessed && room.currentWord) {
+        // A) Exact Match
+        if (normalizeTr(trimmedText) === normalizeTr(room.currentWord)) {
           player.hasGuessed = true;
-          const timeRatio = Math.max(0.15, room.timer / room.roundDuration);
+          const timeRatio = Math.max(0.15, room.timer / (room.roundDuration || 70));
           const guesserPoints = Math.round((room.currentWordPoints || 150) * timeRatio) + 40;
           player.score += guesserPoints;
           player.roundScore += guesserPoints;
@@ -5341,9 +5626,23 @@ async function startServer() {
           }
           return;
         }
+
+        // B) Close Guess / Typo Check (Only visible to the sender!)
+        if (isCloseGuess(trimmedText, room.currentWord)) {
+          socket.emit("drawguess_chat_message", {
+            id: 'dg_close_' + Date.now() + '_' + Math.random(),
+            userId: user.id,
+            username: user.username,
+            text: `🔥 "${trimmedText}" çok yakın! Neredeyse buldun!`,
+            isSystem: false,
+            isCloseGuess: true,
+            createdAt: new Date().toISOString()
+          });
+          return;
+        }
       }
 
-      // Regular chat message (FIFO 50 limit)
+      // 3. Regular chat message (FIFO 50 limit)
       const msg = {
         id: 'dg_msg_' + Date.now() + '_' + Math.random(),
         userId: user.id,

@@ -191,7 +191,7 @@ export interface DrawGuessRoom {
   currentWord?: string; // only revealed to drawer or at round end
   wordMask?: string; // e.g. "_ _ _ _ _"
   wordLength?: number;
-  wordChoices?: { word: string; difficulty: 'easy' | 'medium' | 'hard'; points: number }[];
+  wordChoices?: { word: string; category?: string; difficulty: 'easy' | 'medium' | 'hard'; points: number }[];
   timer: number;
   roundDuration: number;
   players: DrawGuessPlayer[];
@@ -217,5 +217,7 @@ export interface DrawGuessChatMessage {
   text: string;
   isSystem?: boolean;
   isCorrect?: boolean;
+  isCloseGuess?: boolean;
+  isWarning?: boolean;
   createdAt: string;
 }
