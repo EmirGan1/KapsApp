@@ -279,32 +279,28 @@ async function initDb() {
     lastSeen INTEGER
   )`);
 
-  // Banned Devices Table (Permanent Hardware / Browser Fingerprint Ban)
-  await client.execute(`CREATE TABLE IF NOT EXISTS banned_devices (
+  // Banned Hardware Table (Pure Physical Hardware / Fingerprint Ban - NO IP DEPENDENCY)
+  await client.execute(`CREATE TABLE IF NOT EXISTS banned_hardware (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_id TEXT UNIQUE NOT NULL,
-    last_ip TEXT,
+    device_fingerprint TEXT UNIQUE NOT NULL,
+    banned_user_id TEXT,
     banned_by TEXT DEFAULT 'emirgan',
     reason TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    banned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Banned IPs Table
-  await client.execute(`CREATE TABLE IF NOT EXISTS banned_ips (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ip_address TEXT UNIQUE NOT NULL,
-    banned_by TEXT DEFAULT 'emirgan',
-    reason TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+  // Unban and reset all existing banned IPs as requested
+  try {
+    await client.execute("DELETE FROM banned_ips;");
+  } catch(e) {}
 
-  // User Ban & Device Tracking Column Migrations
+  // User Ban & Hardware Tracking Column Migrations
+  try { await client.execute("ALTER TABLE users ADD COLUMN device_fingerprint TEXT"); } catch(e){}
+  try { await client.execute("ALTER TABLE users ADD COLUMN last_device_id TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0"); } catch(e){}
   try { await client.execute("ALTER TABLE users ADD COLUMN banned_at TEXT"); } catch(e){}
   try { await client.execute("ALTER TABLE users ADD COLUMN ban_reason TEXT"); } catch(e){}
-  try { await client.execute("ALTER TABLE users ADD COLUMN last_device_id TEXT"); } catch(e){}
-  try { await client.execute("CREATE INDEX IF NOT EXISTS idx_banned_devices_id ON banned_devices(device_id)"); } catch(e){}
-  try { await client.execute("CREATE INDEX IF NOT EXISTS idx_banned_ips_addr ON banned_ips(ip_address)"); } catch(e){}
+  try { await client.execute("CREATE INDEX IF NOT EXISTS idx_banned_hw_fp ON banned_hardware(device_fingerprint)"); } catch(e){}
 
   // High Performance DB PRAGMAs & Indexing for Turso/SQLite (1GB RAM Optimization)
   try {
@@ -413,25 +409,27 @@ async function startServer() {
     }).catch(err => console.error("Access log error:", err));
   };
 
-  // In-Memory Fast Lookup for Banned Devices & IPs (0ms response time for 1GB RAM efficiency)
-  const bannedDevicesSet = new Set<string>();
-  const bannedIpsSet = new Set<string>();
+  // In-Memory Fast Lookup for Banned Hardware (0ms response time - strictly hardware/fingerprint based, NO IP)
+  const bannedHardwareSet = new Set<string>();
 
-  const loadBannedRecords = async () => {
+  const loadBannedHardwareRecords = async () => {
     try {
-      const devRes = await client.execute("SELECT device_id FROM banned_devices");
-      devRes.rows.forEach((r) => {
-        if (r.device_id) bannedDevicesSet.add(String(r.device_id).trim());
+      const hwRes = await client.execute("SELECT device_fingerprint FROM banned_hardware");
+      hwRes.rows.forEach((r) => {
+        if (r.device_fingerprint) bannedHardwareSet.add(String(r.device_fingerprint).trim());
       });
-      const ipRes = await client.execute("SELECT ip_address FROM banned_ips");
-      ipRes.rows.forEach((r) => {
-        if (r.ip_address) bannedIpsSet.add(String(r.ip_address).trim());
-      });
+      // Migrate / backwards compatibility with existing banned_devices if any
+      try {
+        const legacyRes = await client.execute("SELECT device_id FROM banned_devices");
+        legacyRes.rows.forEach((r) => {
+          if (r.device_id) bannedHardwareSet.add(String(r.device_id).trim());
+        });
+      } catch(e) {}
     } catch (e) {
-      console.error("Error loading banned devices/ips:", e);
+      console.error("Error loading banned hardware records:", e);
     }
   };
-  await loadBannedRecords();
+  await loadBannedHardwareRecords();
   
   // CORS Configuration (VDS & Domain Origin List)
   const allowedOrigins = [
@@ -459,32 +457,37 @@ async function startServer() {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Device-Id"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Hardware-Fingerprint", "X-Device-Id"]
   }));
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-  // Global Gateway Ban Interceptor for Hardware / Device & IP Bans
+  // Global Gateway Ban Interceptor (Physical Hardware / Fingerprint Ban ONLY - NEVER CHECKS IP)
   app.use((req, res, next) => {
     // Whitelist static uploads and non-API paths
     if (req.path.startsWith("/uploads/") || req.path === "/favicon.ico" || req.path === "/api/health") {
       return next();
     }
 
-    const rawDeviceId = req.headers["x-device-id"] || req.query.deviceId;
-    const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
-    const clientIp = getClientIp(req);
+    const rawHardwareFp = 
+      req.headers["x-hardware-fingerprint"] || 
+      req.headers["x-device-id"] || 
+      req.query.deviceFingerprint || 
+      req.query.deviceId ||
+      (req.body && (req.body.deviceFingerprint || req.body.deviceId));
 
-    const isDeviceBanned = Boolean(deviceId && bannedDevicesSet.has(deviceId));
-    const isIpBanned = Boolean(clientIp && clientIp !== "Bilinmiyor" && bannedIpsSet.has(clientIp));
+    const deviceFingerprint = typeof rawHardwareFp === "string" ? rawHardwareFp.trim() : "";
 
-    if (isDeviceBanned || isIpBanned) {
+    const isHardwareBanned = Boolean(deviceFingerprint && bannedHardwareSet.has(deviceFingerprint));
+
+    if (isHardwareBanned) {
       if (req.path.startsWith("/api/")) {
         return res.status(403).json({
           banned: true,
           type: "device_banned",
-          error: "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."
+          error: "DEVICE_BANNED",
+          message: "Bu cihaz, platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır. Yeni hesap açılamaz."
         });
       }
     }
@@ -640,13 +643,17 @@ async function startServer() {
 
       const lastSeen = new Date().toISOString();
       const clientIp = getClientIp(req);
-      const rawDeviceId = req.headers["x-device-id"] || req.body?.deviceId;
+      const rawDeviceId = 
+        req.headers["x-hardware-fingerprint"] || 
+        req.headers["x-device-id"] || 
+        req.body?.hardwareFingerprint || 
+        req.body?.deviceId;
       const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
       const locConsentValue = (locationConsent === true || locationConsent === 1) ? 1 : 0;
       
       const insertResult = await client.execute({
-        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip, last_device_id, locationConsent, isBanned, is_banned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
-        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp, deviceId || null, locConsentValue]
+        sql: "INSERT INTO users (username, password, color, token, last_seen, signup_ip, last_ip, device_fingerprint, last_device_id, locationConsent, isBanned, is_banned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+        args: [username, hash, randomColor, token, lastSeen, clientIp, clientIp, deviceId || null, deviceId || null, locConsentValue]
       });
 
       const newUserId = Number(insertResult.lastInsertRowid);
@@ -663,7 +670,11 @@ async function startServer() {
   app.post(["/api/login", "/api/auth/login"], async (req, res) => {
     try {
       const { username, password } = req.body;
-      const rawDeviceId = req.headers["x-device-id"] || req.body?.deviceId;
+      const rawDeviceId = 
+        req.headers["x-hardware-fingerprint"] || 
+        req.headers["x-device-id"] || 
+        req.body?.hardwareFingerprint || 
+        req.body?.deviceId;
       const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
 
       const userRes = await client.execute({
@@ -688,8 +699,8 @@ async function startServer() {
           }
           const clientIp = getClientIp(req);
           await client.execute({
-            sql: "UPDATE users SET token = ?, color = ?, last_ip = ?, last_device_id = COALESCE(?, last_device_id), last_seen = ? WHERE id = ?",
-            args: [token, color, clientIp, deviceId || null, new Date().toISOString(), user.id]
+            sql: "UPDATE users SET token = ?, color = ?, last_ip = ?, device_fingerprint = COALESCE(?, device_fingerprint), last_device_id = COALESCE(?, last_device_id), last_seen = ? WHERE id = ?",
+            args: [token, color, clientIp, deviceId || null, deviceId || null, new Date().toISOString(), user.id]
           });
 
           // Asynchronously log login traffic for 5651 compliance
@@ -1170,14 +1181,14 @@ async function startServer() {
     }
   });
 
-  // 3. Admin (emirgan) Permanent Hardware / Device Ban: Tarayıcı Parmak İzi (Fingerprint) & IP Kilidi
-  app.post("/api/admin/users/:id/ban-device", requireEmirganAdmin, async (req, res) => {
+  // 3. Admin (emirgan) Permanent Hardware Ban: Fiziksel Donanım Parmak İzi (Hardware / WebGL / Audio Fingerprint) Kilidi - NO IP
+  app.post(["/api/admin/users/:id/ban-hardware", "/api/admin/users/:id/ban-device"], requireEmirganAdmin, async (req, res) => {
     try {
       const targetId = Number(req.params.id);
-      const reason = req.body?.reason || "Kurallara aykırı faaliyet sebebiyle cihaz engellendi.";
+      const reason = req.body?.reason || "Kurallara aykırı faaliyet sebebiyle cihaz kalıcı olarak engellendi.";
 
       const targetRes = await client.execute({ 
-        sql: "SELECT id, username, last_ip, last_device_id FROM users WHERE id = ?", 
+        sql: "SELECT id, username, device_fingerprint, last_device_id FROM users WHERE id = ?", 
         args: [targetId] 
       });
       if (targetRes.rows.length === 0) return res.status(404).json({ error: "Kullanıcı bulunamadı." });
@@ -1187,52 +1198,56 @@ async function startServer() {
         return res.status(400).json({ error: "Yönetici cihazı banlanamaz." });
       }
 
-      // Check active sockets for real-time device ID and IP
-      let activeDeviceId = "";
-      let activeIp = "";
+      // Check active sockets for real-time hardware fingerprint / device ID
+      let activeHwFingerprint = "";
       io.sockets.sockets.forEach((s) => {
         if (Number(s.data.user?.id) === targetId) {
-          if (s.data.deviceId) activeDeviceId = s.data.deviceId;
-          if (s.data.ip && s.data.ip !== "Bilinmiyor") activeIp = s.data.ip;
+          if (s.data.hardwareFingerprint) activeHwFingerprint = s.data.hardwareFingerprint;
+          else if (s.data.deviceId) activeHwFingerprint = s.data.deviceId;
         }
       });
 
-      const deviceIdToBan = (req.body?.deviceId || activeDeviceId || targetUser.last_device_id || "").trim();
-      const ipToBan = (req.body?.ipAddress || activeIp || targetUser.last_ip || "").trim();
+      const hardwareFpToBan = (
+        req.body?.hardwareFingerprint || 
+        req.body?.deviceFingerprint || 
+        req.body?.deviceId || 
+        activeHwFingerprint || 
+        targetUser.device_fingerprint || 
+        targetUser.last_device_id || 
+        ""
+      ).trim();
 
-      if (deviceIdToBan) {
+      if (hardwareFpToBan) {
         await client.execute({
-          sql: "INSERT INTO banned_devices (device_id, last_ip, banned_by, reason) VALUES (?, ?, 'emirgan', ?) ON CONFLICT(device_id) DO UPDATE SET last_ip = excluded.last_ip, reason = excluded.reason",
-          args: [deviceIdToBan, ipToBan || null, reason]
+          sql: "INSERT INTO banned_hardware (device_fingerprint, banned_user_id, banned_by, reason) VALUES (?, ?, 'emirgan', ?) ON CONFLICT(device_fingerprint) DO UPDATE SET reason = excluded.reason",
+          args: [hardwareFpToBan, String(targetId), reason]
         });
-        bannedDevicesSet.add(deviceIdToBan);
+        bannedHardwareSet.add(hardwareFpToBan);
       }
 
-      if (ipToBan && ipToBan !== "Bilinmiyor") {
-        await client.execute({
-          sql: "INSERT INTO banned_ips (ip_address, banned_by, reason) VALUES (?, 'emirgan', ?) ON CONFLICT(ip_address) DO UPDATE SET reason = excluded.reason",
-          args: [ipToBan, reason]
-        });
-        bannedIpsSet.add(ipToBan);
-      }
-
-      // Kalıcı olarak hesabı da banla
+      // Kalıcı olarak kullanıcının hesabını da banla
       await client.execute({
         sql: "UPDATE users SET is_banned = 1, isBanned = 1, banned_at = ?, ban_reason = ?, token = NULL WHERE id = ?",
-        args: [new Date().toISOString(), `Cihaz Banı: ${reason}`, targetId]
+        args: [new Date().toISOString(), `Donanım Banı: ${reason}`, targetId]
       });
       invalidateUserCache(targetId);
 
-      // Disconnect all sockets matching user, deviceId, or IP
+      // Disconnect all sockets matching user or hardware fingerprint
       io.sockets.sockets.forEach((s) => {
         const matchesUser = Number(s.data.user?.id) === targetId;
-        const matchesDevice = Boolean(deviceIdToBan && s.data.deviceId === deviceIdToBan);
-        const matchesIp = Boolean(ipToBan && s.data.ip === ipToBan);
+        const matchesHardware = Boolean(
+          hardwareFpToBan && 
+          (s.data.hardwareFingerprint === hardwareFpToBan || s.data.deviceId === hardwareFpToBan)
+        );
 
-        if (matchesUser || matchesDevice || matchesIp) {
+        if (matchesUser || matchesHardware) {
+          s.emit("hardware_ban_enforced", {
+            reason,
+            message: "Bu cihaz, platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır. Yeni hesap açılamaz."
+          });
           s.emit("device_banned", {
             reason,
-            message: "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."
+            message: "Bu cihaz, platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır. Yeni hesap açılamaz."
           });
           s.disconnect(true);
         }
@@ -1244,24 +1259,22 @@ async function startServer() {
 
       return res.json({ 
         success: true, 
-        message: `"${targetUser.username}" kullanıcısının cihazı ve IP adresi kalıcı olarak engellendi.`,
-        bannedDeviceId: deviceIdToBan || null,
-        bannedIp: ipToBan || null
+        message: `"${targetUser.username}" kullanıcısının fiziksel cihazı (Hardware Fingerprint) kalıcı olarak engellendi.`,
+        bannedHardwareFingerprint: hardwareFpToBan || null
       });
     } catch (err: any) {
-      console.error("Admin ban device error:", err);
+      console.error("Admin ban hardware error:", err);
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Admin audit records for banned devices & IPs
-  app.get("/api/admin/banned-records", requireEmirganAdmin, async (req, res) => {
+  // Admin audit records for banned hardware
+  app.get(["/api/admin/banned-records", "/api/admin/banned-hardware"], requireEmirganAdmin, async (req, res) => {
     try {
-      const devRes = await client.execute("SELECT * FROM banned_devices ORDER BY created_at DESC LIMIT 100");
-      const ipRes = await client.execute("SELECT * FROM banned_ips ORDER BY created_at DESC LIMIT 100");
+      const hwRes = await client.execute("SELECT * FROM banned_hardware ORDER BY banned_at DESC LIMIT 100");
       return res.json({
-        devices: devRes.rows,
-        ips: ipRes.rows
+        hardware: hwRes.rows,
+        devices: hwRes.rows
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -2541,11 +2554,15 @@ async function startServer() {
   };
 
   io.use(async (socket, next) => {
-    // 1. Device ID & IP extraction
-    const rawDeviceId = socket.handshake.auth?.deviceId || 
+    // 1. Hardware Fingerprint / Device ID extraction (No IP Ban Dependency)
+    const rawHardwareFp = 
+      socket.handshake.auth?.hardwareFingerprint || 
+      socket.handshake.auth?.deviceId || 
+      socket.handshake.headers["x-hardware-fingerprint"] || 
       socket.handshake.headers["x-device-id"] || 
+      socket.handshake.query?.hardwareFingerprint ||
       socket.handshake.query?.deviceId;
-    const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
+    const hwFingerprint = typeof rawHardwareFp === "string" ? rawHardwareFp.trim() : "";
 
     const clientIpHeader = socket.handshake.headers["x-forwarded-for"];
     let socketIp = "Bilinmiyor";
@@ -2557,13 +2574,17 @@ async function startServer() {
       socketIp = socket.handshake.address;
     }
 
-    // 2. Hardware / Device Ban & IP Ban Check
-    if ((deviceId && bannedDevicesSet.has(deviceId)) || (socketIp && socketIp !== "Bilinmiyor" && bannedIpsSet.has(socketIp))) {
+    // 2. Physical Hardware Fingerprint Ban Check (0ms In-Memory Set)
+    if (hwFingerprint && bannedHardwareSet.has(hwFingerprint)) {
+      socket.emit("hardware_ban_enforced", {
+        reason: "Kurallara aykırı faaliyet sebebiyle cihaz engellendi.",
+        message: "Bu cihaz, platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır. Yeni hesap açılamaz."
+      });
       socket.emit("device_banned", {
         reason: "Kurallara aykırı faaliyet sebebiyle cihaz engellendi.",
-        message: "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."
+        message: "Bu cihaz, platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır. Yeni hesap açılamaz."
       });
-      return next(new Error("Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır."));
+      return next(new Error("DEVICE_BANNED: Bu cihaz, platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır."));
     }
 
     const token = socket.handshake.auth?.token;
@@ -2582,21 +2603,23 @@ async function startServer() {
         return next(new Error("Hesabınız kural ihlali nedeniyle askıya alınmıştır."));
       }
       
-      // Update last_ip, last_device_id and last_seen on authenticated socket connection
-      if ((socketIp && socketIp !== "Bilinmiyor") || deviceId) {
+      // Update last_ip, device_fingerprint, last_device_id and last_seen on authenticated socket connection
+      if ((socketIp && socketIp !== "Bilinmiyor") || hwFingerprint) {
         try {
           await client.execute({
-            sql: "UPDATE users SET last_ip = COALESCE(?, last_ip), last_device_id = COALESCE(?, last_device_id), last_seen = ? WHERE id = ?",
-            args: [socketIp !== "Bilinmiyor" ? socketIp : null, deviceId || null, new Date().toISOString(), userObj.id]
+            sql: "UPDATE users SET last_ip = COALESCE(?, last_ip), device_fingerprint = COALESCE(?, device_fingerprint), last_device_id = COALESCE(?, last_device_id), last_seen = ? WHERE id = ?",
+            args: [socketIp !== "Bilinmiyor" ? socketIp : null, hwFingerprint || null, hwFingerprint || null, new Date().toISOString(), userObj.id]
           });
           userObj.last_ip = socketIp;
-          userObj.last_device_id = deviceId;
+          userObj.device_fingerprint = hwFingerprint;
+          userObj.last_device_id = hwFingerprint;
         } catch (e) {}
       }
 
       socket.data.user = userObj;
       socket.data.ip = socketIp;
-      socket.data.deviceId = deviceId;
+      socket.data.hardwareFingerprint = hwFingerprint;
+      socket.data.deviceId = hwFingerprint;
       logAccess(Number(userObj.id), socketIp, 'connect');
       next();
     } catch(e) {

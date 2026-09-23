@@ -16,7 +16,7 @@ import AnnouncementModal from "./components/AnnouncementModal";
 import ToastContainer, { ToastItem } from "./components/ToastContainer";
 import DeviceBanScreen from "./components/DeviceBanScreen";
 import { getSocketUrl } from "./utils/api";
-import { getCachedDeviceId, getDeviceId } from "./utils/deviceFingerprint";
+import { getCachedHardwareFingerprint, getHardwareFingerprint } from "./utils/deviceFingerprint";
 
 const SUBJECTS = ["Turkish", "Mathematics", "Physics", "Digital Society", "English", "Chemistry", "Biology", "TITC"];
 
@@ -217,10 +217,10 @@ export default function App() {
   useEffect(() => {
     if (token) {
       const socketUrl = getSocketUrl();
-      const deviceId = getCachedDeviceId();
+      const hwFingerprint = getCachedHardwareFingerprint();
       const socketOptions = { 
         path: "/socket.io",
-        auth: { token, deviceId },
+        auth: { token, deviceId: hwFingerprint, hardwareFingerprint: hwFingerprint },
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
@@ -246,15 +246,22 @@ export default function App() {
       newSocket.on("connect", onConnect);
 
       newSocket.on("connect_error", (err) => {
-        if (err.message && (err.message.includes("cihaz") || err.message.includes("uzaklaştırılmıştır"))) {
+        if (err.message && (err.message.includes("DEVICE_BANNED") || err.message.includes("cihaz") || err.message.includes("yasaklanmıştır") || err.message.includes("uzaklaştırılmıştır"))) {
           setIsDeviceBanned(true);
-          setDeviceBanReason(err.message);
+          setDeviceBanReason(err.message.replace(/^DEVICE_BANNED:\s*/, ""));
         } else if (err.message === "Invalid token" || err.message === "No token" || err.message.includes("askıya")) {
           handleLogout();
         }
       });
 
       // Socket Device and Account Moderation Listeners
+      newSocket.on("hardware_ban_enforced", (data: any) => {
+        setIsDeviceBanned(true);
+        if (data?.message || data?.reason) {
+          setDeviceBanReason(data.reason || data.message);
+        }
+      });
+
       newSocket.on("device_banned", (data: any) => {
         setIsDeviceBanned(true);
         if (data?.message || data?.reason) {

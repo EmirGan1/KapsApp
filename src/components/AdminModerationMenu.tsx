@@ -12,7 +12,7 @@ import {
   Cpu
 } from "lucide-react";
 import { getApiUrl, safeFetchJson } from "../utils/api";
-import { getCachedDeviceId } from "../utils/deviceFingerprint";
+import { getCachedHardwareFingerprint } from "../utils/deviceFingerprint";
 
 interface AdminModerationMenuProps {
   targetUserId: number;
@@ -78,7 +78,7 @@ export default function AdminModerationMenu({
     setErrorMsg("");
 
     const token = localStorage.getItem("token") || localStorage.getItem("lan_token") || "";
-    const deviceId = getCachedDeviceId();
+    const hwFingerprint = getCachedHardwareFingerprint();
 
     let endpoint = "";
     let method = "POST";
@@ -92,7 +92,7 @@ export default function AdminModerationMenu({
       endpoint = `/api/admin/users/${targetUserId}/ban-account`;
       method = "POST";
     } else if (activeModal === "ban-device") {
-      endpoint = `/api/admin/users/${targetUserId}/ban-device`;
+      endpoint = `/api/admin/users/${targetUserId}/ban-hardware`;
       method = "POST";
     }
 
@@ -103,7 +103,8 @@ export default function AdminModerationMenu({
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`,
-          "X-Device-Id": deviceId
+          "X-Hardware-Fingerprint": hwFingerprint,
+          "X-Device-Id": hwFingerprint
         },
         body: body ? JSON.stringify(body) : undefined
       });
@@ -299,11 +300,11 @@ export default function AdminModerationMenu({
               {activeModal === "ban-device" && (
                 <>
                   <p>
-                    <strong className="text-white">"{targetUsername}"</strong> kullanıcısının tarayıcı parmak izi (Browser Fingerprint) ve son IP adresi kara listeye alınacaktır.
+                    <strong className="text-white">"{targetUsername}"</strong> kullanıcısının fiziksel cihaz parmak izi (GPU/Audio/Hardware Fingerprint) kalıcı olarak kara listeye alınacaktır.
                   </p>
                   <p className="text-rose-400 font-bold flex items-center gap-1">
                     <Cpu size={14} className="shrink-0" />
-                    Kullanıcı yeni hesap açsa, çerezlerini silse veya gizli sekmeye geçse dahi bu cihazdan siteye erişemez.
+                    IP adresi kullanılmaz; kullanıcı yeni hesap açsa, modemi resetlese, çerezlerini silse veya gizli sekmeye geçse dahi bu cihazdan asla siteye erişemez.
                   </p>
                 </>
               )}

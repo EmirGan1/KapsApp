@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ShieldCheck, X, FileText, CheckCircle2, MapPin } from "lucide-react";
-import { getApiUrl } from "../utils/api";
+import { safeFetchJson } from "../utils/api";
 
 interface AuthProps {
   onAuthSuccess: (token: string, username: string, avatar: string | null, id: number, color?: string) => void;
@@ -28,8 +28,7 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
     setIsLoading(true);
     const url = isLogin ? "/api/login" : "/api/register";
     try {
-      const targetUrl = getApiUrl(url);
-      const res = await fetch(targetUrl, {
+      const data = await safeFetchJson(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -38,16 +37,6 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
           ...(isLogin ? {} : { locationConsent, kvkkAccepted, termsAccepted: kvkkAccepted })
         }),
       });
-
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await res.text();
-        console.error("Beklenmeyen sunucu yanıtı (HTML/404):", text);
-        throw new Error("Sunucuya bağlanılamadı. Backend servisi henüz uyanmamış veya çevrimdışı olabilir.");
-      }
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "İşlem gerçekleştirilemedi.");
       
       onAuthSuccess(data.token, data.username, data.avatar || null, data.id, data.color);
     } catch (err: any) {

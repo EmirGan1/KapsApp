@@ -1,10 +1,6 @@
-import { getCachedDeviceId, getDeviceId } from "./deviceFingerprint";
+import { getCachedHardwareFingerprint, getHardwareFingerprint } from "./deviceFingerprint";
 
-// Frontend API & WebSocket Yapılandırması (VDS / KapsApp Mimari Standardı)
-// Varsayılan olarak tüm istekler ve soket bağlantıları aynı origin üzerinden göreceli (relative path)
-// çalışır: /api/* ve /socket.io/*.
-// Geliştirme veya harici ortamda VITE_BACKEND_URL tanımlıysa ilgili adresi kullanır.
-
+// Frontend API & WebSocket Configuration (VDS / KapsApp Architecture Standard)
 export const BACKEND_URL = (
   (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
   (import.meta.env.VITE_API_URL as string | undefined) ||
@@ -12,7 +8,7 @@ export const BACKEND_URL = (
 ).replace(/\/$/, "");
 
 /**
- * Göreceli API yolunu döndürür. (Eğer harici backend tanımlıysa başına ekler, aksi halde göreceli /api/... döner)
+ * Returns relative or absolute API URL
  */
 export function getApiUrl(path: string): string {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
@@ -20,29 +16,29 @@ export function getApiUrl(path: string): string {
 }
 
 /**
- * Socket.IO sunucu URL'ini döndürür.
- * Harici backend tanımlıysa onu döner, yoksa undefined dönerek doğrudan mevcut origin'i (window.location.origin) baz alır.
+ * Returns Socket.IO URL
  */
 export function getSocketUrl(): string | undefined {
   return BACKEND_URL || undefined;
 }
 
 /**
- * HTML/404 veya sunucu uyku/başlangıç modundayken oluşabilecek "Unexpected token" JSON çökmesini engelleyen
- * ve otomatik X-Device-Id başlığı ekleyen güvenli fetch yardımcısı.
+ * Safe fetch JSON wrapper with automatic Physical Hardware Fingerprint headers
+ * (`X-Hardware-Fingerprint` & `X-Device-Id`) and instantaneous Device Ban interception.
  */
 export async function safeFetchJson<T = any>(input: string, init?: RequestInit): Promise<T> {
   const targetUrl = getApiUrl(input);
   
-  // Ensure device ID is available
-  let deviceId = getCachedDeviceId();
-  if (!deviceId) {
-    deviceId = await getDeviceId();
+  // Ensure physical hardware fingerprint is ready
+  let hwFingerprint = getCachedHardwareFingerprint();
+  if (!hwFingerprint || hwFingerprint === "hw_pending_init") {
+    hwFingerprint = await getHardwareFingerprint();
   }
 
   const headers = new Headers(init?.headers || {});
-  if (!headers.has("X-Device-Id") && deviceId) {
-    headers.set("X-Device-Id", deviceId);
+  if (hwFingerprint) {
+    headers.set("X-Hardware-Fingerprint", hwFingerprint);
+    headers.set("X-Device-Id", hwFingerprint);
   }
 
   const res = await fetch(targetUrl, {
@@ -60,16 +56,16 @@ export async function safeFetchJson<T = any>(input: string, init?: RequestInit):
 
   const data = await res.json();
   
-  // Device Ban interceptor
-  if (res.status === 403 && (data.banned || data.type === "device_banned")) {
+  // Hardware / Device Ban interceptor
+  if (res.status === 403 && (data.banned || data.type === "device_banned" || data.error === "DEVICE_BANNED")) {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("kaps:device_banned", { detail: data }));
     }
-    throw new Error(data.error || "Bu cihaz kurallara aykırı faaliyet sebebiyle platformdan kalıcı olarak uzaklaştırılmıştır.");
+    throw new Error(data.message || data.error || "Bu cihaz platform kurallarının ihlali nedeniyle kalıcı olarak yasaklanmıştır.");
   }
 
   if (!res.ok) {
-    throw new Error(data.error || "İşlem gerçekleştirilemedi.");
+    throw new Error(data.message || data.error || "İşlem gerçekleştirilemedi.");
   }
 
   return data;
